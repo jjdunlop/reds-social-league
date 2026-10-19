@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 class RSL_Database {
 
     /** Bump when the schema changes; maybe_upgrade() re-runs install(). */
-    const SCHEMA_VERSION = '6';
+    const SCHEMA_VERSION = '8';
     const SCHEMA_OPTION = 'rsl_schema_version';
 
     public static function table($name) {
@@ -185,7 +185,9 @@ class RSL_Database {
         // One game in one slot (night, court, start). Status: scheduled,
         // played (sets holds "25-20,23-25,15-12", home score first), or
         // forfeit (forfeit_team_id gave it away — not a played game, so it
-        // never moves ratings).
+        // never moves ratings). live: the score in progress from the ref's
+        // scoreboard (JSON), with live_seq so a late-arriving older update
+        // never overwrites a newer one; cleared when the result is saved.
         dbDelta("CREATE TABLE " . self::table('games') . " (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             season varchar(20) NOT NULL,
@@ -204,6 +206,9 @@ class RSL_Database {
             away_sets tinyint(3) unsigned NOT NULL DEFAULT 0,
             result_by bigint(20) unsigned DEFAULT NULL,
             result_at datetime DEFAULT NULL,
+            live text DEFAULT NULL,
+            live_seq int(11) NOT NULL DEFAULT 0,
+            live_at datetime DEFAULT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY  (id),
             KEY night_id (night_id),
@@ -229,6 +234,37 @@ class RSL_Database {
             PRIMARY KEY  (id),
             KEY team_night (team_id, night_id),
             KEY night_id (night_id)
+        ) $charset;");
+
+        // Officials: paid referees (players tick "happy to ref" when they
+        // register — ref = applied; an admin approves — approved / declined)
+        // and court supervisors (added by an admin).
+        dbDelta("CREATE TABLE " . self::table('officials') . " (
+            user_id bigint(20) unsigned NOT NULL,
+            ref varchar(20) NOT NULL DEFAULT '',
+            supervisor tinyint(1) NOT NULL DEFAULT 0,
+            updated_at datetime DEFAULT NULL,
+            updated_by bigint(20) unsigned DEFAULT NULL,
+            PRIMARY KEY  (user_id)
+        ) $charset;");
+
+        // A claimed job: refereeing one game, or supervising one venue for a
+        // night (game_id 0). One person per job (UNIQUE — an insert failure
+        // there means someone else got it first). rate: the pay at the time
+        // it was claimed, in whole dollars.
+        dbDelta("CREATE TABLE " . self::table('jobs') . " (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            night_id bigint(20) unsigned NOT NULL,
+            type varchar(20) NOT NULL,
+            game_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            venue_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            user_id bigint(20) unsigned NOT NULL,
+            rate decimal(8,2) NOT NULL DEFAULT 0,
+            claimed_at datetime DEFAULT CURRENT_TIMESTAMP,
+            assigned_by bigint(20) unsigned DEFAULT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY job (night_id, type, game_id, venue_id),
+            KEY user_id (user_id)
         ) $charset;");
 
         update_option(self::SCHEMA_OPTION, self::SCHEMA_VERSION, false);

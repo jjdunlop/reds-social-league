@@ -29,6 +29,7 @@ class RSL_Public {
     /** Create the public league pages if they're missing (activation / upgrade). */
     public static function ensure_pages() {
         RSL_Public_Fixtures::ensure_pages();
+        RSL_Ref_Page::ensure_page();
         return self::ensure_page(self::PAGE_OPTION, 'League Teams', 'league-teams', '[rsl_teams]');
     }
 

@@ -126,6 +126,18 @@ class RSL_Admin_Fixtures {
                     self::notice('success', 'Result cleared.');
                 }
                 return $back;
+            case 'assign_ref':
+                $r = RSL_Officials::claim_ref($game_id, isset($post['user_id']) ? intval($post['user_id']) : 0, get_current_user_id());
+                self::result($r, 'Referee assigned.');
+                return $back;
+            case 'assign_supervisor':
+                $r = RSL_Officials::claim_supervisor($night->id, isset($post['venue_id']) ? intval($post['venue_id']) : 0, isset($post['user_id']) ? intval($post['user_id']) : 0, get_current_user_id());
+                self::result($r, 'Court supervisor assigned.');
+                return $back;
+            case 'unassign_job':
+                $r = RSL_Officials::release(isset($post['job_id']) ? intval($post['job_id']) : 0, 0, true);
+                self::result($r, 'Removed from the job (and from the pay report).');
+                return $back;
             case 'handle_request':
                 $req = RSL_Requests::get(isset($post['request_id']) ? intval($post['request_id']) : 0);
                 if ($req && intval($req->night_id) === intval($night->id)) {
@@ -224,6 +236,25 @@ class RSL_Admin_Fixtures {
         foreach (RSL_Teams::list_for_season($season) as $t) {
             $teams[intval($t->id)] = $t;
         }
+        $jobs = $published ? RSL_Officials::jobs_for_night($night->id) : array('ref' => array(), 'supervisor' => array());
+        $people = RSL_Officials::people();
+        $refs = array_filter($people, function ($p) { return $p->ref === 'approved'; });
+        $sups = array_filter($people, function ($p) { return (int) $p->supervisor === 1; });
+        // A job holder (with remove) or a quick "assign" picker.
+        $job_cell = function ($job, $choices, $do, $extra) use ($season, $night, $post) {
+            if ($job) {
+                return esc_html($job->display_name) . ' <form method="post" action="' . esc_url($post) . '" class="rsl-fx-inline-form">'
+                    . self::fields('unassign_job', $season, $night->id, array('job_id' => $job->id)) . '<button class="button-link button-link-delete" title="Remove (e.g. didn\'t turn up)">&times;</button></form>';
+            }
+            if (!$choices) {
+                return '<span class="description">—</span>';
+            }
+            $html = '<form method="post" action="' . esc_url($post) . '" class="rsl-fx-assign">' . self::fields($do, $season, $night->id, $extra) . '<select name="user_id"><option value="">Needs one…</option>';
+            foreach ($choices as $p) {
+                $html .= '<option value="' . intval($p->user_id) . '">' . esc_html($p->display_name) . '</option>';
+            }
+            return $html . '</select><button class="button button-small">Assign</button></form>';
+        };
         ?>
         <h2><?php echo esc_html($labels[$night->id]); ?> &middot; <?php echo esc_html(date_i18n('l j F Y', strtotime($night->night_date))); ?>
             <?php if ($published): ?><span class="rsl-fx-pill is-published">Published <?php echo esc_html(date_i18n('j M', strtotime($night->published_at))); ?></span>
@@ -279,12 +310,14 @@ class RSL_Admin_Fixtures {
             <p class="description">No games yet. <strong>Make fixtures automatically</strong> pairs every team (Ranked by rating, Unranked by who's played whom least), puts the games on the night's courts with preferences in mind, then waits for you to check and publish.</p>
         <?php else: ?>
             <table class="widefat striped rsl-fx-games">
-                <thead><tr><th>Time</th><th>Court</th><th>Home</th><th>Away</th><th title="Each team's chance of winning any one set, from the ratings">Set chance</th><th>Why</th><th>Result</th></tr></thead>
+                <thead><tr><th>Time</th><th>Court</th><th>Home</th><th>Away</th><th title="Each team's chance of winning any one set, from the ratings">Set chance</th><th>Why</th><?php if ($published): ?><th>Ref</th><?php endif; ?><th>Result</th></tr></thead>
                 <tbody>
                 <?php $division = null; ?>
                 <?php foreach ($games as $g): ?>
                     <?php if ($g->division !== $division): $division = $g->division; ?>
-                        <tr class="rsl-fx-division"><td colspan="7"><?php echo esc_html(RSL_Teams::DIVISIONS[$division] . ' · ' . $g->venue_name); ?></td></tr>
+                        <tr class="rsl-fx-division"><td colspan="<?php echo $published ? 8 : 7; ?>"><?php echo esc_html(RSL_Teams::DIVISIONS[$division] . ' · ' . $g->venue_name); ?>
+                            <?php if ($published): ?><span class="rsl-fx-sup">Court supervisor: <?php echo $job_cell(isset($jobs['supervisor'][intval($g->venue_id)]) ? $jobs['supervisor'][intval($g->venue_id)] : null, $sups, 'assign_supervisor', array('venue_id' => $g->venue_id)); ?></span><?php endif; ?>
+                        </td></tr>
                     <?php endif; ?>
                     <?php $w = isset($why[intval($g->id)]) ? $why[intval($g->id)] : null; ?>
                     <tr>
@@ -294,6 +327,7 @@ class RSL_Admin_Fixtures {
                         <td><?php echo esc_html($g->away_name); ?></td>
                         <td><?php echo $w && $w['p'] !== null ? self::chance_bar($w['p']) : '<span class="description">—</span>'; ?></td>
                         <td class="rsl-fx-why"><?php echo $w ? self::why_chips($w, $g, $teams) : ''; ?></td>
+                        <?php if ($published): ?><td class="rsl-fx-ref"><?php echo $job_cell(isset($jobs['ref'][intval($g->id)]) ? $jobs['ref'][intval($g->id)] : null, $refs, 'assign_ref', array('game_id' => $g->id)); ?></td><?php endif; ?>
                         <td class="rsl-fx-result">
                             <?php if (!$published && $g->status === 'scheduled'): ?>
                                 <span class="description">Scores once published</span>
@@ -452,6 +486,10 @@ class RSL_Admin_Fixtures {
             .rsl-fx-result form { display: flex; gap: 4px; align-items: center; margin: 0; }
             .rsl-fx-result input[type=text] { width: 150px; }
             .rsl-fx-result .rsl-fx-inline { margin-top: 2px; }
+            .rsl-fx-sup { float: right; font-weight: 400; }
+            .rsl-fx-assign { display: inline-flex; gap: 4px; align-items: center; margin: 0; }
+            .rsl-fx-assign select { max-width: 150px; }
+            .rsl-fx-ref { white-space: nowrap; }
             .rsl-fx-cant ul { margin: 0 0 8px 18px; list-style: disc; }
             .rsl-fx-inline-form { display: inline; }
             .rsl-fx-requests { background: #fff; border-left: 4px solid #72aee6; padding: 8px 12px; max-width: 900px; }

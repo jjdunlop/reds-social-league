@@ -41,6 +41,8 @@ $reset = function () use ($wpdb, $fake_option, $fake_venues_option) {
     delete_option($fake_venues_option);
     $users = get_users(array('meta_key' => 'rsl_fake', 'meta_value' => '1', 'fields' => 'ID'));
     foreach ($users as $uid) {
+        $wpdb->delete(RSL_Database::table('jobs'), array('user_id' => $uid), array('%d'));
+        $wpdb->delete(RSL_Database::table('officials'), array('user_id' => $uid), array('%d'));
         $wpdb->delete(RSL_Database::table('team_members'), array('user_id' => $uid), array('%d'));
         $wpdb->delete(RSL_Database::table('players'), array('user_id' => $uid), array('%d'));
         $wpdb->delete(RSL_Database::table('regos'), array('user_id' => $uid), array('%d'));
@@ -226,6 +228,37 @@ foreach (RSL_Fixtures::games_for_night($nights[4]->id) as $g) {
 }
 remove_filter('pre_wp_mail', '__return_true');
 
+// Officials: six approved refs (four free agents, two team players), one
+// waiting for approval, two court supervisors (free agents, so they can
+// stay at their venue all night). Past rounds refereed and
+// supervised (for the pay report); round 5 part-claimed, some jobs open.
+$ref_ids = array($players[140], $players[141], $players[142], $players[143], $players[3], $players[20]);
+foreach ($ref_ids as $uid) { RSL_Officials::set_ref($uid, 'approved', 0); }
+RSL_Officials::apply_ref($players[144]);
+RSL_Officials::set_supervisor($players[145], true, 0);
+RSL_Officials::set_supervisor($players[147], true, 0);
+$jobs_made = 0;
+for ($round = 0; $round < 5; $round++) {
+    $night = $nights[$round];
+    $games = RSL_Fixtures::games_for_night($night->id);
+    $sup_done = array();
+    foreach ($games as $gi => $g) {
+        if ($round === 4 && $gi % 3 === 0) {
+            continue; // leave some round 5 games needing a ref
+        }
+        foreach ($ref_ids as $k => $uid) {
+            $r = RSL_Officials::claim_ref($g->id, $ref_ids[($gi + $k + $round) % count($ref_ids)], 1);
+            if (!is_wp_error($r)) { $jobs_made++; break; }
+        }
+        if (empty($sup_done[$g->venue_id]) && ($round < 4 || $g->division === 'ranked')) {
+            $r = RSL_Officials::claim_supervisor($night->id, $g->venue_id, $g->division === 'ranked' ? $players[145] : $players[147], 1);
+            $sup_done[$g->venue_id] = true;
+            if (!is_wp_error($r)) { $jobs_made++; }
+        }
+    }
+}
+
 echo sprintf("Created %d teams and %d players (%d on teams, %d free agents) in %s.\n",
     count($team_ids), count($players), $p, count($players) - $p, RSL_Seasons::label($season));
 echo sprintf("Fixtured %d games over rounds 1–5 (published), %d results in.\n", $games_made, $results_in);
+echo sprintf("Officials: %d refs, 2 supervisors, %d jobs taken. Ref login to try: %s\n", count($ref_ids), $jobs_made, get_userdata($ref_ids[0])->user_login);

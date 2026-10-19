@@ -23,6 +23,8 @@ class RSL_Public_Fixtures {
     public function __construct() {
         add_shortcode('rsl_fixtures', array($this, 'render_fixtures'));
         add_shortcode('rsl_ladder', array($this, 'render_ladder'));
+        add_action('wp_ajax_rsl_live_night', array(__CLASS__, 'ajax_live_night'));
+        add_action('wp_ajax_nopriv_rsl_live_night', array(__CLASS__, 'ajax_live_night'));
     }
 
     public static function ensure_pages() {
@@ -88,6 +90,26 @@ class RSL_Public_Fixtures {
                     : 'No fixtures were published for this night.'; ?></p>
             <?php else: ?>
                 <?php echo self::night_games($night, $mine, $today, RSL_Stats::season($season)); ?>
+                <?php if ($night->night_date === $today): ?>
+                    <script>
+                    (function () {
+                        // Game night: keep scores up to date without reloading.
+                        var url = <?php echo wp_json_encode(add_query_arg(array('action' => 'rsl_live_night', 'night' => intval($night->id)), admin_url('admin-ajax.php'))); ?>;
+                        function poll() {
+                            if (document.hidden) { return; }
+                            fetch(url, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (r) {
+                                if (!r.success) { return; }
+                                Object.keys(r.data.games).forEach(function (id) {
+                                    var el = document.querySelector('.rsl-score[data-game="' + id + '"]');
+                                    if (el && el.innerHTML !== r.data.games[id]) { el.innerHTML = r.data.games[id]; }
+                                });
+                            }).catch(function () {});
+                        }
+                        setInterval(poll, 15000);
+                        document.addEventListener('visibilitychange', poll);
+                    })();
+                    </script>
+                <?php endif; ?>
             <?php endif; ?>
 
             <p class="rsl-links"><a href="<?php echo esc_url(self::ladder_url()); ?>">League ladder &rarr;</a> &nbsp; <a href="<?php echo esc_url(get_permalink(intval(get_option(RSL_Public::PAGE_OPTION)))); ?>">All teams &rarr;</a></p>
@@ -183,20 +205,7 @@ class RSL_Public_Fixtures {
                     <a class="rsl-side rsl-side-home<?php echo $home_won ? ' is-winner' : ''; ?>" href="<?php echo esc_url(RSL_Public::team_url($home)); ?>">
                         <span class="rsl-side-text"><span class="rsl-side-name"><?php echo esc_html($home->name); ?></span><?php echo $ranked ? self::side_meta($h, $stats, $info) : ''; ?></span><?php echo RSL_Public::badge($home, 'small'); ?>
                     </a>
-                    <div class="rsl-score">
-                        <?php if ($upset): ?><span class="rsl-upset">Upset!</span><?php elseif ($close): ?><span class="rsl-close">Close one</span><?php endif; ?>
-                        <?php if ($g->status === 'played'): ?>
-                            <strong><?php echo intval($g->home_sets); ?>&ndash;<?php echo intval($g->away_sets); ?></strong>
-                            <small><?php echo esc_html(RSL_Fixtures::format_sets($g->sets, ' · ')); ?></small>
-                        <?php elseif ($g->status === 'forfeit'): ?>
-                            <strong>Forfeit</strong>
-                            <small><?php echo esc_html(intval($g->forfeit_team_id) === $h ? $g->home_name : $g->away_name); ?> forfeited</small>
-                        <?php elseif ($g->night_date < $today): ?>
-                            <strong class="rsl-vs">vs</strong><small>Result to come</small>
-                        <?php else: ?>
-                            <strong class="rsl-vs">vs</strong>
-                        <?php endif; ?>
-                    </div>
+                    <div class="rsl-score" data-game="<?php echo intval($g->id); ?>"><?php echo self::score_html($g, $today, $upset, $close); ?></div>
                     <a class="rsl-side rsl-side-away<?php echo $away_won ? ' is-winner' : ''; ?>" href="<?php echo esc_url(RSL_Public::team_url($away)); ?>">
                         <?php echo RSL_Public::badge($away, 'small'); ?><span class="rsl-side-text"><span class="rsl-side-name"><?php echo esc_html($away->name); ?></span><?php echo $ranked ? self::side_meta($a, $stats, $info) : ''; ?></span>
                     </a>
@@ -221,6 +230,46 @@ class RSL_Public_Fixtures {
         </div>
         <?php
         return ob_get_clean();
+    }
+
+    /** The middle of a game card: result, LIVE score in progress, or "vs". */
+    private static function score_html($g, $today, $upset = false, $close = false) {
+        $h = intval($g->home_team_id);
+        $out = $upset ? '<span class="rsl-upset">Upset!</span>' : ($close ? '<span class="rsl-close">Close one</span>' : '');
+        $live = RSL_Fixtures::live($g);
+        if ($g->status === 'played') {
+            return $out . '<strong>' . intval($g->home_sets) . '&ndash;' . intval($g->away_sets) . '</strong><small>' . esc_html(RSL_Fixtures::format_sets($g->sets, ' · ')) . '</small>';
+        }
+        if ($g->status === 'forfeit') {
+            return $out . '<strong>Forfeit</strong><small>' . esc_html(intval($g->forfeit_team_id) === $h ? $g->home_name : $g->away_name) . ' forfeited</small>';
+        }
+        if ($live) {
+            $won = array(0, 0);
+            foreach ($live['sets'] as $s) {
+                $won[$s[0] > $s[1] ? 0 : 1]++;
+            }
+            $sets = array_map(function ($s) { return $s[0] . '-' . $s[1]; }, $live['sets']);
+            $now = ($live['current'][0] || $live['current'][1]) ? 'Set ' . (count($live['sets']) + 1) . ': ' . $live['current'][0] . '–' . $live['current'][1] : '';
+            return '<span class="rsl-live">Live</span><strong>' . $won[0] . '&ndash;' . $won[1] . '</strong><small>' . esc_html(implode(' · ', array_filter(array_merge($sets, array($now))))) . '</small>';
+        }
+        if ($g->night_date < $today) {
+            return '<strong class="rsl-vs">vs</strong><small>Result to come</small>';
+        }
+        return '<strong class="rsl-vs">vs</strong>';
+    }
+
+    /** Live scores for a night (public, read-only): game_id => score HTML. Polled by the Fixtures page on game night. */
+    public static function ajax_live_night() {
+        $night = RSL_Courts::get_night(isset($_GET['night']) ? intval($_GET['night']) : 0);
+        if (!$night || !RSL_Fixtures::is_published($night)) {
+            wp_send_json_error(array(), 404);
+        }
+        $today = current_time('Y-m-d');
+        $out = array();
+        foreach (RSL_Fixtures::games_for_night($night->id) as $g) {
+            $out[intval($g->id)] = self::score_html($g, $today);
+        }
+        wp_send_json_success(array('games' => $out));
     }
 
     /** Under a Ranked team's name: tier, ladder place, and (for a result) its rating change that night. */
@@ -687,7 +736,8 @@ class RSL_Public_Fixtures {
         return $n . $suffix;
     }
 
-    private static function styles() {
+    /** Shared front-end styles for the league pages (weeks strip, chips, buttons…). */
+    public static function styles() {
         static $done = false;
         if ($done) {
             return '';
@@ -748,6 +798,9 @@ class RSL_Public_Fixtures {
             .rsl-res-win { color: #2e7d32; }
             .rsl-res-loss { color: #b32d2e; }
             .rsl-res-draw { color: var(--rsl-muted); }
+            .rsl-live { display: inline-flex; align-items: center; gap: 4px; margin-bottom: 2px; padding: 0 6px; border-radius: 4px; font-size: 10px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; background: #e0262a; color: #fff; }
+            .rsl-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #fff; animation: rsl-pulse 1.4s infinite; }
+            @keyframes rsl-pulse { 50% { opacity: .3; } }
             .rsl-hype { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 8px; }
             .rsl-hype span { padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; background: #eef2f8; color: var(--rsl-navy); }
             .rsl-close { display: inline-block; margin-bottom: 2px; padding: 0 6px; border-radius: 4px; font-size: 10px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; background: #e7f0fb; color: #1d4f8a; }

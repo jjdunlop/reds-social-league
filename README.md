@@ -5,6 +5,39 @@ rego, teams and invites, courts and game nights, fixtures, results,
 ratings and ladders so far; admin fixture tools, refs, team balances,
 automatic pairing and finals to come (see `CLAUDE.md`).
 
+## Referees, court supervisors and the live scoreboard (0.10.0)
+
+- **Who:** players tick *Happy to be a paid referee* when they register
+  (or in My details); an admin approves them on **Social League → Refs &
+  Supervisors**. Court supervisors are added there by email (one per
+  venue per night: questions, first aid, keeping the night running).
+- **Ref Jobs page** (auto-created): once a week's fixtures are
+  published, approved refs take games one at a time — so a night can be
+  ref, ref, play, ref — and supervisors take their venue. Each person
+  sees **their night** as a timeline, the open jobs (with the reason when
+  one isn't possible), and their pay so far and booked ahead. Checks:
+  never your own team's game, never two places at once, 45 minutes to get
+  between venues, a cap on games per night, a supervisor stays at their
+  venue. Refs can drop a job until a cut-off before the night.
+- **Pay:** flat rates (default $25 a game refereed, $30 a night
+  supervised), recorded on each job when it's taken. **Pay report** for
+  any dates (nights that have happened) with a CSV for the treasurer;
+  admins remove no-shows on the Fixtures page, which also shows each
+  game's ref and each venue's supervisor with quick *Assign*.
+- **Live scoreboard** for the ref's games (on the night and two days
+  after): tap a team for a point, undo, **swap sides**, sets end at 25 by
+  two (third set 15 or 25), *Time's up* ends a set as it stands, *Save
+  result* records it (or type it in). Every tap is kept on the phone
+  first, so slow or no signal never loses a point or a reload; the
+  score so far is sent quietly after each point (whole score + a
+  time-based sequence, so a late update never overwrites a newer one).
+  One scoreboard open at a time; it closes after saving.
+- **Live on the public Fixtures page:** games in progress show **LIVE**
+  with the sets so far and the current set; on game night the page
+  updates itself every 15 seconds (no reload).
+- Tables `rsl_officials`, `rsl_jobs`; `games.live` (schema 8).
+  Classes `RSL_Officials`, `RSL_Ref_Page`, `RSL_Admin_Officials`.
+
 ## Team season schedule and night requests (0.9.0)
 
 - **Season schedule** on every team page: each night of the season — its

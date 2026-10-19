@@ -222,6 +222,7 @@ class RSL_Courts {
     private static function delete_night($night_id) {
         global $wpdb;
         $wpdb->delete(RSL_Database::table('games'), array('night_id' => $night_id));
+        $wpdb->delete(RSL_Database::table('jobs'), array('night_id' => $night_id));
         $wpdb->delete(RSL_Database::table('night_courts'), array('night_id' => $night_id));
         $wpdb->delete(RSL_Database::table('night_venues'), array('night_id' => $night_id));
         $wpdb->delete(RSL_Database::table('nights'), array('id' => $night_id));

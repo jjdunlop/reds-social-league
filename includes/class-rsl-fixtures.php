@@ -95,6 +95,7 @@ class RSL_Fixtures {
 
     public static function delete_game($game_id) {
         global $wpdb;
+        $wpdb->delete(RSL_Database::table('jobs'), array('type' => 'ref', 'game_id' => $game_id));
         return (bool) $wpdb->delete(RSL_Database::table('games'), array('id' => $game_id));
     }
 
@@ -172,8 +173,46 @@ class RSL_Fixtures {
             'away_sets' => $away_sets,
             'result_by' => $user_id ?: null,
             'result_at' => current_time('mysql'),
+            'live' => null,
         ), array('id' => $game->id));
         return self::get($game->id);
+    }
+
+    /**
+     * The score in progress from the ref's scoreboard. $state: sets (list
+     * of [home, away]) and current ([home, away]). $seq must be higher than
+     * the last update stored, so an older update arriving late (slow
+     * signal) never overwrites a newer one. Returns true if stored.
+     */
+    public static function set_live($game_id, $state, $seq) {
+        global $wpdb;
+        $clean = array('sets' => array(), 'current' => array(0, 0));
+        foreach ((array) (isset($state['sets']) ? $state['sets'] : array()) as $s) {
+            $s = array_values((array) $s);
+            if (count($s) === 2) {
+                $clean['sets'][] = array(max(0, min(99, intval($s[0]))), max(0, min(99, intval($s[1]))));
+            }
+        }
+        $clean['sets'] = array_slice($clean['sets'], 0, self::MAX_SETS);
+        $cur = isset($state['current']) ? array_values((array) $state['current']) : array(0, 0);
+        $clean['current'] = array(max(0, min(99, intval(isset($cur[0]) ? $cur[0] : 0))), max(0, min(99, intval(isset($cur[1]) ? $cur[1] : 0))));
+        $updated = $wpdb->query($wpdb->prepare(
+            "UPDATE " . RSL_Database::table('games') . " SET live = %s, live_seq = %d, live_at = %s WHERE id = %d AND status = 'scheduled' AND live_seq < %d",
+            wp_json_encode($clean), intval($seq), current_time('mysql'), intval($game_id), intval($seq)
+        ));
+        return (bool) $updated;
+    }
+
+    /** A game's live score (array(sets, current, at)) if one is in progress and recent, else null. */
+    public static function live($game) {
+        if (!$game || $game->status !== 'scheduled' || empty($game->live) || empty($game->live_at)) {
+            return null;
+        }
+        if (strtotime($game->live_at) < current_time('timestamp') - 3 * HOUR_IN_SECONDS) {
+            return null; // left over from a game nobody finished saving
+        }
+        $state = json_decode($game->live, true);
+        return is_array($state) ? array('sets' => $state['sets'], 'current' => $state['current'], 'at' => $game->live_at) : null;
     }
 
     /** One team gave the game away. */
@@ -188,6 +227,7 @@ class RSL_Fixtures {
         }
         $wpdb->update(RSL_Database::table('games'), array(
             'status' => 'forfeit',
+            'live' => null,
             'forfeit_team_id' => intval($team_id),
             'sets' => '',
             'home_sets' => 0,
@@ -202,7 +242,7 @@ class RSL_Fixtures {
     public static function clear_result($game_id) {
         global $wpdb;
         $wpdb->update(RSL_Database::table('games'), array('status' => 'scheduled', 'forfeit_team_id' => null, 'sets' => '',
-            'home_sets' => 0, 'away_sets' => 0, 'result_by' => null, 'result_at' => null), array('id' => intval($game_id)));
+            'home_sets' => 0, 'away_sets' => 0, 'result_by' => null, 'result_at' => null, 'live' => null, 'live_seq' => 0), array('id' => intval($game_id)));
         return self::get($game_id);
     }
 

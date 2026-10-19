@@ -221,6 +221,9 @@ class RSL_Portal {
                     self::flash('error', $result->get_error_message());
                     return $code !== '' ? add_query_arg('join', $code, $back) : $back;
                 }
+                if (!empty($post['ref'])) {
+                    RSL_Officials::apply_ref($user_id);
+                }
                 if ($code !== '') {
                     $team = RSL_Teams::join_by_code($user_id, $code);
                     if (!is_wp_error($team)) {
@@ -242,6 +245,9 @@ class RSL_Portal {
                     'positions' => isset($post['positions']) ? array_map('sanitize_key', (array) $post['positions']) : array(),
                     'looking' => $existing ? (bool) $existing->looking : false,
                 ));
+                if (!is_wp_error($result) && !empty($post['ref_shown'])) {
+                    !empty($post['ref']) ? RSL_Officials::apply_ref($user_id) : RSL_Officials::withdraw_ref($user_id);
+                }
                 self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : 'Your details are saved.');
                 return $back;
 
@@ -347,6 +353,11 @@ class RSL_Portal {
         set_transient(self::FLASH_PREFIX . get_current_user_id(), array('type' => $type, 'message' => $message), 60);
     }
 
+    /** Leave a message for the signed-in person's next page (used by other front-end pages). */
+    public static function notify($type, $message) {
+        self::flash($type, $message);
+    }
+
     /** The waiting message for the signed-in person (shown on the team page too). */
     public static function flash_html() {
         return get_current_user_id() ? self::take_flash() : '';
@@ -431,9 +442,24 @@ class RSL_Portal {
             <?php if (!$invited_to): ?>
                 <label class="rsl-check"><input type="checkbox" name="looking" value="1"> I don't have a team yet — put me on the free agent list</label>
             <?php endif; ?>
+            <?php echo self::ref_field(0); ?>
             <button type="submit" class="rsl-btn"><?php echo $invited_to ? 'Register and join ' . esc_html($invited_to->name) : 'Register'; ?></button>
         </form>
         <?php
+    }
+
+    /** "Happy to be a paid referee" — or where they stand if they've already offered. */
+    private static function ref_field($user_id) {
+        $status = $user_id ? RSL_Officials::get($user_id)->ref : '';
+        $rate = RSL_Officials::money(RSL_Officials::settings()['ref_rate']);
+        if ($status === 'approved') {
+            return '<p class="rsl-hint">You\'re an approved referee — <a href="' . esc_url(RSL_Ref_Page::url()) . '">see ref jobs</a>.</p>';
+        }
+        if ($status === 'declined') {
+            return '';
+        }
+        return '<label class="rsl-check"><input type="checkbox" name="ref" value="1"' . checked($status === 'applied', true, false) . '> Happy to be a paid referee (' . esc_html($rate) . ' a game) — the league will approve you</label>'
+            . '<input type="hidden" name="ref_shown" value="1">';
     }
 
     private static function experience_fields($player) {
@@ -510,6 +536,11 @@ class RSL_Portal {
             <?php endif; ?>
         </div>
 
+        <?php if (RSL_Officials::is_official($user_id)): ?>
+            <?php $e = RSL_Officials::earnings($user_id, $season); ?>
+            <div class="rsl-card"><p><strong>Ref jobs</strong> — <?php echo intval($e['booked']); ?> booked ahead, <?php echo esc_html(RSL_Officials::money($e['earned'])); ?> earned this season. <a href="<?php echo esc_url(RSL_Ref_Page::url()); ?>">See your night and open jobs &rarr;</a></p></div>
+        <?php endif; ?>
+
         <?php if ($team): ?>
             <?php $this->render_my_team($team, $user_id); ?>
         <?php elseif ($pending): ?>
@@ -555,7 +586,7 @@ class RSL_Portal {
 
         <details class="rsl-card">
             <summary><strong>My details</strong></summary>
-            <form method="post" class="rsl-form"><?php echo self::fields('update_details'); ?><?php echo self::experience_fields($player); ?><button type="submit" class="rsl-btn">Save</button></form>
+            <form method="post" class="rsl-form"><?php echo self::fields('update_details'); ?><?php echo self::experience_fields($player); ?><?php echo self::ref_field($user_id); ?><button type="submit" class="rsl-btn">Save</button></form>
         </details>
         <?php
     }
