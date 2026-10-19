@@ -527,7 +527,17 @@ class RSL_Pairing {
                 continue;
             }
             $ratings = $division === 'ranked' ? $ctx['ratings'] : null;
-            $result = self::pair_division($ids, $ratings, $ctx['meetings'], $ctx['byes'], $w, $salt);
+            // Odd numbers: the spare team should be one a double-header team
+            // can play, so double-header teams are the last to get the bye.
+            $byes = $ctx['byes'];
+            if (count($ids) % 2 === 1) {
+                foreach ($ids as $id) {
+                    if (isset($asked_double[$id]) || !empty($ctx['teams'][$id]->pref_double)) {
+                        $byes[$id] = (isset($byes[$id]) ? $byes[$id] : 0) + 2;
+                    }
+                }
+            }
+            $result = self::pair_division($ids, $ratings, $ctx['meetings'], $byes, $w, $salt);
             $pairs = $result['pairs'];
 
             // More games than slots: the most expensive pairings sit out.
@@ -557,7 +567,9 @@ class RSL_Pairing {
                             continue;
                         }
                         $c = self::pair_cost($bye, $o, $ratings, $ctx['meetings'], $w, $salt);
-                        if ($c['count'] < 2 && $c['recent'] < $w['last_week'] && ($best === null || $c['cost'] < $best[1]['cost'])) {
+                        // Never a mismatch just to avoid a bye: sitting out is shared around instead.
+                        if ($c['count'] < 2 && $c['recent'] < $w['last_week'] && $c['closeness'] <= $w['double_max_asked']
+                            && ($best === null || $c['cost'] < $best[1]['cost'])) {
                             $best = array($o, $c);
                         }
                     }

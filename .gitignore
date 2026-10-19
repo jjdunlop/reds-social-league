@@ -6,6 +6,7 @@
 *.zip
 /exports/
 /backups/
+/report-screenshots/
 
 # Local / editor clutter
 .DS_Store

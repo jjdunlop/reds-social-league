@@ -638,7 +638,7 @@ class RSL_Public_Fixtures {
             $steps[] = self::tier_chip($h['tier'], 'small') . ($last !== null && $round ? ' <small>' . esc_html($round) . '</small>' : '');
             $last = $h['tier']['key'];
         }
-        return count($steps) > 1 || $last !== 'placement' ? implode(' <span class="rsl-arrow">&rarr;</span> ', $steps) : '';
+        return count($steps) > 1 ? implode(' <span class="rsl-arrow">&rarr;</span> ', $steps) : '';
     }
 
     private static function result_label($r, $g, $today) {

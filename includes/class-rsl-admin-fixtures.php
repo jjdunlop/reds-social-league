@@ -295,9 +295,15 @@ class RSL_Admin_Fixtures {
                         <td><?php echo $w && $w['p'] !== null ? self::chance_bar($w['p']) : '<span class="description">—</span>'; ?></td>
                         <td class="rsl-fx-why"><?php echo $w ? self::why_chips($w, $g, $teams) : ''; ?></td>
                         <td class="rsl-fx-result">
+                            <?php if (!$published && $g->status === 'scheduled'): ?>
+                                <span class="description">Scores once published</span>
+                                <form method="post" action="<?php echo esc_url($post); ?>" class="rsl-fx-inline"><?php echo self::fields('delete_game', $season, $night->id, array('game_id' => $g->id)); ?><button class="button-link button-link-delete">Remove game</button></form>
+                            <?php elseif ($g->status === 'scheduled' && $night->night_date > current_time('Y-m-d')): ?>
+                                <span class="description">Scores on the night</span>
+                            <?php else: ?>
                             <form method="post" action="<?php echo esc_url($post); ?>">
                                 <?php echo self::fields('save_result', $season, $night->id, array('game_id' => $g->id)); ?>
-                                <input type="text" name="sets" value="<?php echo esc_attr(RSL_Fixtures::format_sets($g->sets)); ?>" placeholder="25-20, 23-25, 15-12" aria-label="Set scores, home first">
+                                <input type="text" name="sets" value="<?php echo esc_attr(RSL_Fixtures::format_sets($g->sets)); ?>" placeholder="e.g. 25-20, 23-25, 15-12" aria-label="Set scores, home first">
                                 <select name="forfeit" aria-label="Forfeit">
                                     <option value="0">Played</option>
                                     <option value="<?php echo intval($g->home_team_id); ?>" <?php selected($g->status === 'forfeit' && intval($g->forfeit_team_id) === intval($g->home_team_id)); ?>>Home forfeited</option>
@@ -307,8 +313,7 @@ class RSL_Admin_Fixtures {
                             </form>
                             <?php if ($g->status !== 'scheduled'): ?>
                                 <form method="post" action="<?php echo esc_url($post); ?>" class="rsl-fx-inline"><?php echo self::fields('clear_result', $season, $night->id, array('game_id' => $g->id)); ?><button class="button-link">Clear result</button></form>
-                            <?php elseif (!$published): ?>
-                                <form method="post" action="<?php echo esc_url($post); ?>" class="rsl-fx-inline"><?php echo self::fields('delete_game', $season, $night->id, array('game_id' => $g->id)); ?><button class="button-link button-link-delete">Remove game</button></form>
+                            <?php endif; ?>
                             <?php endif; ?>
                         </td>
                     </tr>
@@ -316,7 +321,9 @@ class RSL_Admin_Fixtures {
                 </tbody>
             </table>
             <?php if (!empty($why['_resting'])): ?>
-                <p><strong>Not playing this night:</strong> <?php echo esc_html(implode(', ', array_map(function ($id) use ($teams) { return $teams[$id]->name; }, $why['_resting']))); ?></p>
+                <p><strong>Not playing this night:</strong> <?php echo esc_html(implode(', ', array_map(function ($id) use ($teams, $off) {
+                    return $teams[$id]->name . (isset($off[$id]) ? ' (week off)' : ' (bye — odd numbers or no court)');
+                }, $why['_resting']))); ?></p>
             <?php endif; ?>
         <?php endif; ?>
 
