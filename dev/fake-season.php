@@ -157,10 +157,9 @@ RSL_Courts::set_night_type($nights[11]->id, 'finals');
 $b_courts = RSL_Courts::courts($bundha->id);
 RSL_Courts::set_court_night($nights[2]->id, $b_courts[2]->id, false); // Court 3 unavailable one week
 
-// Fixtures for rounds 1–5 (published), results for rounds 1–4. Ranked is
-// paired by last week's real ratings (a stand-in for the coming engine);
-// Unranked is a plain round robin. Each team has a hidden "true" strength
-// the scores are drawn from, so the ratings have something to find.
+// Fixtures for rounds 1–5 made by the real engine (RSL_Pairing) and
+// published; results for rounds 1–4. Each team has a hidden "true"
+// strength the scores are drawn from, so the ratings have something to find.
 $teams = array();
 foreach ($team_ids as $id) {
     $teams[$id] = RSL_Teams::get($id);
@@ -186,90 +185,31 @@ $sim_sets = function ($home, $away) use ($true) {
     }
     return $sets;
 };
-// Spread a night's games across its slots (by time, then court).
-$place = function ($night, $division, $pairs) {
-    $slots = array_values(array_filter(RSL_Courts::slots_for_night($night->id), function ($s) use ($division) { return $s['division'] === $division; }));
-    $order = array_keys($slots);
-    usort($order, function ($x, $y) use ($slots) { return array($slots[$x]['start'], $x) <=> array($slots[$y]['start'], $y); });
-    $made = array();
-    foreach (array_values($pairs) as $i => $pair) {
-        $slot = $slots[$order[(int) floor($i * count($order) / count($pairs))]];
-        $game = RSL_Fixtures::add_game($night->id, array('home' => $pair[0], 'away' => $pair[1], 'court_id' => $slot['court_id'], 'start' => $slot['start']));
-        if (is_wp_error($game)) {
-            echo 'Skipped a game: ' . $game->get_error_message() . "\n";
-            continue;
-        }
-        $made[] = $game;
-    }
-    return $made;
-};
-
-$last_opponent = array();
 $games_made = 0;
 $results_in = 0;
 for ($round = 0; $round < 5; $round++) {
     $night = $nights[$round];
-    // Ranked: strongest-rated first, each paired with the next team it didn't play last week.
-    if ($round === 0) {
-        $order = array();
-        foreach ($ranked as $id) {
-            $order[$id] = RSL_Teams::level_seed_rating($teams[$id]->est_level) + mt_rand(-60, 60);
-        }
-    } else {
-        RSL_Ratings::flush();
-        $order = array();
-        foreach (RSL_Ratings::compute($season, $nights[$round - 1]->night_date) as $id => $r) {
-            $order[$id] = $r['rating'];
-        }
+    RSL_Ratings::flush();
+    $made = RSL_Pairing::generate($night->id);
+    if (is_wp_error($made)) {
+        echo 'Round ' . ($round + 1) . ': ' . $made->get_error_message() . "\n";
+        continue;
     }
-    arsort($order);
-    $queue = array_keys($order);
-    $pairs = array();
-    while (count($queue) > 1) {
-        $a = array_shift($queue);
-        $pick = 0;
-        foreach ($queue as $qi => $b) {
-            if (!isset($last_opponent[$a]) || $last_opponent[$a] !== $b) {
-                $pick = $qi;
-                break;
-            }
-        }
-        $b = $queue[$pick];
-        array_splice($queue, $pick, 1);
-        $pairs[] = mt_rand(0, 1) ? array($a, $b) : array($b, $a);
+    foreach ($made['notes'] as $note) {
+        echo 'Round ' . ($round + 1) . ': ' . $note . "\n";
     }
-    // Rotate who's on late.
-    for ($i = count($pairs) - 1; $i > 0; $i--) {
-        $j = mt_rand(0, $i);
-        list($pairs[$i], $pairs[$j]) = array($pairs[$j], $pairs[$i]);
-    }
-    $ranked_games = $place($night, 'ranked', $pairs);
-
-    // Unranked: round robin (circle method).
-    $circle = $unranked;
-    $fixed = array_shift($circle);
-    for ($r = 0; $r < $round; $r++) {
-        array_unshift($circle, array_pop($circle));
-    }
-    $circle = array_merge(array($fixed), $circle);
-    $pairs = array();
-    for ($i = 0; $i < intdiv(count($circle), 2); $i++) {
-        $pairs[] = array($circle[$i], $circle[count($circle) - 1 - $i]);
-    }
-    $unranked_games = $place($night, 'unranked', $pairs);
-
     RSL_Fixtures::publish_night($night->id);
-    $all = array_merge($ranked_games, $unranked_games);
+    $all = RSL_Fixtures::games_for_night($night->id);
     $games_made += count($all);
-    foreach ($all as $gi => $g) {
-        $last_opponent[intval($g->home_team_id)] = intval($g->away_team_id);
-        $last_opponent[intval($g->away_team_id)] = intval($g->home_team_id);
-        if ($round >= 4) {
-            continue; // next week: fixture out, not played yet
-        }
-        if ($round === 2 && $g->division === 'unranked' && $gi === count($all) - 1) {
+    if ($round >= 4) {
+        continue; // next week: fixtures out, not played yet
+    }
+    $ranked_games = array_values(array_filter($all, function ($g) { return $g->division === 'ranked'; }));
+    $unranked_games = array_values(array_filter($all, function ($g) { return $g->division === 'unranked'; }));
+    foreach ($all as $g) {
+        if ($round === 2 && $unranked_games && intval($g->id) === intval(end($unranked_games)->id)) {
             RSL_Fixtures::record_forfeit($g->id, $g->away_team_id); // one forfeit
-        } elseif ($round === 3 && $g->division === 'ranked' && $gi === count($ranked_games) - 1) {
+        } elseif ($round === 3 && $ranked_games && intval($g->id) === intval(end($ranked_games)->id)) {
             continue; // one result still to come
         } else {
             RSL_Fixtures::record_result($g->id, $sim_sets(intval($g->home_team_id), intval($g->away_team_id)));

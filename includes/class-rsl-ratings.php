@@ -45,45 +45,64 @@ class RSL_Ratings {
         if (isset(self::$memo[$key])) {
             return self::$memo[$key];
         }
-        $k = log(10) / self::SCALE;
-        $teams = array_filter(RSL_Teams::list_for_season($season), function ($t) { return $t->division === 'ranked'; });
-        $theta = array();
-        $mu = array();
-        $games = array();
-        $links = array();
-        foreach ($teams as $t) {
-            $id = intval($t->id);
-            $mu[$id] = RSL_Teams::level_seed_rating($t->est_level) * $k;
-            $theta[$id] = $mu[$id];
-            $games[$id] = 0;
-            $links[$id] = array();
+        $seeds = array();
+        foreach (RSL_Teams::list_for_season($season) as $t) {
+            if ($t->division === 'ranked') {
+                $seeds[intval($t->id)] = RSL_Teams::level_seed_rating($t->est_level);
+            }
         }
-
-        $played = array_filter(RSL_Fixtures::games_for_season($season, 'ranked'), function ($g) use ($as_of, $theta) {
+        $played = array_filter(RSL_Fixtures::games_for_season($season, 'ranked'), function ($g) use ($as_of, $seeds) {
             return $g->status === 'played' && ($as_of === null || $g->night_date <= $as_of)
-                && isset($theta[intval($g->home_team_id)]) && isset($theta[intval($g->away_team_id)]);
+                && isset($seeds[intval($g->home_team_id)]) && isset($seeds[intval($g->away_team_id)]);
         });
         $latest = $as_of;
         foreach ($played as $g) {
             $latest = ($latest === null || $g->night_date > $latest) ? $g->night_date : $latest;
         }
+        $games = array();
         foreach ($played as $g) {
-            $h = intval($g->home_team_id);
-            $a = intval($g->away_team_id);
-            $weeks = max(0, (strtotime($latest) - strtotime($g->night_date)) / (7 * DAY_IN_SECONDS));
-            $w = pow(0.5, $weeks / self::HALF_LIFE_WEEKS);
             $sets = RSL_Fixtures::parse_sets($g->sets);
             if (is_wp_error($sets)) {
                 continue;
             }
-            $games[$h]++;
-            $games[$a]++;
+            $weeks = max(0, (strtotime($latest) - strtotime($g->night_date)) / (7 * DAY_IN_SECONDS));
+            $games[] = array(intval($g->home_team_id), intval($g->away_team_id), $sets, $weeks);
+        }
+        return self::$memo[$key] = self::fit($seeds, $games);
+    }
+
+    /**
+     * The model itself, no database: $seeds = team_id => starting rating;
+     * $games = list of array(home_id, away_id, sets (array of [home, away]),
+     * weeks_ago). Returns team_id => array(rating, sd, provisional, games).
+     */
+    public static function fit($seeds, $games) {
+        $k = log(10) / self::SCALE;
+        $theta = array();
+        $mu = array();
+        $count = array();
+        $links = array();
+        foreach ($seeds as $id => $seed) {
+            $mu[$id] = $seed * $k;
+            $theta[$id] = $mu[$id];
+            $count[$id] = 0;
+            $links[$id] = array();
+        }
+        foreach ($games as $g) {
+            list($h, $a, $sets, $weeks) = $g;
+            if (!isset($theta[$h]) || !isset($theta[$a])) {
+                continue;
+            }
+            $w = pow(0.5, $weeks / self::HALF_LIFE_WEEKS);
+            $count[$h]++;
+            $count[$a]++;
             foreach ($sets as $s) {
                 $home_won = $s[0] > $s[1] ? 1 : 0;
                 $links[$h][] = array($a, $home_won, $w);
                 $links[$a][] = array($h, 1 - $home_won, $w);
             }
         }
+        $games = $count;
 
         $prior = 1 / pow(self::PRIOR_SD * $k, 2);
         $hess = array();
@@ -117,7 +136,7 @@ class RSL_Ratings {
                 'games' => $games[$i],
             );
         }
-        return self::$memo[$key] = $out;
+        return $out;
     }
 
     /** Forget memoised ratings (after results change in the same request). */

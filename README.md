@@ -5,6 +5,45 @@ rego, teams and invites, courts and game nights, fixtures, results,
 ratings and ladders so far; admin fixture tools, refs, team balances,
 automatic pairing and finals to come (see `CLAUDE.md`).
 
+## Automatic fixtures and the Fixtures admin (0.6.0)
+
+Social League → **Fixtures**: one game night at a time — *Make fixtures
+automatically*, check them (each game shows its expected score, earlier
+meetings, double-headers and whether time preferences were met), adjust
+by hand (remove / add a game in a free slot), **Publish**, then enter
+results or forfeits. Published nights are locked; a night with results
+can't be remade.
+
+How the engine (`RSL_Pairing`) pairs a night — every possible pairing
+gets a cost in one currency, "expected one-sided sets", and the cheapest
+full set of games wins (exact matching up to 18 teams, a strong search above):
+
+- **Closeness (Ranked):** (expected set margin)² from the two ratings —
+  an even game costs 0, an expected 2–1 costs 1, an expected 2.5–0.5
+  costs 4. New teams' ratings count as uncertain (pulled towards 50/50).
+- **Variety:** a 2nd meeting costs 1 (an expected 2–1); a 3rd costs 25,
+  so twice a season is the cap unless there's no alternative. Last
+  week's opponent never; two rounds ago +1.
+- **Unranked:** no ratings, so purely least-played, longest-ago.
+- **Odd numbers:** the spare team plays a double-header team, or sits out
+  (dearer each time for the same team).
+- **Slots:** the night fills from the first slot (no idle middle courts);
+  "earlier"/"later" means first/last games of that night, missed
+  preferences get priority next time, the last slot is shared around,
+  and spare slots become double-headers for opted-in teams (back-to-back
+  or with a break; never a third meeting or a lopsided game).
+- Weights are in `RSL_Pairing::weights()` (filter `rsl_pairing_weights`).
+
+`dev/simulate-pairing.php` plays many pretend seasons through the real
+code to compare strategies (14 teams, 10 rounds, 40 seasons each):
+
+| Strategy | Expected set gap | 2–1 games | Opponents per team | 3rd+ meetings / season | Most meetings |
+|---|---|---|---|---|---|
+| **Engine** | 1.00 | 62% | 7.5 | 0 | 2 |
+| Closeness only | 0.84 | 66% | 5.2 | 14.5 | 5 |
+| Within 3 ladder places | 0.94 | 65% | 7.1 | 4.2 | 4 |
+| Round robin | 1.36 | 54% | 10.0 | 0 | 1 |
+
 ## Fixtures, results, ratings and ladders (0.5.0)
 
 - **Games** fill the game-night slots from Courts & Nights: two teams of
@@ -34,8 +73,7 @@ automatic pairing and finals to come (see `CLAUDE.md`).
     ratings.
   - **Team pages** — standing (rating and place, or ladder place) and the
     team's fixtures and results.
-- Fixtures are entered in code / the dev script for now; the admin
-  fixture board and results entry come next, then automatic pairing.
+- Fixtures and results are managed on the Fixtures admin page (0.6.0).
 
 ## Team level and captain preferences (0.4.0)
 
