@@ -1,8 +1,41 @@
 # Reds Social League
 
-WordPress plugin for MURVC's social volleyball league: teams and rosters
-now; registration, payments, fixtures, results, ladders and ratings to
-come, in three phases (see `CLAUDE.md`).
+WordPress plugin for MURVC's social volleyball league: registration and
+rego, teams and invites, courts and game nights, fixtures, results,
+ratings and ladders so far; admin fixture tools, refs, team balances,
+automatic pairing and finals to come (see `CLAUDE.md`).
+
+## Fixtures, results, ratings and ladders (0.5.0)
+
+- **Games** fill the game-night slots from Courts & Nights: two teams of
+  the division that court hosts that night. Checks: no games on a bye,
+  real slots only, one game per court at a time, no team in two places at
+  once (double-headers later in the night are fine). Removing a night from
+  the season removes its games.
+- **Results** are set scores, home first (`25-20, 23-25, 15-12`). Timed
+  games mean sets can end short, so the only rules are whole numbers, no
+  tied sets, 1–5 sets. A **forfeit** records who gave the game away: a
+  win/loss on the record, never a rating change.
+- **Publishing** is per night — nothing shows publicly until that week's
+  fixtures are released.
+- **Ratings (Ranked)** — Bradley-Terry on set results, refitted from the
+  whole season whenever read (`RSL_Ratings`), on an Elo-style scale. Each
+  team starts from a prior on its level estimate, recent sets weigh a
+  little more, and each team has an uncertainty: provisional until it
+  settles (about three games). A team with no games yet shows as New
+  with no number, so its hidden starting estimate is never revealed.
+- **Public pages** (teams, never people):
+  - **Fixtures & Results** — week strip (rounds, bye, finals), each
+    week by venue and time: court, teams, score and sets, "Result to
+    come", or when fixtures come out. A signed-in player's games are
+    highlighted.
+  - **League Ladder** — Ranked by rating (with record, sets and places
+    moved since last week); Unranked by wins then set difference, no
+    ratings.
+  - **Team pages** — standing (rating and place, or ladder place) and the
+    team's fixtures and results.
+- Fixtures are entered in code / the dev script for now; the admin
+  fixture board and results entry come next, then automatic pairing.
 
 ## Team level and captain preferences (0.4.0)
 

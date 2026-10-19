@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 class RSL_Database {
 
     /** Bump when the schema changes; maybe_upgrade() re-runs install(). */
-    const SCHEMA_VERSION = '4';
+    const SCHEMA_VERSION = '5';
     const SCHEMA_OPTION = 'rsl_schema_version';
 
     public static function table($name) {
@@ -147,12 +147,14 @@ class RSL_Database {
         ) $charset;");
 
         // Game nights of a season (normally Sundays): regular, finals or bye.
+        // published_at: when that night's fixtures went public (NULL = not yet).
         dbDelta("CREATE TABLE " . self::table('nights') . " (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             season varchar(20) NOT NULL,
             night_date date NOT NULL,
             type varchar(20) NOT NULL DEFAULT 'regular',
             note varchar(255) NOT NULL DEFAULT '',
+            published_at datetime DEFAULT NULL,
             PRIMARY KEY  (id),
             UNIQUE KEY season_date (season, night_date)
         ) $charset;");
@@ -178,6 +180,36 @@ class RSL_Database {
             end_time time DEFAULT NULL,
             PRIMARY KEY  (id),
             UNIQUE KEY night_court (night_id, court_id)
+        ) $charset;");
+
+        // One game in one slot (night, court, start). Status: scheduled,
+        // played (sets holds "25-20,23-25,15-12", home score first), or
+        // forfeit (forfeit_team_id gave it away — not a played game, so it
+        // never moves ratings).
+        dbDelta("CREATE TABLE " . self::table('games') . " (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            season varchar(20) NOT NULL,
+            night_id bigint(20) unsigned NOT NULL,
+            division varchar(20) NOT NULL DEFAULT 'ranked',
+            venue_id bigint(20) unsigned NOT NULL,
+            court_id bigint(20) unsigned NOT NULL,
+            start_time time NOT NULL,
+            end_time time NOT NULL,
+            home_team_id bigint(20) unsigned NOT NULL,
+            away_team_id bigint(20) unsigned NOT NULL,
+            status varchar(20) NOT NULL DEFAULT 'scheduled',
+            forfeit_team_id bigint(20) unsigned DEFAULT NULL,
+            sets varchar(100) NOT NULL DEFAULT '',
+            home_sets tinyint(3) unsigned NOT NULL DEFAULT 0,
+            away_sets tinyint(3) unsigned NOT NULL DEFAULT 0,
+            result_by bigint(20) unsigned DEFAULT NULL,
+            result_at datetime DEFAULT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            KEY night_id (night_id),
+            KEY season (season),
+            KEY home_team_id (home_team_id),
+            KEY away_team_id (away_team_id)
         ) $charset;");
 
         update_option(self::SCHEMA_OPTION, self::SCHEMA_VERSION, false);

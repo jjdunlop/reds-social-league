@@ -58,6 +58,9 @@ payment; being cleared is what's needed before a first game.
 - `includes/class-rsl-players.php` — league registration profile (free; separate from paying).
 - `includes/class-rsl-rego.php` — who's cleared to play: full/life membership via `TeamOversight_Memberships::covered_until()` (Club Manager, checked with `method_exists`), else a 12-month social rego (`rsl_regos`, one per paid order item — UNIQUE, the dedupe). WooCommerce hooks, past-order scan, pay link.
 - `includes/class-rsl-courts.php` — venues, courts (usual hours), season settings (dates, weekday, game length per division — option `rsl_season_settings`), game nights (regular/finals/bye), per-night exceptions stored only when different from the usual (`rsl_night_courts`, `rsl_night_venues`), and `night_plan()` / `slots_for_night()` — the game slots fixtures fill. Data only.
+- `includes/class-rsl-fixtures.php` — games in game-night slots (clash checks), set-score results, forfeits, per-night publishing, round labels. Data only.
+- `includes/class-rsl-ratings.php` — Bradley-Terry ratings on sets for Ranked (prior on the level seed, recency weighting, uncertainty → provisional), and both ladders. Forfeits never count; unplayed teams never show their seed.
+- `includes/class-rsl-public-fixtures.php` — `[rsl_fixtures]` (Fixtures & Results page), `[rsl_ladder]` (League Ladder page), and the fixtures/standing section on team pages. Published nights only.
 - `includes/class-rsl-admin-courts.php` — Social League → Courts & Nights: venues & courts, season calendar grid, per-night timeline editor, copy forward.
 - `includes/class-rsl-portal.php` — `[rsl_my_league]` on the auto-created Social League page: register, clearance + pay, join by code, invites, apply as captain, captain tools. Post/Redirect/Get on `template_redirect`.
 - `includes/class-rsl-public.php` — `[rsl_teams]`, the auto-created League Teams page, team pages at `/league-teams/{slug}/`.

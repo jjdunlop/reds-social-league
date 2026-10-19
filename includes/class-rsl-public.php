@@ -26,21 +26,27 @@ class RSL_Public {
         });
     }
 
-    /** Create the League Teams page if it's missing (activation). */
+    /** Create the public league pages if they're missing (activation / upgrade). */
     public static function ensure_pages() {
-        $page_id = intval(get_option(self::PAGE_OPTION));
+        RSL_Public_Fixtures::ensure_pages();
+        return self::ensure_page(self::PAGE_OPTION, 'League Teams', 'league-teams', '[rsl_teams]');
+    }
+
+    /** A published page holding $shortcode, remembered in $option. Returns its id. */
+    public static function ensure_page($option, $title, $slug, $shortcode) {
+        $page_id = intval(get_option($option));
         if ($page_id && get_post_status($page_id)) {
             return $page_id;
         }
         $page_id = wp_insert_post(array(
-            'post_title' => 'League Teams',
-            'post_name' => 'league-teams',
-            'post_content' => '[rsl_teams]',
+            'post_title' => $title,
+            'post_name' => $slug,
+            'post_content' => $shortcode,
             'post_status' => 'publish',
             'post_type' => 'page',
         ));
         if ($page_id && !is_wp_error($page_id)) {
-            update_option(self::PAGE_OPTION, $page_id, false);
+            update_option($option, $page_id, false);
         }
         return $page_id;
     }
@@ -86,6 +92,7 @@ class RSL_Public {
         ob_start();
         ?>
         <h2 class="rsl-title"><?php echo esc_html(RSL_Seasons::label($season)); ?> teams</h2>
+        <p class="rsl-links"><a href="<?php echo esc_url(RSL_Public_Fixtures::fixtures_url()); ?>">Fixtures &amp; results &rarr;</a> &nbsp; <a href="<?php echo esc_url(RSL_Public_Fixtures::ladder_url()); ?>">Ladder &rarr;</a></p>
         <?php if (empty($teams)): ?>
             <p class="rsl-empty">No teams yet this season.</p>
         <?php endif; ?>
@@ -136,6 +143,7 @@ class RSL_Public {
                 <?php endforeach; ?>
             </ul>
         <?php endif; ?>
+        <?php echo RSL_Public_Fixtures::team_section($team); ?>
         <?php
         return ob_get_clean();
     }
@@ -146,7 +154,7 @@ class RSL_Public {
             . esc_html(RSL_Teams::initials($team->name)) . '</span>';
     }
 
-    private static function styles() {
+    public static function styles() {
         static $done = false;
         if ($done) {
             return '';
