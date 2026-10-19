@@ -453,8 +453,8 @@ class RSL_Public_Fixtures {
         ob_start();
         ?>
         <?php if ($standing): ?><p class="rsl-standing"><?php echo esc_html($standing); ?> &middot; <a href="<?php echo esc_url(self::ladder_url()); ?>">Ladder</a></p><?php endif; ?>
-        <h3 class="rsl-division">Fixtures &amp; results</h3>
-        <?php echo self::team_games_table($team, $games, $labels, $today, $stats); ?>
+        <h3 class="rsl-division">Season schedule</h3>
+        <?php echo self::season_schedule($team, $games, $labels, $today, $stats); ?>
         <?php
         return ob_get_clean() . self::styles();
     }
@@ -508,41 +508,112 @@ class RSL_Public_Fixtures {
         return ob_get_clean() . RSL_Public::styles() . self::styles();
     }
 
-    private static function team_games_table($team, $games, $labels, $today, $stats) {
+    /**
+     * Every night of the team's season: its games (and results) once that
+     * week is published, "TBA" before, byes and finals. The captain can ask
+     * for a week off or two games before a week's fixtures come out, and
+     * say "can't make it" after.
+     */
+    private static function season_schedule($team, $games, $labels, $today, $stats) {
+        $nights = RSL_Courts::nights($team->season);
+        if (!$nights) {
+            return '<p class="rsl-empty">The season calendar isn\'t out yet.</p>';
+        }
+        $by_night = array();
+        foreach ($games as $g) {
+            $by_night[intval($g->night_id)][] = $g;
+        }
+        $user_id = get_current_user_id();
+        $captain = $user_id && (RSL_Teams::is_captain($team->id, $user_id) || current_user_can('manage_options'));
+        // Requests are the team's business: only its members (and admins) see them.
+        $insider = $captain || ($user_id && RSL_Teams::is_member($team->id, $user_id));
+        $requests = $insider ? RSL_Requests::for_team($team->id) : array();
+        $back = RSL_Public::team_url($team);
+        $button = function ($do, $label, $night, $extra = array(), $confirm = '') use ($team, $back) {
+            return '<form method="post" class="rsl-req-form"' . ($confirm ? ' onsubmit="return confirm(\'' . esc_js($confirm) . '\');"' : '') . '>'
+                . RSL_Portal::form_fields($do, array_merge(array('team_id' => $team->id, 'night_id' => $night->id, 'back' => $back), $extra))
+                . '<button type="submit" class="rsl-req-btn">' . esc_html($label) . '</button></form>';
+        };
         ob_start();
         ?>
-        <?php if (empty($games)): ?>
-            <p class="rsl-empty">No fixtures out yet — they're released each Monday for the coming Sunday.</p>
-        <?php else: ?>
-            <div class="rsl-table-wrap"><table class="rsl-team-games">
-                <tbody>
-                <?php foreach ($games as $g): ?>
-                    <?php
-                    $is_home = intval($g->home_team_id) === intval($team->id);
-                    $opp = (object) ($is_home
-                        ? array('name' => $g->away_name, 'slug' => $g->away_slug, 'colour' => $g->away_colour)
-                        : array('name' => $g->home_name, 'slug' => $g->home_slug, 'colour' => $g->home_colour));
-                    $r = RSL_Fixtures::result_for($g, $team->id);
-                    ?>
-                    <tr<?php echo $g->night_date >= $today && $r['outcome'] === 'pending' ? ' class="is-next"' : ''; ?>>
-                        <td><a href="<?php echo esc_url(self::fixtures_url((object) array('night_date' => $g->night_date))); ?>"><?php echo esc_html(self::short_label($labels[$g->night_id])); ?></a><br><small><?php echo esc_html(date_i18n('j M', strtotime($g->night_date))); ?></small></td>
-                        <td><?php echo esc_html(RSL_Courts::pretty_time(RSL_Courts::hm($g->start_time))); ?><br><small><?php echo esc_html($g->court_name . ', ' . $g->venue_name); ?></small></td>
-                        <td><a class="rsl-team-cell" href="<?php echo esc_url(RSL_Public::team_url($opp)); ?>"><?php echo RSL_Public::badge($opp, 'small'); ?><span><?php echo esc_html($opp->name); ?></span></a></td>
-                        <td class="rsl-result"><?php echo self::result_label($r, $g, $today); ?><?php
-                            $gi = isset($stats['games'][intval($g->id)]) ? $stats['games'][intval($g->id)] : null;
-                            if ($gi && intval($gi['upset_team']) === intval($team->id)) {
-                                echo ' <span class="rsl-upset">Upset win!</span>';
-                            }
-                            if ($gi && isset($gi['delta'][intval($team->id)]) && $gi['delta'][intval($team->id)] !== null) {
-                                $d = intval($gi['delta'][intval($team->id)]);
-                                echo ' <span class="rsl-delta ' . ($d >= 0 ? 'is-up' : 'is-down') . '" title="Rating change that night">' . ($d >= 0 ? '+' : '&minus;') . abs($d) . '</span>';
-                            }
-                        ?></td>
+        <?php if ($captain): ?><p class="rsl-hint">Captain: need a week off, or fancy two games one night? Ask before that week's fixtures come out (Mondays) — it's free. Once they're out, use "Can't make it" and the league will sort it out.</p><?php endif; ?>
+        <div class="rsl-table-wrap"><table class="rsl-team-games rsl-schedule">
+            <tbody>
+            <?php foreach ($nights as $n): ?>
+                <?php
+                $req = isset($requests[intval($n->id)]) ? $requests[intval($n->id)] : null;
+                $published = RSL_Fixtures::is_published($n);
+                $upcoming = $n->night_date >= $today;
+                $mine = isset($by_night[intval($n->id)]) ? $by_night[intval($n->id)] : array();
+                $label = '<a href="' . esc_url(self::fixtures_url($n)) . '">' . esc_html(self::short_label($labels[$n->id])) . '</a><br><small>' . esc_html(date_i18n('D j M', strtotime($n->night_date))) . '</small>';
+                ?>
+                <?php if ($n->type === 'bye'): ?>
+                    <tr class="rsl-sched-quiet"><td><?php echo $label; ?></td><td colspan="3">No games this week<?php echo $n->note !== '' ? ' — ' . esc_html($n->note) : ''; ?></td></tr>
+                <?php elseif ($published && $mine): ?>
+                    <?php foreach ($mine as $i => $g): ?>
+                        <?php
+                        $is_home = intval($g->home_team_id) === intval($team->id);
+                        $opp = (object) ($is_home
+                            ? array('name' => $g->away_name, 'slug' => $g->away_slug, 'colour' => $g->away_colour)
+                            : array('name' => $g->home_name, 'slug' => $g->home_slug, 'colour' => $g->home_colour));
+                        $r = RSL_Fixtures::result_for($g, $team->id);
+                        ?>
+                        <tr<?php echo $upcoming && $r['outcome'] === 'pending' ? ' class="is-next"' : ''; ?>>
+                            <?php if ($i === 0): ?><td rowspan="<?php echo count($mine); ?>"><?php echo $label; ?></td><?php endif; ?>
+                            <td><?php echo esc_html(RSL_Courts::pretty_time(RSL_Courts::hm($g->start_time))); ?><br><small><?php echo esc_html($g->court_name . ', ' . $g->venue_name); ?></small></td>
+                            <td><a class="rsl-team-cell" href="<?php echo esc_url(RSL_Public::team_url($opp)); ?>"><?php echo RSL_Public::badge($opp, 'small'); ?><span><?php echo esc_html($opp->name); ?></span></a></td>
+                            <td class="rsl-result"><?php echo self::result_label($r, $g, $today); ?><?php
+                                $gi = isset($stats['games'][intval($g->id)]) ? $stats['games'][intval($g->id)] : null;
+                                if ($gi && intval($gi['upset_team']) === intval($team->id)) {
+                                    echo ' <span class="rsl-upset">Upset win!</span>';
+                                }
+                                if ($gi && isset($gi['delta'][intval($team->id)]) && $gi['delta'][intval($team->id)] !== null) {
+                                    $d = intval($gi['delta'][intval($team->id)]);
+                                    echo ' <span class="rsl-delta ' . ($d >= 0 ? 'is-up' : 'is-down') . '" title="Rating change that night">' . ($d >= 0 ? '+' : '&minus;') . abs($d) . '</span>';
+                                }
+                                if ($i === count($mine) - 1 && $upcoming) {
+                                    if ($req && $req->type === 'cant_make') {
+                                        echo '<br><span class="rsl-req-chip is-warn">' . ($req->status === 'handled' ? 'Sorted by the league' : 'You\'ve told the league you can\'t make it') . '</span>';
+                                        if ($captain && $req->status === 'active') {
+                                            echo $button('cancel_request', 'We can make it after all', $n, array('request_id' => $req->id));
+                                        }
+                                    } elseif ($captain && $r['outcome'] === 'pending') {
+                                        echo $button('cant_make', 'Can\'t make it', $n, array(), 'Tell the league your team can\'t make it this week? They\'ll sort it out with the other team.');
+                                    }
+                                }
+                            ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                <?php elseif ($published): ?>
+                    <tr class="rsl-sched-quiet"><td><?php echo $label; ?></td><td colspan="3"><?php echo $req && $req->type === 'off' ? 'Week off (requested)' : 'No game this week'; ?></td></tr>
+                <?php else: ?>
+                    <tr class="rsl-sched-tba">
+                        <td><?php echo $label; ?></td>
+                        <td colspan="2">
+                            <?php if ($n->type === 'finals'): ?>
+                                <strong>Finals</strong> &middot; <span class="rsl-empty">TBA</span>
+                            <?php else: ?>
+                                <span class="rsl-tba">TBA</span>
+                                <?php if ($upcoming): ?><small>fixtures out <?php echo esc_html(date_i18n('D j M', strtotime($n->night_date . ' -6 days'))); ?></small><?php endif; ?>
+                            <?php endif; ?>
+                            <?php if ($req && $req->type === 'off'): ?><span class="rsl-req-chip">Week off requested</span><?php endif; ?>
+                            <?php if ($req && $req->type === 'double'): ?><span class="rsl-req-chip is-good">Two games requested</span><?php endif; ?>
+                        </td>
+                        <td class="rsl-result">
+                            <?php if ($captain && $upcoming && $n->type === 'regular'): ?>
+                                <?php if ($req && in_array($req->type, array('off', 'double'), true)): ?>
+                                    <?php echo $button('cancel_request', 'Withdraw request', $n, array('request_id' => $req->id)); ?>
+                                <?php else: ?>
+                                    <?php echo $button('request_off', 'Week off', $n); ?>
+                                    <?php echo $button('request_double', 'Two games', $n); ?>
+                                <?php endif; ?>
+                            <?php endif; ?>
+                        </td>
                     </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table></div>
-        <?php endif; ?>
+                <?php endif; ?>
+            <?php endforeach; ?>
+            </tbody>
+        </table></div>
         <?php
         return ob_get_clean();
     }
@@ -673,6 +744,21 @@ class RSL_Public_Fixtures {
             .rsl-hype { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 8px; }
             .rsl-hype span { padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; background: #eef2f8; color: var(--rsl-navy); }
             .rsl-close { display: inline-block; margin-bottom: 2px; padding: 0 6px; border-radius: 4px; font-size: 10px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; background: #e7f0fb; color: #1d4f8a; }
+            .rsl-flash { padding: 10px 14px; border-radius: 6px; margin: 12px 0; }
+            .rsl-flash-success { background: #edfaef; color: #00602a; }
+            .rsl-flash-error { background: #fcf0f1; color: #8a1f1f; }
+            .rsl-hint { font-size: 13px; color: var(--rsl-muted); }
+            .rsl-schedule td { vertical-align: top; }
+            .rsl-sched-quiet td { color: var(--rsl-muted); }
+            .rsl-sched-tba td { background: #fafbfc; }
+            .rsl-tba { display: inline-block; margin-right: 6px; padding: 0 6px; border: 1px dashed var(--rsl-border); border-radius: 4px; font-size: 11px; font-weight: 800; letter-spacing: .5px; color: var(--rsl-muted); }
+            .rsl-sched-tba small { color: var(--rsl-muted); font-size: 12px; }
+            .rsl-req-chip { display: inline-block; margin: 2px 0 0 6px; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; background: #eef2f8; color: var(--rsl-navy); }
+            .rsl-req-chip.is-good { background: #edfaef; color: #00602a; }
+            .rsl-req-chip.is-warn { background: #fcf0e8; color: #8a4600; margin-left: 0; }
+            .rsl-req-form { display: inline-block; margin: 2px 0 0 4px; }
+            .rsl .rsl-req-btn { padding: 3px 10px; border: 1px solid var(--rsl-navy); border-radius: 14px; background: #fff; color: var(--rsl-navy); font-size: 12px; font-weight: 700; cursor: pointer; line-height: 1.4; }
+            .rsl .rsl-req-btn:hover { background: var(--rsl-navy); color: #fff; }
             .rsl-finals { font-size: 11px; color: var(--rsl-muted); white-space: nowrap; }
             .rsl-finals.is-in { color: #2e7d32; font-weight: 800; font-size: 14px; }
             .rsl-level { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 5px; border-radius: 11px; background: var(--rsl-navy); color: #fff; font-size: 11px; font-weight: 800; }

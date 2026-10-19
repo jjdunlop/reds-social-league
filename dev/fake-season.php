@@ -25,6 +25,7 @@ $reset = function () use ($wpdb, $fake_option, $fake_venues_option) {
     $team_ids = array_map('intval', (array) get_option($fake_option, array()));
     foreach ($team_ids as $id) {
         $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('games') . " WHERE home_team_id = %d OR away_team_id = %d", $id, $id));
+        $wpdb->delete(RSL_Database::table('requests'), array('team_id' => $id), array('%d'));
         $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $id), array('%d'));
         $wpdb->delete(RSL_Database::table('teams'), array('id' => $id), array('%d'));
     }
@@ -209,6 +210,21 @@ for ($round = 0; $round < 5; $round++) {
     }
 }
 RSL_Ratings::flush();
+
+// Captains' requests: a week off and a "two games please" for round 6,
+// and a late "can't make it" for round 5 (admin-only email silenced).
+add_filter('pre_wp_mail', '__return_true');
+$cap = function ($team_id) { $c = RSL_Teams::captain($team_id); return $c ? intval($c->user_id) : 0; };
+$round6 = $nights[6]; // nights[5] is the bye
+RSL_Requests::request($ranked[2], $round6->id, 'off', $cap($ranked[2]));
+RSL_Requests::request($ranked[5], $round6->id, 'double', $cap($ranked[5]));
+foreach (RSL_Fixtures::games_for_night($nights[4]->id) as $g) {
+    if ($g->division === 'unranked') {
+        RSL_Requests::request(intval($g->home_team_id), $nights[4]->id, 'cant_make', $cap(intval($g->home_team_id)));
+        break;
+    }
+}
+remove_filter('pre_wp_mail', '__return_true');
 
 echo sprintf("Created %d teams and %d players (%d on teams, %d free agents) in %s.\n",
     count($team_ids), count($players), $p, count($players) - $p, RSL_Seasons::label($season));

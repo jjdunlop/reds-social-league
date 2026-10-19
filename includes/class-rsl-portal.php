@@ -287,7 +287,26 @@ class RSL_Portal {
             self::flash('error', 'Only the team captain can do that.');
             return $back;
         }
+        // Night requests come from the team page; go back there.
+        $back_to = isset($post['back']) ? wp_validate_redirect(esc_url_raw(wp_unslash($post['back'])), $back) : $back;
+        $night_id = isset($post['night_id']) ? intval($post['night_id']) : 0;
         switch ($do) {
+            case 'request_off':
+            case 'request_double':
+            case 'cant_make':
+                $type = array('request_off' => 'off', 'request_double' => 'double', 'cant_make' => 'cant_make')[$do];
+                $result = RSL_Requests::request($team->id, $night_id, $type, $user_id);
+                $done = array(
+                    'off' => 'Week off requested — you won\'t be fixtured that night.',
+                    'double' => 'Two games requested — you\'ll get a double-header if there\'s a spare slot.',
+                    'cant_make' => 'Thanks for letting us know — the league will sort it out with the other team and be in touch.',
+                );
+                self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : $done[$type]);
+                return $back_to;
+            case 'cancel_request':
+                $result = RSL_Requests::cancel(isset($post['request_id']) ? intval($post['request_id']) : 0, $user_id);
+                self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : 'Request withdrawn.');
+                return $back_to;
             case 'invite':
                 $result = RSL_Teams::invite_by_email($team->id, $user_id, isset($post['email']) ? wp_unslash($post['email']) : '');
                 self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : 'Invite sent. They\'ll join once they accept.');
@@ -326,6 +345,16 @@ class RSL_Portal {
 
     private static function flash($type, $message) {
         set_transient(self::FLASH_PREFIX . get_current_user_id(), array('type' => $type, 'message' => $message), 60);
+    }
+
+    /** The waiting message for the signed-in person (shown on the team page too). */
+    public static function flash_html() {
+        return get_current_user_id() ? self::take_flash() : '';
+    }
+
+    /** Hidden fields for a front-end action form (used by the team page too). */
+    public static function form_fields($do, $extra = array()) {
+        return self::fields($do, $extra);
     }
 
     private static function take_flash() {
@@ -581,6 +610,9 @@ class RSL_Portal {
                 <p class="rsl-hint">Or invite someone who has already registered, by their email — they'll join once they accept:</p>
                 <form method="post" class="rsl-row"><?php echo self::fields('invite', array('team_id' => $team->id)); ?><input type="email" name="email" placeholder="Their email" required><button type="submit" class="rsl-btn">Invite</button></form>
                 <p class="rsl-hint">Everyone needs to be cleared (social rego or full/life membership) before their first game.</p>
+
+                <h4>Season schedule</h4>
+                <p class="rsl-hint">Your team page shows every week of the season. Need a week off, or fancy two games one night? Ask there before that week's fixtures come out (Mondays). <a href="<?php echo esc_url(RSL_Public::team_url($team)); ?>">Open the season schedule &rarr;</a></p>
 
                 <h4>Team preferences</h4>
                 <p class="rsl-hint">Used when the weekly fixtures are made. Even games come first, so preferences decide between otherwise equal options.</p>

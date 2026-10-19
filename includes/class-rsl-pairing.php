@@ -55,6 +55,7 @@ class RSL_Pairing {
             'last_week' => 1000.0,    // met last round
             'bye' => 4.0,             // sitting out, × (times sat out + 1)
             'double_max' => 2.25,     // a spare-slot double-header only if its closeness cost is at most this (75/25)
+            'double_max_asked' => 4.0, // ...or this when a team asked for two games that week (about 83/17)
         ));
     }
 
@@ -441,8 +442,10 @@ class RSL_Pairing {
             $ctx['meetings'][$key]['last'] = min($ctx['meetings'][$key]['last'], $ago);
             $ctx['home'][intval($g->home_team_id)] = (isset($ctx['home'][intval($g->home_team_id)]) ? $ctx['home'][intval($g->home_team_id)] : 0) + 1;
         }
+        $weeks_off = RSL_Requests::weeks_off($season);
         foreach ($by_night as $night_id => $games) {
             $played = array();
+            $off = isset($weeks_off[$games[0]->night_date]) ? $weeks_off[$games[0]->night_date] : array();
             foreach (array_keys(RSL_Teams::DIVISIONS) as $division) {
                 $in = array_filter($games, function ($g) use ($division) { return $g->division === $division; });
                 if (!$in) {
@@ -466,7 +469,7 @@ class RSL_Pairing {
                 }
                 foreach ($teams as $t) {
                     $joined = substr((string) $t->created_at, 0, 10);
-                    if ($t->division === $division && empty($played[intval($t->id)]) && ($joined === '' || $joined <= $games[0]->night_date)) {
+                    if ($t->division === $division && empty($played[intval($t->id)]) && empty($off[intval($t->id)]) && ($joined === '' || $joined <= $games[0]->night_date)) {
                         $ctx['byes'][intval($t->id)] = (isset($ctx['byes'][intval($t->id)]) ? $ctx['byes'][intval($t->id)] : 0) + 1;
                     }
                 }
@@ -500,14 +503,23 @@ class RSL_Pairing {
         $all_slots = RSL_Courts::slots_for_night($night->id);
         $salt = $night->night_date;
         $plan = array('night' => $night, 'divisions' => array());
+        $off = RSL_Requests::for_night($night->id, 'off');
+        $asked_double = RSL_Requests::for_night($night->id, 'double');
 
         foreach (array_keys(RSL_Teams::DIVISIONS) as $division) {
-            $ids = array_keys(array_filter($ctx['teams'], function ($t) use ($division) { return $t->division === $division; }));
+            $all_ids = array_keys(array_filter($ctx['teams'], function ($t) use ($division) { return $t->division === $division; }));
+            $ids = array_values(array_filter($all_ids, function ($id) use ($off) { return !isset($off[$id]); }));
+            $d = array('games' => array(), 'out' => array(), 'notes' => array());
+            foreach (array_diff($all_ids, $ids) as $id) {
+                $d['out'][$id] = 'Week off (requested)';
+            }
             if (!$ids) {
+                if ($d['out']) {
+                    $plan['divisions'][$division] = $d;
+                }
                 continue;
             }
             $slots = array_values(array_filter($all_slots, function ($s) use ($division) { return $s['division'] === $division; }));
-            $d = array('games' => array(), 'out' => array(), 'notes' => array());
             if (!$slots) {
                 $d['notes'][] = 'No courts host ' . RSL_Teams::DIVISIONS[$division] . ' games this night.';
                 foreach ($ids as $id) { $d['out'][$id] = 'No courts'; }
@@ -532,7 +544,8 @@ class RSL_Pairing {
                 $tonight[$p[1]][] = $p[0];
             }
             $spare = count($slots) - count($games);
-            $opted = array_values(array_filter($ids, function ($id) use ($ctx) { return !empty($ctx['teams'][$id]->pref_double); }));
+            // Double-header teams: asked for two games this week, or happy to all season.
+            $opted = array_values(array_filter($ids, function ($id) use ($ctx, $asked_double) { return isset($asked_double[$id]) || !empty($ctx['teams'][$id]->pref_double); }));
 
             // Odd numbers: the team without a game gets one against a double-header team, if any.
             if ($result['bye'] !== null) {
@@ -567,11 +580,15 @@ class RSL_Pairing {
                         continue;
                     }
                     $c = self::pair_cost($a, $b, $ratings, $ctx['meetings'], $w, $salt);
-                    // An optional extra game is never a third meeting, a repeat of last week, or lopsided.
-                    if ($c['count'] >= 2 || $c['recent'] >= $w['last_week'] || $c['closeness'] > $w['double_max']) {
+                    // An optional extra game is never a third meeting, a repeat of last week, or lopsided
+                    // (a team that asked for two games this week accepts a wider gap).
+                    $max = isset($asked_double[$a]) || isset($asked_double[$b]) ? $w['double_max_asked'] : $w['double_max'];
+                    if ($c['count'] >= 2 || $c['recent'] >= $w['last_week'] || $c['closeness'] > $max) {
                         continue;
                     }
                     $fair = 0.5 * ((isset($ctx['doubles'][$a]) ? $ctx['doubles'][$a] : 0) + (isset($ctx['doubles'][$b]) ? $ctx['doubles'][$b] : 0));
+                    // Teams that asked for two games this week go first.
+                    $fair -= 3 * ((isset($asked_double[$a]) ? 1 : 0) + (isset($asked_double[$b]) ? 1 : 0));
                     $candidates[] = array($a, $b, $c, $c['cost'] + $fair);
                 }
             }

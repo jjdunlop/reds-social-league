@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 class RSL_Database {
 
     /** Bump when the schema changes; maybe_upgrade() re-runs install(). */
-    const SCHEMA_VERSION = '5';
+    const SCHEMA_VERSION = '6';
     const SCHEMA_OPTION = 'rsl_schema_version';
 
     public static function table($name) {
@@ -210,6 +210,25 @@ class RSL_Database {
             KEY season (season),
             KEY home_team_id (home_team_id),
             KEY away_team_id (away_team_id)
+        ) $charset;");
+
+        // A captain's request about one night: off (week off, before
+        // fixtures are out), double (two games please, before fixtures are
+        // out) or cant_make (after fixtures are out — goes to the admins).
+        // Status: active, cancelled, or handled (an admin dealt with it).
+        dbDelta("CREATE TABLE " . self::table('requests') . " (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            team_id bigint(20) unsigned NOT NULL,
+            night_id bigint(20) unsigned NOT NULL,
+            type varchar(20) NOT NULL,
+            status varchar(20) NOT NULL DEFAULT 'active',
+            requested_by bigint(20) unsigned NOT NULL,
+            requested_at datetime DEFAULT CURRENT_TIMESTAMP,
+            handled_by bigint(20) unsigned DEFAULT NULL,
+            handled_at datetime DEFAULT NULL,
+            PRIMARY KEY  (id),
+            KEY team_night (team_id, night_id),
+            KEY night_id (night_id)
         ) $charset;");
 
         update_option(self::SCHEMA_OPTION, self::SCHEMA_VERSION, false);

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Reds Social League
  * Description: MURVC's social volleyball league: player registration and social rego, captain team applications, invites and rosters, courts and game nights, fixtures, results, ratings and ladders.
- * Version: 0.8.1
+ * Version: 0.9.0
  * Author: MURVC
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('RSL_VERSION', '0.8.1');
+define('RSL_VERSION', '0.9.0');
 define('RSL_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('RSL_PLUGIN_URL', plugin_dir_url(__FILE__));
 
@@ -26,6 +26,7 @@ require_once RSL_PLUGIN_DIR . 'includes/class-rsl-public.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-portal.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-courts.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-fixtures.php';
+require_once RSL_PLUGIN_DIR . 'includes/class-rsl-requests.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-ratings.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-pairing.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-stats.php';

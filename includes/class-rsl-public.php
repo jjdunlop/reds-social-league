@@ -127,6 +127,7 @@ class RSL_Public {
         $can_see_roster = $user_id && (RSL_Teams::is_member($team->id, $user_id) || current_user_can('manage_options'));
         ob_start();
         ?>
+        <?php echo RSL_Portal::flash_html(); ?>
         <p class="rsl-back"><a href="<?php echo esc_url($back); ?>">&larr; All teams</a></p>
         <div class="rsl-team-head">
             <?php echo self::badge($team, 'large'); ?>

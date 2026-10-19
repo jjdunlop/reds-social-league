@@ -5,6 +5,25 @@ rego, teams and invites, courts and game nights, fixtures, results,
 ratings and ladders so far; admin fixture tools, refs, team balances,
 automatic pairing and finals to come (see `CLAUDE.md`).
 
+## Team season schedule and night requests (0.9.0)
+
+- **Season schedule** on every team page: each night of the season — its
+  games and results once published, **TBA** ("fixtures out Mon 26 Oct")
+  before, bye weeks and finals.
+- **Captain requests** (buttons on the schedule; captains and admins only):
+  - **Week off** — before that week's fixtures are out; free; the
+    fixtures leave the team out. Not a bye: no turn-up points, no finals round.
+  - **Two games** — before fixtures are out; first in line for a spare-slot
+    double-header (a wider gap is accepted than for season-long opt-ins;
+    never a third meeting).
+  - **Can't make it** — after fixtures are out; emails the league admin
+    and shows on that night in Social League → Fixtures with **Mark
+    handled** (the automatic replacement offer comes later).
+  One live request per team per night; week off / two games can be
+  withdrawn until fixtures are out. Requests are visible only to the
+  team's members and admins.
+- Table `rsl_requests` (schema 6), class `RSL_Requests`.
+
 ## Fair however many games: placements, finals eligibility (0.8.1)
 
 - **Ratings don't depend on how many teams there are** — they come only

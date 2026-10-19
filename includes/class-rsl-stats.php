@@ -136,6 +136,7 @@ class RSL_Stats {
         $out = array('games' => array(), 'teams' => array(), 'dates' => $dates, 'leaders' => array());
 
         $before = $dates ? RSL_Ratings::compute($season, date('Y-m-d', strtotime($dates[0] . ' -1 day'))) : array();
+        $weeks_off = RSL_Requests::weeks_off($season);
         $wins_in_row = array();
         foreach ($dates as $date) {
             $after = RSL_Ratings::compute($season, $date);
@@ -227,16 +228,15 @@ class RSL_Stats {
             }
             // A team the fixtures left out (odd numbers) isn't penalised: it
             // gets the turn-up points and the round counts towards finals.
-            // A forfeit loss is neither. (Weeks off a team asks for, when
-            // they exist, won't count.)
+            // A forfeit loss is neither, and nor is a week off the team asked for.
             foreach ($teams as $t => &$row) {
                 if (empty($divisions_tonight[$row['team']->division])) {
                     continue;
                 }
                 $bye = empty($had_game[$t]);
                 $joined = substr((string) $row['team']->created_at, 0, 10);
-                if ($bye && $joined !== '' && $joined > $date) {
-                    continue; // not in the league yet that night
+                if ($bye && (($joined !== '' && $joined > $date) || isset($weeks_off[$date][$t]))) {
+                    continue; // not in the league yet that night, or took the week off
                 }
                 if ($bye) {
                     $row['points'] += self::POINTS['played'];

@@ -126,6 +126,13 @@ class RSL_Admin_Fixtures {
                     self::notice('success', 'Result cleared.');
                 }
                 return $back;
+            case 'handle_request':
+                $req = RSL_Requests::get(isset($post['request_id']) ? intval($post['request_id']) : 0);
+                if ($req && intval($req->night_id) === intval($night->id)) {
+                    RSL_Requests::mark_handled($req->id, get_current_user_id());
+                    self::notice('success', 'Marked as handled — the team page now says it\'s sorted.');
+                }
+                return $back;
         }
         self::notice('error', 'Unknown action.');
         return $back;
@@ -226,6 +233,29 @@ class RSL_Admin_Fixtures {
         <?php if ($night->type === 'bye'): ?>
             <p>No games — this night is a bye<?php echo $night->note !== '' ? ' (' . esc_html($night->note) . ')' : ''; ?>. Change that in Courts &amp; Nights.</p>
             <?php return; ?>
+        <?php endif; ?>
+
+        <?php
+        $off = RSL_Requests::for_night($night->id, 'off', array('active', 'handled'));
+        $double = RSL_Requests::for_night($night->id, 'double');
+        $cant = RSL_Requests::for_night($night->id, 'cant_make', array('active', 'handled'));
+        ?>
+        <?php if ($cant): ?>
+            <div class="notice notice-warning inline rsl-fx-cant"><p><strong>Can't make it:</strong></p><ul>
+                <?php foreach ($cant as $r): ?>
+                    <li><?php echo esc_html($r->team_name); ?> told us <?php echo esc_html(human_time_diff(strtotime($r->requested_at), current_time('timestamp'))); ?> ago —
+                        <?php if ($r->status === 'handled'): ?><em>handled</em>
+                        <?php else: ?>sort it out with their opponent (swap in a standby team, or give the opponent the night off), then
+                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="rsl-fx-inline-form"><?php echo self::fields('handle_request', $season, $night->id, array('request_id' => $r->id)); ?><button class="button button-small">Mark handled</button></form>
+                        <?php endif; ?></li>
+                <?php endforeach; ?>
+            </ul></div>
+        <?php endif; ?>
+        <?php if ($off || $double): ?>
+            <p class="rsl-fx-requests">
+                <?php if ($off): ?><strong>Week off:</strong> <?php echo esc_html(implode(', ', array_map(function ($r) { return $r->team_name; }, $off))); ?> (left out of the fixtures). <?php endif; ?>
+                <?php if ($double): ?><strong>Asked for two games:</strong> <?php echo esc_html(implode(', ', array_map(function ($r) { return $r->team_name; }, $double))); ?> (first in line for spare slots).<?php endif; ?>
+            </p>
         <?php endif; ?>
 
         <div class="rsl-fx-actions">
@@ -415,6 +445,9 @@ class RSL_Admin_Fixtures {
             .rsl-fx-result form { display: flex; gap: 4px; align-items: center; margin: 0; }
             .rsl-fx-result input[type=text] { width: 150px; }
             .rsl-fx-result .rsl-fx-inline { margin-top: 2px; }
+            .rsl-fx-cant ul { margin: 0 0 8px 18px; list-style: disc; }
+            .rsl-fx-inline-form { display: inline; }
+            .rsl-fx-requests { background: #fff; border-left: 4px solid #72aee6; padding: 8px 12px; max-width: 900px; }
             .rsl-fx-add { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
             .rsl-fx-help { margin-top: 24px; max-width: 900px; }
             .rsl-fx-help summary { cursor: pointer; font-weight: 600; }
