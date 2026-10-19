@@ -47,7 +47,13 @@ A **Social League** page is created automatically (`[rsl_my_league]`).
   link) or declines with a reason (also emailed). Captains can withdraw.
 - **Player path** — join with the captain's **invite link or code**
   (straight onto the team; registering through the link joins too), or
-  accept an **email invite** from a captain. Email invites need the
+  accept an **email invite** from a captain. A brand-new player who opens
+  the link logged out can create a club account first: the invite is
+  remembered (a 30-day cookie holding just the code, copied onto the new
+  account so it survives switching devices), they're brought back to the
+  league page after sign-up — never pulled away from account or profile
+  pages, so the profile-update step can finish — and offered "Register and
+  join". It's forgotten once they join, or if the captain makes a new link. Email invites need the
   player to accept; until then the captain sees only the email they typed.
 - **Captain tools** — roster with ✓ cleared / ✗ needs rego (never *why* —
   membership or rego is personal; admins see it), copy invite link, make a

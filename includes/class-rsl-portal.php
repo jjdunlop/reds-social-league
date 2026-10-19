@@ -23,9 +23,138 @@ class RSL_Portal {
     const PAGE_OPTION = 'rsl_portal_page_id';
     const FLASH_PREFIX = 'rsl_flash_';
 
+    // Remembering a captain's invite through sign-up: the code is kept in a
+    // cookie when the link is opened, copied onto the account when it's
+    // created (covers switching devices), and offered on the league page
+    // until they join. Only the invite code is stored.
+    const JOIN_COOKIE = 'rsl_join';
+    const JOIN_META = 'rsl_pending_join';
+    const SEND_META = 'rsl_send_to_portal';
+    const JOIN_DAYS = 30;
+
     public function __construct() {
         add_shortcode('rsl_my_league', array($this, 'render'));
+        add_action('template_redirect', array($this, 'remember_invite_from_link'), 5);
+        add_action('template_redirect', array($this, 'maybe_send_to_portal'), 6);
         add_action('template_redirect', array($this, 'maybe_handle_post'));
+        add_action('user_register', array(__CLASS__, 'carry_invite_to_new_account'));
+        add_action('wp_login', array(__CLASS__, 'flag_after_login'), 10, 2);
+    }
+
+    // ------------------------------------------------------------------
+    // Remembered invite
+    // ------------------------------------------------------------------
+
+    public static function clean_code($code) {
+        return strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string) $code));
+    }
+
+    private static function set_cookie($code, $days) {
+        if ($code === '') {
+            unset($_COOKIE[self::JOIN_COOKIE]);
+        } else {
+            $_COOKIE[self::JOIN_COOKIE] = $code;
+        }
+        if (!headers_sent()) {
+            setcookie(self::JOIN_COOKIE, $code, $days > 0 ? time() + $days * DAY_IN_SECONDS : time() - HOUR_IN_SECONDS, COOKIEPATH ?: '/', COOKIE_DOMAIN, is_ssl(), true);
+        }
+    }
+
+    /** Opening an invite link on the league page remembers its code. */
+    public function remember_invite_from_link() {
+        $page_id = intval(get_option(self::PAGE_OPTION));
+        if (!$page_id || !is_page($page_id) || empty($_GET['join'])) {
+            return;
+        }
+        $code = self::clean_code(wp_unslash($_GET['join']));
+        if ($code === '' || !RSL_Teams::get_by_code($code)) {
+            return;
+        }
+        self::set_cookie($code, self::JOIN_DAYS);
+        if (is_user_logged_in()) {
+            update_user_meta(get_current_user_id(), self::JOIN_META, $code);
+        }
+    }
+
+    /** A new account made in a browser holding an invite keeps the invite. */
+    public static function carry_invite_to_new_account($user_id) {
+        $code = isset($_COOKIE[self::JOIN_COOKIE]) ? self::clean_code(wp_unslash($_COOKIE[self::JOIN_COOKIE])) : '';
+        if ($code !== '' && RSL_Teams::get_by_code($code)) {
+            update_user_meta($user_id, self::JOIN_META, $code);
+            update_user_meta($user_id, self::SEND_META, 1);
+        }
+    }
+
+    /** Logging in with an invite waiting (and no team yet): bring them to the league page. */
+    public static function flag_after_login($login, $user) {
+        if ($user && self::remembered_code($user->ID) !== '' && !RSL_Teams::current_team_for_user($user->ID, RSL_Seasons::current())) {
+            update_user_meta($user->ID, self::SEND_META, 1);
+        }
+    }
+
+    /**
+     * The invite this person is part-way through using: from their account,
+     * else this browser's cookie. '' when none, or when the team's link has
+     * changed since (then it's forgotten).
+     */
+    public static function remembered_code($user_id = 0) {
+        $code = $user_id ? self::clean_code(get_user_meta($user_id, self::JOIN_META, true)) : '';
+        if ($code === '' && isset($_COOKIE[self::JOIN_COOKIE])) {
+            $code = self::clean_code(wp_unslash($_COOKIE[self::JOIN_COOKIE]));
+        }
+        if ($code !== '' && !RSL_Teams::get_by_code($code)) {
+            self::forget_invite($user_id);
+            return '';
+        }
+        return $code;
+    }
+
+    public static function forget_invite($user_id = 0) {
+        if ($user_id) {
+            delete_user_meta($user_id, self::JOIN_META);
+            delete_user_meta($user_id, self::SEND_META);
+        }
+        self::set_cookie('', 0);
+    }
+
+    /**
+     * Where to send this request instead, or '' to leave it be: someone
+     * flagged (new account / login with an invite waiting) goes to the
+     * league page — but never away from the club's account, profile, login
+     * or registration pages, so the profile-update step can finish first.
+     */
+    public static function portal_redirect_for_request($user_id, $on_portal, $on_account_page) {
+        if (!$user_id || !get_user_meta($user_id, self::SEND_META, true) || $on_portal || $on_account_page) {
+            return '';
+        }
+        if (self::remembered_code($user_id) === '' || RSL_Teams::current_team_for_user($user_id, RSL_Seasons::current())) {
+            delete_user_meta($user_id, self::SEND_META);
+            return '';
+        }
+        return self::url();
+    }
+
+    public function maybe_send_to_portal() {
+        if (!is_user_logged_in() || is_admin() || wp_doing_ajax() || (defined('REST_REQUEST') && REST_REQUEST) || $_SERVER['REQUEST_METHOD'] !== 'GET') {
+            return;
+        }
+        $page_id = intval(get_option(self::PAGE_OPTION));
+        if ($page_id && is_page($page_id)) {
+            return; // already here — the flag clears when the page actually renders
+        }
+        $on_account = false;
+        if (function_exists('um_is_core_page')) {
+            foreach (array('account', 'profile', 'user', 'login', 'register', 'password-reset', 'logout') as $core) {
+                if (um_is_core_page($core)) {
+                    $on_account = true;
+                }
+            }
+        }
+        $to = self::portal_redirect_for_request(get_current_user_id(), false, $on_account);
+        if ($to !== '') {
+            wp_safe_redirect($to);
+            exit;
+        }
     }
 
     public static function ensure_page() {
@@ -94,6 +223,9 @@ class RSL_Portal {
                 }
                 if ($code !== '') {
                     $team = RSL_Teams::join_by_code($user_id, $code);
+                    if (!is_wp_error($team)) {
+                        self::forget_invite($user_id);
+                    }
                     self::flash(is_wp_error($team) ? 'error' : 'success', is_wp_error($team)
                         ? 'You\'re registered. ' . $team->get_error_message()
                         : 'You\'re registered and on ' . $team->name . '.');
@@ -115,6 +247,9 @@ class RSL_Portal {
 
             case 'join':
                 $team = RSL_Teams::join_by_code($user_id, $code);
+                if (!is_wp_error($team)) {
+                    self::forget_invite($user_id);
+                }
                 self::flash(is_wp_error($team) ? 'error' : 'success', is_wp_error($team) ? $team->get_error_message() : 'You\'re on ' . $team->name . '.');
                 return $back;
 
@@ -195,9 +330,16 @@ class RSL_Portal {
     // ------------------------------------------------------------------
 
     public function render($atts = array()) {
-        $code = isset($_GET['join']) ? strtoupper(preg_replace('/[^A-Za-z0-9]/', '', wp_unslash($_GET['join']))) : '';
-        $invited_to = $code !== '' ? RSL_Teams::get_by_code($code) : null;
         $user_id = get_current_user_id();
+        $code = isset($_GET['join']) ? self::clean_code(wp_unslash($_GET['join'])) : '';
+        if ($code === '') {
+            // No link this time: offer the invite they opened before signing up.
+            $code = self::remembered_code($user_id);
+        }
+        $invited_to = $code !== '' ? RSL_Teams::get_by_code($code) : null;
+        if ($user_id) {
+            delete_user_meta($user_id, self::SEND_META); // they've arrived
+        }
         ob_start();
         echo '<div class="rsl rsl-portal">';
         if (!$user_id) {
@@ -229,7 +371,7 @@ class RSL_Portal {
         $register = function_exists('um_get_core_page') ? um_get_core_page('register') : wp_registration_url();
         ?>
         <?php if ($invited_to): ?>
-            <div class="rsl-card rsl-card-accent"><p><strong>You've been invited to join <?php echo esc_html($invited_to->name); ?>.</strong> Log in (or create an account), then register for the league to join.</p></div>
+            <div class="rsl-card rsl-card-accent"><p><strong>You've been invited to join <?php echo esc_html($invited_to->name); ?>.</strong> Log in, or create a club account — we'll remember this invite and bring you back here to join.</p></div>
         <?php endif; ?>
         <h2>Reds Social League</h2>
         <p>Log in to register for the league, join a team or apply to captain one.</p>
