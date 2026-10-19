@@ -98,22 +98,29 @@ class RSL_Admin {
                     return $team_back;
                 }
                 $role = isset($post['role']) ? sanitize_key($post['role']) : 'player';
-                $result = RSL_Teams::add_member($team_id, $user->ID, $role);
+                // Admins can go past the roster maximum.
+                $result = RSL_Teams::add_member($team_id, $user->ID, $role, false, array('admin' => true, 'how' => 'admin'));
                 self::notice(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : $user->display_name . ' added to the team.');
                 return $team_back;
 
             case 'approve':
-                $result = RSL_Teams::approve($team_id);
-                self::notice(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : $result->name . ' approved — the captain has been emailed their invite link.');
-                return $back;
-
             case 'decline':
-                $result = RSL_Teams::decline($team_id, isset($post['note']) ? wp_unslash($post['note']) : '');
-                self::notice(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : $result->name . ' declined — the captain has been emailed.');
+                $mail_flag = 'rsl_mail_failed_' . get_current_user_id();
+                delete_transient($mail_flag);
+                $result = $do === 'approve' ? RSL_Teams::approve($team_id) : RSL_Teams::decline($team_id, isset($post['note']) ? wp_unslash($post['note']) : '');
+                $unsent = get_transient($mail_flag);
+                delete_transient($mail_flag);
+                if (is_wp_error($result)) {
+                    self::notice('error', $result->get_error_message());
+                } elseif ($unsent !== false) {
+                    self::notice('error', $result->name . ($do === 'approve' ? ' approved' : ' declined') . ', but the email to the captain couldn\'t be sent — ' . ($do === 'approve' ? 'send them the invite link yourself.' : 'let them know yourself.'));
+                } else {
+                    self::notice('success', $result->name . ($do === 'approve' ? ' approved — the captain has been emailed their invite link.' : ' declined — the captain has been emailed.'));
+                }
                 return $back;
 
             case 'save_rego_product':
-                update_option(RSL_Rego::PRODUCT_OPTION, isset($post['product_id']) ? intval($post['product_id']) : 0, false);
+                update_option(RSL_Rego::PRODUCT_OPTION, isset($post['product_id']) ? intval($post['product_id']) : 0, true);
                 self::notice('success', 'Rego product saved.');
                 return admin_url('admin.php?page=' . self::REG_PAGE);
 
@@ -132,6 +139,11 @@ class RSL_Admin {
                     RSL_Rego::grant($user->ID, array('start' => $start, 'source' => 'manual', 'note' => isset($post['note']) ? sanitize_text_field(wp_unslash($post['note'])) : ''));
                     self::notice('success', '12-month rego added for ' . $user->display_name . '.');
                 }
+                return admin_url('admin.php?page=' . self::REG_PAGE);
+
+            case 'remove_rego':
+                $result = RSL_Rego::revoke(isset($post['grant_id']) ? intval($post['grant_id']) : 0, 'Removed by the league');
+                self::notice(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : 'Rego removed — it no longer covers them from today.');
                 return admin_url('admin.php?page=' . self::REG_PAGE);
 
             case 'remove_member':
@@ -340,7 +352,8 @@ class RSL_Admin {
                             <td><?php echo esc_html($m->display_name); ?></td>
                             <td><?php echo esc_html($m->user_email); ?></td>
                             <td><?php echo esc_html(RSL_Teams::ROLES[$m->role]); ?></td>
-                            <td style="color: <?php echo $clear['cleared'] ? '#1e6b2a' : '#b32d2e'; ?>;"><?php echo ($clear['cleared'] ? '&#10003; ' : '&#10007; ') . esc_html(RSL_Rego::describe($clear)); ?></td>
+                            <?php $unknown = !$clear['cleared'] && !empty($clear['unknown']); // memberships can't be checked right now ?>
+                            <td style="color: <?php echo $clear['cleared'] ? '#1e6b2a' : ($unknown ? '#646970' : '#b32d2e'); ?>;"><?php echo ($clear['cleared'] ? '&#10003; ' : ($unknown ? '? ' : '&#10007; ')) . esc_html(RSL_Rego::describe($clear)); ?></td>
                             <td><?php echo esc_html(date('j M Y', strtotime($m->joined_at))); ?></td>
                             <td style="white-space: nowrap;">
                                 <?php if ($m->role !== 'captain'): ?>
@@ -390,9 +403,12 @@ class RSL_Admin {
         echo '<div class="wrap"><h1>Social League — Registration</h1>' . self::take_notice();
         ?>
         <p><strong><?php echo intval(RSL_Players::count()); ?></strong> players registered &middot; <strong><?php echo intval(RSL_Rego::count_current()); ?></strong> with a current social rego. Full and life club members are covered without a rego.</p>
+        <?php if (!RSL_Rego::membership_source_available()): ?>
+            <div class="notice notice-warning inline"><p><strong>Club memberships can't be checked</strong> — the MURVC Club Manager (or its membership check) isn't active. Players without a rego are shown as "can't check" rather than asked to pay, and nobody counts as covered by membership until it's back.</p></div>
+        <?php endif; ?>
 
         <h2>Rego product</h2>
-        <p class="description">The WooCommerce product players buy for the <?php echo esc_html(RSL_Rego::PRICE_LABEL); ?> social rego. Each paid order gives the buyer 12 months from the payment date (renewing early starts when the current rego ends). Use a simple product with no extra required options, so the league page can send players straight to checkout.</p>
+        <p class="description">The WooCommerce product players buy for the <?php echo esc_html(RSL_Rego::price_label()); ?> social rego. Each paid order gives the buyer 12 months from the payment date (renewing early starts when the current rego ends). Use a simple product with no extra required options, so the league page can send players straight to checkout. It's sold one at a time; a refunded or cancelled order ends its rego.</p>
         <form method="post" action="<?php echo esc_url($post_url); ?>" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
             <?php echo self::fields('save_rego_product', $season); ?>
             <select name="product_id" style="max-width: 420px;">
@@ -427,14 +443,23 @@ class RSL_Admin {
             <p class="description">None yet.</p>
         <?php else: ?>
             <table class="widefat striped" style="max-width: 1000px;">
-                <thead><tr><th>Player</th><th>Valid</th><th>How</th><th>Note</th></tr></thead>
+                <thead><tr><th>Player</th><th>Valid</th><th>How</th><th>Note</th><th></th></tr></thead>
                 <tbody>
                     <?php foreach ($recent as $r): ?>
                         <tr>
                             <td><?php echo esc_html($r->display_name ?: 'Deleted account'); ?><br><span class="description"><?php echo esc_html($r->user_email); ?></span></td>
-                            <td><?php echo esc_html(date('j M Y', strtotime($r->start_date)) . ' – ' . date('j M Y', strtotime($r->end_date))); ?></td>
+                            <td><?php echo RSL_Rego::is_removed($r) ? '<em>Removed</em>' : esc_html(date('j M Y', strtotime($r->start_date)) . ' – ' . date('j M Y', strtotime($r->end_date))); ?></td>
                             <td><?php echo $r->source === 'purchase' ? 'Order #' . intval($r->order_id) : 'Added by hand'; ?></td>
                             <td><?php echo esc_html($r->note); ?></td>
+                            <td>
+                                <?php if ($r->end_date >= current_time('Y-m-d') && !RSL_Rego::is_removed($r)): ?>
+                                    <form method="post" action="<?php echo esc_url($post_url); ?>" style="display: inline;" onsubmit="return confirm('Remove this rego? It stops covering <?php echo esc_js($r->display_name); ?> from today.');">
+                                        <?php echo self::fields('remove_rego', $season); ?>
+                                        <input type="hidden" name="grant_id" value="<?php echo intval($r->id); ?>">
+                                        <button type="submit" class="button button-small button-link-delete">Remove</button>
+                                    </form>
+                                <?php endif; ?>
+                            </td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>

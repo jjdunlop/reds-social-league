@@ -6,8 +6,8 @@
  *   wp eval-file dev/tests/test-requests.php
  */
 
-if (!defined('WP_CLI') || !WP_CLI) {
-    exit("Run with wp eval-file.\n");
+if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production' && !getenv('RSL_DEV'))) {
+    exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
 global $wpdb;
@@ -154,6 +154,7 @@ foreach (RSL_Courts::nights($season) as $n) {
     $wpdb->delete(RSL_Database::table('night_venues'), array('night_id' => $n->id));
 }
 $wpdb->delete(RSL_Database::table('nights'), array('season' => $season));
+delete_transient(RSL_Stats::CACHE_PREFIX . $season); // RSL_Stats::season() saved a copy above
 $settings = get_option(RSL_Courts::SETTINGS_OPTION, array());
 unset($settings[$season]);
 update_option(RSL_Courts::SETTINGS_OPTION, $settings, false);

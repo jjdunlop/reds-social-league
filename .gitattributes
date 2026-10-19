@@ -1,0 +1,5 @@
+# Release downloads (what Git Updater installs on the site) leave out the
+# development scripts and tests — they make and delete pretend data.
+/dev export-ignore
+/.gitattributes export-ignore
+/.gitignore export-ignore

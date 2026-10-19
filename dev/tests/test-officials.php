@@ -1,13 +1,15 @@
 <?php
 /**
- * Referees and court supervisors: roles, claiming jobs (with clash checks),
- * dropping them, scoring, pay, and the Ref Jobs / admin pages.
+ * Referees and court supervisors: roles, claiming jobs (with clash checks,
+ * nothing already finished), dropping them, scoring (locked once the league
+ * enters a result), removing officials, pay and its CSV, and the Ref Jobs /
+ * admin pages.
  *
  *   wp eval-file dev/tests/test-officials.php
  */
 
-if (!defined('WP_CLI') || !WP_CLI) {
-    exit("Run with wp eval-file.\n");
+if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production' && !getenv('RSL_DEV'))) {
+    exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
 global $wpdb;
@@ -100,6 +102,7 @@ $js = RSL_Officials::claim_supervisor($next->id, $hall->id, $sup);
 $check('a supervisor stays at their venue', !is_wp_error($js) && is_wp_error($e = RSL_Officials::claim_ref($g_uni6->id, $sup)) && strpos($e->get_error_message(), 'supervising') !== false);
 $check('only supervisors supervise', is_wp_error(RSL_Officials::claim_supervisor($next->id, $uni->id, $ref2)));
 $check('one supervisor per venue', is_wp_error(RSL_Officials::claim_supervisor($next->id, $hall->id, $sup)));
+$check('a supervisor already at one venue is told so at another', is_wp_error($e = RSL_Officials::claim_supervisor($next->id, $uni->id, $sup)) && strpos($e->get_error_message(), 'already supervising') !== false, is_wp_error($e) ? $e->get_error_message() : 'claimed');
 RSL_Officials::save_settings(array('ref_rate' => 25, 'supervisor_rate' => 30, 'release_hours' => 24, 'max_games' => 2));
 $e = RSL_Officials::check_ref($g_same->id, $ref);
 $check('a cap on games per night', is_wp_error($e) && strpos($e->get_error_message(), 'most games') !== false);
@@ -108,6 +111,18 @@ RSL_Officials::save_settings(array('ref_rate' => 25, 'supervisor_rate' => 30, 'r
 $mine = RSL_Officials::commitments($ref, $next->id);
 $kinds = array_map(function ($c) { return $c['kind'] . '@' . $c['start']; }, $mine);
 $check('your night in order: play 7, ref 8, ref 9', $kinds === array('play@19:00', 'ref@20:00', 'ref@21:00'), implode(',', $kinds));
+$q = $wpdb->num_queries;
+RSL_Officials::commitments($ref, $next->id);
+$check('your night takes the same few queries however many jobs you hold', $wpdb->num_queries - $q <= 4, ($wpdb->num_queries - $q) . ' queries');
+$gs = RSL_Fixtures::get($g_same->id);
+$nn = RSL_Courts::get_night($next->id);
+$tm = RSL_Teams::current_team_for_user($ref, $season);
+RSL_Officials::settings(); // option cached before counting
+$q = $wpdb->num_queries;
+$e = RSL_Officials::ref_eligibility($gs, $nn, $tm, $mine);
+$check('the per-game checks run without queries (the Ref Jobs page asks about every game)', $wpdb->num_queries === $q && is_wp_error($e) && strpos($e->get_error_message(), 'playing') !== false);
+$check('...and say the same as the full check', is_wp_error($e2 = RSL_Officials::check_ref($g_same->id, $ref)) && $e2->get_error_message() === $e->get_error_message());
+$check('a job records when it was claimed in site time', abs(strtotime(RSL_Officials::job($j8->id)->claimed_at) - current_time('timestamp')) < 300, RSL_Officials::job($j8->id)->claimed_at . ' vs ' . current_time('mysql'));
 $supn = RSL_Officials::commitments($sup, $next->id);
 $check('supervising shows as the whole night', count($supn) === 1 && $supn[0]['kind'] === 'supervisor' && $supn[0]['start'] === '');
 
@@ -143,6 +158,10 @@ $check('live: the score so far is stored', RSL_Fixtures::set_live($lg, array('se
 $check('live: an older update arriving late is ignored', RSL_Fixtures::set_live($lg, array('sets' => array(), 'current' => array(3, 2)), 900) === false
     && RSL_Fixtures::live(RSL_Fixtures::get($lg))['current'] === array(10, 8));
 RSL_Fixtures::set_live($lg, array('sets' => array(array(25, 20)), 'current' => array(12, 9)), 1001);
+$big = 3000000000; // past the old INT limit (late 2030, in tenths of a second since 2024)
+$check('live: sequence numbers past 2^31 still keep updates in order', RSL_Fixtures::set_live($lg, array('sets' => array(array(25, 20)), 'current' => array(12, 9)), $big) === true
+    && RSL_Fixtures::set_live($lg, array('sets' => array(), 'current' => array(1, 1)), $big - 1) === false
+    && RSL_Fixtures::live(RSL_Fixtures::get($lg))['current'] === array(12, 9));
 $score = new ReflectionMethod('RSL_Public_Fixtures', 'score_html');
 $score->setAccessible(true);
 $html = $score->invoke(null, RSL_Fixtures::get($lg), $today);
@@ -162,6 +181,8 @@ $_GET = array('night' => $next->id);
 $html = $page->render();
 $check('a ref sees their night and the open jobs', strpos($html, 'Your night') !== false && strpos($html, 'Jobs this night') !== false && strpos($html, 'Take it') !== false && strpos($html, 'Yours') !== false);
 $check('...with the reason a job isn\'t possible', strpos($html, 'your own team') !== false);
+wp_set_current_user($sup);
+$check('...and a supervisor at one venue sees that reason at the other (not refereeing)', strpos($sh = $page->render(), 'already supervising') !== false && strpos($sh, 'refereeing at another venue') === false);
 wp_set_current_user($ref2);
 $to = RSL_Ref_Page::process(array('rsl_nonce' => wp_create_nonce('rsl_ref'), 'rsl_ref' => 1, 'do' => 'claim_ref', 'game_id' => $g_9->id, 'night_id' => $next->id));
 $jn = RSL_Officials::jobs_for_night($next->id)['ref'];
@@ -180,6 +201,83 @@ $check('admin adds a supervisor by email', RSL_Officials::is_supervisor($ref2));
 $_GET = array('page' => 'rsl-fixtures', 'season' => $season, 'night' => $next->id);
 ob_start(); (new RSL_Admin_Fixtures())->render(); $fx = ob_get_clean();
 $check('Fixtures admin shows refs and supervisors', strpos($fx, '<th>Ref</th>') !== false && strpos($fx, 'Court supervisor:') !== false && strpos($fx, 'RSLO sup') !== false);
+
+// --- On the night: finished games, locked results, removing officials ---------------------------------
+// Tonight (the second night, moved to today): games that ended at midnight this morning, and one that
+// runs to midnight tonight (24:00) — so it's still on whenever the test runs.
+$wpdb->update(RSL_Database::table('nights'), array('night_date' => $today), array('id' => $nights[1]->id));
+$tonight = RSL_Courts::get_night($nights[1]->id);
+$at = function ($game, $start, $end) use ($wpdb) {
+    $wpdb->update(RSL_Database::table('games'), array('start_time' => $start, 'end_time' => $end), array('id' => $game->id));
+    return RSL_Fixtures::get($game->id);
+};
+$t_done = $at($G($tonight, $u0, $u1, $uc, '18:00'), '00:00:00', '00:00:00');
+$t_live = $at($G($tonight, $teams[2], $teams[3], $h1, '19:00'), '00:00:00', '24:00:00');
+$t_done2 = $at($G($tonight, $teams[0], $teams[1], $h2, '19:00'), '00:00:00', '00:00:00');
+RSL_Fixtures::publish_night($tonight->id);
+wp_set_current_user($sup);
+$_GET = array('night' => $tonight->id);
+$tp = $page->render();
+$check('the Ref Jobs page counts only games a ref can still take (not the two finished ones)', strpos($tp, ' 1 game still needs a ref') !== false, preg_match('/\d+ games? still needs? a ref/', $tp, $mm) ? $mm[0] : 'no count');
+$check('a ref can\'t take a game that has finished', is_wp_error($e = RSL_Officials::claim_ref($t_done->id, $ref2)) && strpos($e->get_error_message(), 'finished') !== false, is_wp_error($e) ? $e->get_error_message() : 'claimed');
+$check('...but can take one still being played', !is_wp_error($e = RSL_Officials::claim_ref($t_live->id, $ref2)), is_wp_error($e) ? $e->get_error_message() : '');
+$check('an admin can still assign a finished game', !is_wp_error(RSL_Officials::claim_ref($t_done->id, $nobody, $admin)));
+$check('a supervisor can\'t take a venue whose games are over', is_wp_error($e = RSL_Officials::claim_supervisor($tonight->id, $uni->id, $sup)) && strpos($e->get_error_message(), 'finished') !== false);
+$check('...but can take one with a game still on', !is_wp_error(RSL_Officials::claim_supervisor($tonight->id, $hall->id, $sup)));
+wp_set_current_user($sup);
+$_GET = array('night' => $tonight->id);
+$check('...and the Ref Jobs page shows a supervisor why not', strpos($page->render(), 'have finished') !== false);
+$check('...and an admin can still assign the finished venue', !is_wp_error(RSL_Officials::claim_supervisor($tonight->id, $uni->id, $nobody, $admin)));
+
+// Scoring: a ref corrects their own save, but not a result or forfeit the league entered.
+$check('the ref scores the game they hold', RSL_Officials::can_score($ref2, $t_live));
+RSL_Fixtures::record_result($t_live->id, '25-20, 25-18', $ref2);
+$check('...and can correct their own save', RSL_Officials::can_score($ref2, RSL_Fixtures::get($t_live->id)));
+RSL_Fixtures::record_result($t_live->id, '25-20, 20-25, 15-10', $admin);
+$why = RSL_Officials::why_cant_score($ref2, RSL_Fixtures::get($t_live->id));
+$check('a result the league entered is locked to the ref', is_wp_error($why) && $why->get_error_code() === 'rsl_locked' && RSL_Officials::can_score($admin, RSL_Fixtures::get($t_live->id)));
+wp_set_current_user($ref2);
+$check('...and the Ref Jobs page says so instead of showing the scoreboard', strpos($page->render(), 'rsl-sb-locked') !== false);
+$check('an admin-assigned ref scores the game', RSL_Officials::can_score($nobody, $t_done));
+RSL_Fixtures::record_forfeit($t_done->id, $u0->id, $admin);
+$check('...but not over a forfeit the league recorded', !RSL_Officials::can_score($nobody, RSL_Fixtures::get($t_done->id)));
+RSL_Fixtures::clear_result($t_live->id);
+RSL_Teams::add_member($teams[2]->id, $ref2);
+$check('a ref who has since joined a team in the game can\'t score it', !RSL_Officials::can_score($ref2, RSL_Fixtures::get($t_live->id)));
+RSL_Teams::remove_member($teams[2]->id, $ref2);
+$check('...and can again once off that team', RSL_Officials::can_score($ref2, RSL_Fixtures::get($t_live->id)));
+$check('...and gets the scoreboard on the Ref Jobs page', strpos($page->render(), 'rsl-sb-wrap') !== false);
+$sb = new ReflectionMethod('RSL_Ref_Page', 'scoreboard_script');
+$sb->setAccessible(true);
+$js = $sb->invoke(null);
+$check('the scoreboard keeps its undo history on the phone, so Undo works after a reload', strpos($js, 'hist: hist.slice(') !== false && strpos($js, 'saved.hist') !== false);
+
+// Removing a ref or supervisor releases their jobs still to come; jobs already done stay (and pay).
+$wpdb->insert(RSL_Database::table('jobs'), array('night_id' => $tonight->id, 'type' => 'ref', 'game_id' => $t_done2->id, 'venue_id' => $hall->id,
+    'user_id' => $ref2, 'rate' => 25, 'claimed_at' => current_time('mysql'))); // claimed while it was on
+$check('a ref scores a game they took while it was on', RSL_Officials::can_score($ref2, $t_done2));
+$coming = 1 + count(array_filter(RSL_Officials::jobs_for_night($next->id)['ref'], function ($j) use ($ref2) { return intval($j->user_id) === $ref2; }));
+wp_set_current_user($admin);
+RSL_Admin_Officials::process(array('rsl_nonce' => wp_create_nonce('rsl_officials_action'), 'do' => 'remove_ref', 'user_id' => $ref2));
+$notice = get_transient(RSL_Admin::NOTICE_PREFIX . $admin);
+$left = $wpdb->get_col($wpdb->prepare("SELECT game_id FROM " . RSL_Database::table('jobs') . " WHERE user_id = %d AND type = 'ref'", $ref2));
+$check('removing a ref releases their jobs still to come', !in_array((string) $t_live->id, $left, true) && !array_intersect($left, array_map('strval', array_keys(RSL_Officials::jobs_for_night($next->id)['ref']))), implode(',', $left));
+$check('...keeps the ones already done', in_array((string) $t_done2->id, $left, true) && in_array((string) $g_past->id, $left, true));
+$check('...and says how many', is_array($notice) && strpos($notice['message'], "$coming jobs still to come were released") !== false, is_array($notice) ? $notice['message'] : '');
+$why = RSL_Officials::why_cant_score($ref2, RSL_Fixtures::get($t_done2->id));
+$check('a removed ref can\'t score a game they took themselves', is_wp_error($why) && strpos($why->get_error_message(), 'no longer a referee') !== false);
+RSL_Admin_Officials::process(array('rsl_nonce' => wp_create_nonce('rsl_officials_action'), 'do' => 'remove_supervisor', 'user_id' => $sup));
+$sup_nights = $wpdb->get_col($wpdb->prepare("SELECT night_id FROM " . RSL_Database::table('jobs') . " WHERE user_id = %d AND type = 'supervisor'", $sup));
+$notice = get_transient(RSL_Admin::NOTICE_PREFIX . $admin);
+$check('removing a supervisor releases their nights to come and keeps nights done', $sup_nights === array((string) $past->id) && is_array($notice) && strpos($notice['message'], '2 jobs still to come were released') !== false,
+    implode(',', $sup_nights) . ' / ' . (is_array($notice) ? $notice['message'] : ''));
+
+// The pay report CSV never hands a spreadsheet a formula from a name.
+wp_update_user(array('ID' => $ref2, 'display_name' => '=SUM(1,2) RSLO ref2'));
+$csv = RSL_Admin_Officials::csv_rows($nights[0]->night_date, $today);
+$names = array_map(function ($r) { return $r[0]; }, $csv);
+$check('pay CSV: a name starting with = is written as text', in_array("'=SUM(1,2) RSLO ref2", $names, true), implode(' | ', $names));
+$check('pay CSV: header first, ordinary names untouched', $csv[0][0] === 'Name' && in_array('RSLO sup', $names, true));
 
 // --- Cleanup ------------------------------------------------------------------------------------------
 $_GET = array();
@@ -210,6 +308,8 @@ foreach ($users as $u) {
     delete_transient(RSL_Admin::NOTICE_PREFIX . $u);
     wp_delete_user($u);
 }
+// Removing a player from a team queues them a "no longer on" email; it goes with the test users.
+$wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('outbox') . " WHERE to_email LIKE %s", '%-' . $suffix . '@example.test'));
 if ($saved_settings === '__unset__') { delete_option(RSL_Officials::SETTINGS_OPTION); } else { update_option(RSL_Officials::SETTINGS_OPTION, $saved_settings, false); }
 if ($saved_current === '__unset__') { delete_option(RSL_Seasons::CURRENT_OPTION); } else { update_option(RSL_Seasons::CURRENT_OPTION, $saved_current); }
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

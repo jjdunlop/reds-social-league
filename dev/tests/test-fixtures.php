@@ -5,8 +5,8 @@
  *   wp eval-file dev/tests/test-fixtures.php
  */
 
-if (!defined('WP_CLI') || !WP_CLI) {
-    exit("Run with wp eval-file.\n");
+if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production' && !getenv('RSL_DEV'))) {
+    exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
 global $wpdb;
@@ -86,6 +86,13 @@ $check('result from the away side is flipped', $rb['outcome'] === 'loss' && $rb[
 $check('bad result refused, game unchanged', is_wp_error(RSL_Fixtures::record_result($g1->id, '25-25')) && RSL_Fixtures::get($g1->id)->status === 'played');
 $check('forfeit only by a team in the game', is_wp_error(RSL_Fixtures::record_forfeit($g2->id, $A->id)));
 
+// --- Only published nights count ---------------------------------------------------------------
+$check('unpublished games are hidden from a team\'s list', count(RSL_Fixtures::games_for_team($A->id)) === 0 && count(RSL_Fixtures::games_for_team($A->id, false)) === 2);
+RSL_Ratings::flush();
+$check('ratings and ladders ignore unpublished nights (a result is in, but not counted)', RSL_Ratings::compute($season)[$A->id]['games'] === 0
+    && array_sum(array_column(RSL_Ratings::ladder($season, 'ranked'), 'played')) === 0);
+foreach (array(0, 1, 2) as $i) { RSL_Fixtures::publish_night($nights[$i]->id); }
+
 // --- Ratings ---------------------------------------------------------------------------------
 // Aces beat everyone heavily; Diggers lose everything.
 RSL_Fixtures::record_result($g2->id, '25-22, 25-23'); // Cobras beat Diggers
@@ -148,6 +155,7 @@ $uni = RSL_Courts::create_venue("Test Uni $suffix", 'unranked');
 $cu = RSL_Courts::create_court($uni->id, 'Court U', '18:00', '19:00');
 $u = RSL_Fixtures::add_game($n1->id, array('home' => $U1->id, 'away' => $U2->id, 'court_id' => intval($cu->id), 'start' => '18:00'));
 RSL_Fixtures::record_result($u->id, '20-25, 18-25');
+RSL_Ratings::flush();
 $ul = RSL_Ratings::ladder($season, 'unranked');
 $check('unranked ladder: by wins, no ratings', $ul[0]['team']->name === $U2->name && $ul[0]['won'] === 1 && $ul[0]['rating'] === null);
 
@@ -155,9 +163,7 @@ $check('unranked ladder: by wins, no ratings', $ul[0]['team']->name === $U2->nam
 $labels = RSL_Fixtures::round_labels($season);
 $check('round labels', $labels[$nights[0]->id] === 'Round 1' && $labels[$nights[3]->id] === 'Round 4' && $labels[$nights[4]->id] === 'Bye' && $labels[$nights[5]->id] === 'Finals');
 
-// --- Publishing and public pages ------------------------------------------------------------
-$check('unpublished games are hidden from a team\'s list', count(RSL_Fixtures::games_for_team($A->id)) === 0 && count(RSL_Fixtures::games_for_team($A->id, false)) === 3);
-foreach (array(0, 1, 2) as $i) { RSL_Fixtures::publish_night($nights[$i]->id); }
+// --- Public pages -----------------------------------------------------------------------------
 $check('publishing shows them', count(RSL_Fixtures::games_for_team($A->id)) === 3);
 $next = RSL_Fixtures::add_game($nights[3]->id, array('home' => $A->id, 'away' => $B->id, 'court_id' => $cxid, 'start' => '19:00'));
 
@@ -185,17 +191,66 @@ $check('team page lists results and standing', strpos($section, 'W 2&ndash;1') !
 $check('tiers by rating', RSL_Stats::tier(1850)['key'] === 'diamond' && RSL_Stats::tier(1700)['key'] === 'platinum' && RSL_Stats::tier(1550)['key'] === 'gold'
     && RSL_Stats::tier(1400)['key'] === 'silver' && RSL_Stats::tier(1100)['key'] === 'bronze');
 $check('a provisional team is in placements (no tier yet)', RSL_Stats::tier(1700, true)['key'] === 'placement' && RSL_Stats::tier(null)['key'] === 'placement');
-$upset = RSL_Fixtures::add_game($n3->id, array('home' => $D->id, 'away' => $A->id, 'court_id' => $cxid, 'start' => '20:00'));
+// Round 3: Cobras (settled after three games) beat Aces — an upset. Diggers, still in
+// placements after two games, beat Aces too: no set chance, no upset, nothing that
+// would give away its hidden starting estimate.
+$upset = RSL_Fixtures::add_game($n3->id, array('home' => $C->id, 'away' => $A->id, 'court_id' => $cyid, 'start' => '19:00'));
 RSL_Fixtures::record_result($upset->id, '25-20, 25-22');
+$placed = RSL_Fixtures::add_game($n3->id, array('home' => $D->id, 'away' => $A->id, 'court_id' => $cxid, 'start' => '20:00'));
+RSL_Fixtures::record_result($placed->id, '25-20, 25-22');
+// Eagles (never fixtured) applied before round 1 but were approved the day after it, and
+// said they couldn't make round 2 (their game since removed): only round 3 is a bye for them.
+$wpdb->update(RSL_Database::table('teams'), array('created_at' => date('Y-m-d H:i:s', strtotime($n1->night_date . ' -7 days')),
+    'decided_at' => date('Y-m-d 10:00:00', strtotime($n1->night_date . ' +1 day'))), array('id' => $E->id));
+$wpdb->insert(RSL_Database::table('requests'), array('team_id' => $E->id, 'night_id' => $n2->id, 'type' => 'cant_make', 'status' => 'handled',
+    'requested_by' => $person, 'requested_at' => current_time('mysql')));
 RSL_Ratings::flush();
 RSL_Stats::flush();
 $stats = RSL_Stats::season($season);
-$check('the underdog winning is an upset', intval($stats['games'][intval($upset->id)]['upset_team']) === intval($D->id) && $stats['games'][intval($upset->id)]['p_home'] < RSL_Stats::UPSET_CHANCE);
-$check('...and earns Giant killer', isset($stats['teams'][intval($D->id)]['achievements']['giant_killer']));
+$ug = $stats['games'][intval($upset->id)];
+$check('the underdog winning between settled teams is an upset', intval($ug['upset_team']) === intval($C->id) && $ug['p_home'] !== null && $ug['p_home'] < RSL_Stats::UPSET_CHANCE);
+$gk = isset($stats['teams'][intval($C->id)]['achievements']['giant_killer']) ? $stats['teams'][intval($C->id)]['achievements']['giant_killer'] : null;
+$check('...and earns Giant killer, with no percentage (no odds shown)', $gk && strpos($gk['why'], '%') === false);
+$pg = $stats['games'][intval($placed->id)];
+$check('a team in placements beating the favourite: no set chance, no upset, no Giant killer, no rating change',
+    $pg['p_home'] === null && $pg['upset_team'] === null && !isset($stats['teams'][intval($D->id)]['achievements']['giant_killer']) && $pg['delta'][intval($D->id)] === null);
+$check('no set chance (so never Even match) while a team is in placements', RSL_Stats::chance_now($season, $E->id, $A->id) === null && RSL_Stats::chance_now($season, $C->id, $A->id) !== null);
+$se = $stats['teams'][intval($E->id)];
+$check('byes count only from approval, and not on a night the team said it couldn\'t make', $se['rounds'] === 1 && $se['points'] === RSL_Stats::POINTS['played']);
 $check('form is the latest results, newest last', end($stats['teams'][intval($D->id)]['form']) === 'W' && $stats['teams'][intval($D->id)]['streak'] === 'W1');
 $check('a normal win isn\'t an upset', $stats['games'][intval($g3->id)]['upset_team'] === null);
-$d = $stats['games'][intval($upset->id)]['delta'];
-$check('rating changes are whole numbers, or hidden during placements', ($d[intval($D->id)] === null || is_int($d[intval($D->id)])) && ($d[intval($A->id)] === null || is_int($d[intval($A->id)])));
+$d = $ug['delta'];
+$check('rating changes are whole numbers, or hidden during placements', ($d[intval($C->id)] === null || is_int($d[intval($C->id)])) && ($d[intval($A->id)] === null || is_int($d[intval($A->id)])));
+// Saved between page views: the next view loads it (one fingerprint query) instead of rebuilding.
+RSL_Ratings::flush();
+RSL_Stats::flush();
+$q = $wpdb->num_queries;
+$again = RSL_Stats::season($season);
+$check('the season story is saved between page views', $again == $stats && $wpdb->num_queries - $q <= 3, ($wpdb->num_queries - $q) . ' queries');
+// Two results swapped (entered against the wrong courts, then fixed) make a new key, though
+// same-length values like these cancel out in a CRC32; and the rebuild never reuses a
+// snapshot this request read before the fingerprint (as the ladder page once did).
+$key_of = function () use ($season) {
+    $t = get_transient(RSL_Stats::CACHE_PREFIX . $season);
+    return is_array($t) && isset($t['key']) ? $t['key'] : null;
+};
+$swap = function ($x, $y) use ($wpdb) {
+    $gx = RSL_Fixtures::get($x->id);
+    $gy = RSL_Fixtures::get($y->id);
+    foreach (array(array($gx, $gy), array($gy, $gx)) as $p) {
+        $wpdb->update(RSL_Database::table('games'), array('sets' => $p[1]->sets, 'home_sets' => $p[1]->home_sets, 'away_sets' => $p[1]->away_sets), array('id' => $p[0]->id));
+    }
+};
+$key_before = $key_of();
+RSL_Ratings::season_data($season); // an older snapshot already in this request
+$swap($g2, $g3); // 25-22,25-23 (close) <-> 25-10,25-12: both 2–0, same length
+RSL_Stats::flush();
+$swapped = RSL_Stats::season($season);
+$check('swapping two results makes a new key and rebuilds from fresh data', $key_before !== null && $key_of() !== $key_before
+    && $swapped['games'][intval($g3->id)]['close'] === true && $swapped['games'][intval($g2->id)]['close'] === false);
+$swap($g2, $g3); // back as they were
+RSL_Stats::flush();
+$check('...and swapping back rebuilds the original story under the original key', RSL_Stats::season($season) == $stats && $key_of() === $key_before);
 $_GET = array('week' => $n3->night_date);
 $html = $pages->render_fixtures();
 $check('fixtures page flags the upset and shows tiers', strpos($html, 'Upset!') !== false && strpos($html, 'rsl-tier') !== false);
@@ -204,6 +259,59 @@ $_GET = array('week' => $nights[3]->night_date);
 $html = $pages->render_fixtures();
 $check('a coming game shows hype, not odds', strpos($html, 'rsl-hype') !== false && strpos($html, 'rsl-odds') === false
     && (strpos($html, 'Rematch') !== false || strpos($html, 'First meeting') !== false));
+$next_game = RSL_Fixtures::get($next->id);
+$q = $wpdb->num_queries;
+$tags = RSL_Stats::hype($next_game);
+$check('hype runs no queries per game, and remembers the last meeting', $wpdb->num_queries === $q && in_array('Rematch — ' . $A->name . ' won 2–1 last time', $tags, true),
+    implode(' / ', $tags));
+
+// Game night: live scores are polled only while games are on, and stop once every result is in.
+$w = RSL_Public_Fixtures::live_window($nights[3], RSL_Fixtures::games_for_night($nights[3]->id));
+$starts = new DateTime($nights[3]->night_date . ' 18:45', wp_timezone());
+$check('live scores are polled from 15 minutes before the first game until 30 after the last ends', $w && $w[0] === $starts->getTimestamp() && $w[1] - $w[0] === 105 * MINUTE_IN_SECONDS);
+$check('...and not at all on a night with every result in', RSL_Public_Fixtures::live_window($n3, RSL_Fixtures::games_for_night($n3->id)) === null);
+$live = RSL_Public_Fixtures::live_scores($nights[3]);
+$check('the live feed says when every game has a result (so polling stops)', $live['all_done'] === false && isset($live['games'][intval($next->id)])
+    && RSL_Public_Fixtures::live_scores($n3)['all_done'] === true);
+
+// "Can't make it" on the team page: free before the cut-off, and after it the captain is told what it costs.
+$cut_off = function ($hours) { return function () use ($hours) { return array('game_fee' => 75, 'free_cancel_hours' => $hours, 'max_owing' => 75); }; };
+wp_set_current_user($person);
+$early = $cut_off(0);
+add_filter('pre_option_' . RSL_Payments::SETTINGS_OPTION, $early);
+$section = RSL_Public_Fixtures::team_section(RSL_Teams::get($A->id));
+remove_filter('pre_option_' . RSL_Payments::SETTINGS_OPTION, $early);
+$check('before the cut-off: "Free until" beside Can\'t make it', strpos($section, 'value="cant_make"') !== false && strpos($section, 'Free until ') !== false
+    && strpos($section, 'still to play') === false);
+$late = $cut_off(24 * 14);
+add_filter('pre_option_' . RSL_Payments::SETTINGS_OPTION, $late);
+$section = RSL_Public_Fixtures::team_section(RSL_Teams::get($A->id));
+$check('after it: the confirm names the charge (both teams\' fees)', strpos($section, 'value="cant_make"') !== false && strpos($section, 'for the game still to play: $150 instead of $75') !== false
+    && strpos($section, 'Free until ') === false);
+// Game night of a double-header with the first game in: sync_night() charges the played game
+// as normal and the late fee only on the other, so that's all the confirm counts.
+$second = RSL_Fixtures::add_game($nights[3]->id, array('home' => $C->id, 'away' => $A->id, 'court_id' => $cxid, 'start' => '20:00'));
+$was = $wpdb->get_row($wpdb->prepare("SELECT status, sets, home_sets, away_sets FROM " . RSL_Database::table('games') . " WHERE id = %d", $next->id), ARRAY_A);
+$wpdb->update(RSL_Database::table('games'), array('status' => 'played', 'sets' => '25-20,25-22', 'home_sets' => 2, 'away_sets' => 0), array('id' => $next->id));
+$section = RSL_Public_Fixtures::team_section(RSL_Teams::get($A->id));
+$check('double-header, first game played: the confirm counts only the game still to play', !is_wp_error($second)
+    && strpos($section, 'for the game still to play: $150 instead of $75') !== false);
+// The other team had already called that game off: only the first team out of a game pays
+// (sync_night), so pulling out of it now costs nothing and the confirm names no charge.
+$wpdb->insert(RSL_Database::table('requests'), array('team_id' => $C->id, 'night_id' => $nights[3]->id, 'type' => 'cant_make', 'status' => 'active',
+    'requested_by' => $person, 'requested_at' => current_time('mysql')));
+$their_req = $wpdb->insert_id;
+$section = RSL_Public_Fixtures::team_section(RSL_Teams::get($A->id));
+$check('...and with that game already called off by the other team, no charge is named (and no stale "Free until")', strpos($section, 'value="cant_make"') !== false
+    && strpos($section, 'still to play') === false && strpos($section, 'sort it out with the other team') !== false && strpos($section, 'Free until ') === false);
+remove_filter('pre_option_' . RSL_Payments::SETTINGS_OPTION, $late);
+$wpdb->delete(RSL_Database::table('requests'), array('id' => $their_req));
+$wpdb->update(RSL_Database::table('games'), $was, array('id' => $next->id));
+if (!is_wp_error($second)) { RSL_Fixtures::delete_game($second->id); }
+RSL_Ratings::flush();
+RSL_Stats::flush();
+wp_set_current_user(0);
+
 $_GET = array();
 $html = $pages->render_ladder();
 $check('ladder shows tiers, form, levels and season leaders', strpos($html, '<th>Tier</th>') !== false && strpos($html, 'rsl-form-w') !== false
@@ -236,7 +344,7 @@ $check('Season Points reward turning up, even when losing', $dp >= RSL_Stats::PO
 $check('a three-set game is a close one', $stats['games'][intval($g1->id)]['close'] === true);
 // Fair however many games: turn-up points and finals rounds are per night.
 $sa = $stats['teams'][intval($A->id)];
-$check('a double-header night counts as one round (Aces: 4 games over 3 nights)', $sa['rounds'] === 3);
+$check('a double-header night counts as one round (Aces: 5 games over 3 nights)', $sa['rounds'] === 3);
 $check('finals: needs ' . RSL_Stats::finals_min_rounds() . ' rounds — shows how many to go, and when it can\'t get there',
     $sa['finals']['need'] === RSL_Stats::finals_min_rounds() - 3 && !$sa['finals']['eligible'] && $sa['finals']['possible'] === false);
 $check('a forfeit loss isn\'t a round played', $stats['teams'][intval($D->id)]['rounds'] === 3); // D forfeited one game but played the other that night
@@ -255,15 +363,15 @@ $check('teams in placements aren\'t numbered and sit under the settled teams', $
 $html = $pages->render_ladder();
 $check('Ranked ladder has Finals, not Lvl; Unranked keeps Level', strpos($html, '>Finals</th>') !== false && strpos($html, '>Lvl</th>') === false && strpos($html, '>Level</th>') !== false);
 
-$profile = RSL_Public_Fixtures::team_profile(RSL_Teams::get($D->id));
+$profile = RSL_Public_Fixtures::team_profile(RSL_Teams::get($C->id));
 $check('team profile shows the level', strpos($profile, 'Season Points') !== false && strpos($profile, 'Lvl ') !== false);
 $check('team profile shows achievements and form', strpos($profile, 'Giant killer') !== false && strpos($profile, 'rsl-form') !== false);
 $check('profiles never show people', strpos($profile, "Hidden Person $suffix") === false && strpos(RSL_Public_Fixtures::team_profile(RSL_Teams::get($A->id)), "Hidden Person $suffix") === false);
 
-// A night removed from the season takes its games with it.
+// A night outside new season dates is kept while it has games (it's only removed once cleared).
 RSL_Courts::save_settings($season, array('start' => $nights[0]->night_date, 'end' => $nights[2]->night_date, 'weekday' => 0, 'minutes' => array('ranked' => 60, 'unranked' => 60)));
-RSL_Courts::generate_nights($season);
-$check('games on a removed night are removed', RSL_Fixtures::get($next->id) === null);
+$g = RSL_Courts::generate_nights($season);
+$check('a night with games outside the new dates is kept, with its games', RSL_Fixtures::get($next->id) !== null && isset($g['kept'][$nights[3]->night_date]));
 
 // --- Cleanup ------------------------------------------------------------------------------------
 $_GET = array();
@@ -281,7 +389,9 @@ foreach (array($hall, $uni) as $v) {
     $wpdb->delete(RSL_Database::table('courts'), array('venue_id' => $v->id));
     $wpdb->delete(RSL_Database::table('venues'), array('id' => $v->id));
 }
+delete_transient(RSL_Stats::CACHE_PREFIX . $season);
 foreach (array($A, $B, $C, $D, $E, $U1, $U2) as $t) {
+    $wpdb->delete(RSL_Database::table('requests'), array('team_id' => $t->id));
     $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $t->id));
     $wpdb->delete(RSL_Database::table('teams'), array('id' => $t->id));
 }

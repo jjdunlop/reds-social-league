@@ -77,8 +77,24 @@ class RSL_Admin_Courts {
                     return $season_url;
                 }
                 $g = RSL_Courts::generate_nights($season);
-                self::notice('success', 'Season saved: ' . count(RSL_Courts::nights($season)) . ' game nights'
-                    . ($g['added'] ? ', ' . $g['added'] . ' added' : '') . ($g['removed'] ? ', ' . $g['removed'] . ' removed (outside the new dates)' : '') . '.');
+                // Nights outside the new dates that still have fixtures, results, jobs,
+                // can't-make-its or charges are kept, never deleted — say which, and why.
+                $kept = array();
+                foreach ($g['kept'] as $date => $why) {
+                    $kept[] = date('D j M', strtotime($date)) . ' (' . implode(', ', $why) . ')';
+                }
+                // Week-off / two-games requests went with their removed nights: name the teams to tell.
+                $dropped = array();
+                foreach ($g['dropped'] as $d) {
+                    $team = RSL_Teams::get($d['team_id']);
+                    $dropped[] = ($team ? $team->name : 'A team') . ' (' . strtolower(RSL_Requests::TYPES[$d['type']]) . ', ' . date('D j M', strtotime($d['night_date'])) . ')';
+                }
+                self::notice($kept || $dropped ? 'warning' : 'success', 'Season saved: ' . count(RSL_Courts::nights($season)) . ' game nights'
+                    . ($g['added'] ? ', ' . $g['added'] . ' added' : '') . ($g['removed'] ? ', ' . $g['removed'] . ' removed (outside the new dates)' : '') . '.'
+                    . ($dropped ? ' Captains\' requests on removed nights went with them: ' . implode('; ', $dropped) . '. Let those teams know they can ask again for the new nights.' : '')
+                    . ($kept ? ' Kept ' . count($kept) . ' night' . (count($kept) === 1 ? '' : 's') . ' outside the new dates that still '
+                        . (count($kept) === 1 ? 'has' : 'have') . ' fixtures or records: ' . implode('; ', $kept)
+                        . '. To remove one, unpublish and clear it on the Fixtures page (withdraw any "can\'t make it" there too), then save the dates again.' : ''));
                 return $season_url;
             case 'set_type':
                 $r = RSL_Courts::set_night_type($night_id, sanitize_key($text('type')), $text('note'));
@@ -120,7 +136,7 @@ class RSL_Admin_Courts {
         $key = RSL_Admin::NOTICE_PREFIX . get_current_user_id();
         $n = get_transient($key);
         delete_transient($key);
-        return is_array($n) ? '<div class="notice notice-' . ($n['type'] === 'error' ? 'error' : 'success') . ' is-dismissible"><p>' . esc_html($n['message']) . '</p></div>' : '';
+        return is_array($n) ? '<div class="notice notice-' . (in_array($n['type'], array('error', 'warning'), true) ? $n['type'] : 'success') . ' is-dismissible"><p>' . esc_html($n['message']) . '</p></div>' : '';
     }
 
     private static function fields($do, $extra = array()) {
@@ -223,7 +239,7 @@ class RSL_Admin_Courts {
 
         <div class="rsl-box">
             <h2 style="margin-top: 0;">Season dates and game length</h2>
-            <form method="post" action="<?php echo esc_url($post); ?>" class="rsl-inline-row">
+            <form method="post" action="<?php echo esc_url($post); ?>" class="rsl-inline-row"<?php echo $nights ? ' onsubmit="return confirm(\'Save these dates? Empty nights outside the new dates are removed. Nights that already have fixtures, results or charges are kept until you clear them.\');"' : ''; ?>>
                 <?php echo self::fields('save_settings', array('season' => $season)); ?>
                 <label>First game night <input type="date" name="start" value="<?php echo esc_attr($s['start']); ?>" required></label>
                 <label>Last game night <input type="date" name="end" value="<?php echo esc_attr($s['end']); ?>" required></label>
@@ -233,7 +249,7 @@ class RSL_Admin_Courts {
                 <?php endforeach; ?>
                 <button type="submit" class="button button-primary"><?php echo $nights ? 'Save' : 'Save and create game nights'; ?></button>
             </form>
-            <p class="description">Saving lists every game night between the dates. Nights you've already set up are kept; any outside new dates are removed.</p>
+            <p class="description">Saving lists every game night between the dates. Nights you've already set up are kept; empty nights outside new dates are removed. A night outside them that already has fixtures, results, ref jobs, "can't make it" requests or charges is kept (marked below) until you clear it on the Fixtures page. Week-off and two-games requests on a removed night go with it.</p>
         </div>
 
         <?php if (empty($venues)): ?>
@@ -243,12 +259,22 @@ class RSL_Admin_Courts {
                 <thead><tr><th>Night</th><th>Type</th><?php foreach ($venues as $v): ?><th><?php echo esc_html($v->name); ?></th><?php endforeach; ?><th>Games</th></tr></thead>
                 <tbody>
                     <?php foreach ($nights as $night): ?>
-                        <?php $plan = RSL_Courts::night_plan($night->id); $totals = array(); ?>
+                        <?php
+                        $plan = RSL_Courts::night_plan($night->id);
+                        $totals = array();
+                        // Kept when the dates changed because it still had fixtures or records.
+                        $outside = $s['start'] !== '' && ($night->night_date < $s['start'] || $night->night_date > $s['end'] || intval(date('w', strtotime($night->night_date))) !== $s['weekday']);
+                        // The type saves as soon as it's picked, so a published night asks first.
+                        $on_change = RSL_Fixtures::is_published($night)
+                            ? "if (confirm('This night\\'s fixtures are published. Change its type anyway?')) { this.form.submit(); } else { this.value = '" . esc_js($night->type) . "'; }"
+                            : 'this.form.submit()';
+                        ?>
                         <tr class="rsl-night-<?php echo esc_attr($night->type); ?>">
                             <td><a href="<?php echo esc_url(self::url(array('season' => $season, 'night' => $night->id))); ?>"><strong><?php echo esc_html(date('D j M', strtotime($night->night_date))); ?></strong></a>
-                                <?php if ($night->note !== ''): ?><br><span class="description"><?php echo esc_html($night->note); ?></span><?php endif; ?></td>
+                                <?php if ($night->note !== ''): ?><br><span class="description"><?php echo esc_html($night->note); ?></span><?php endif; ?>
+                                <?php if ($outside): ?><br><span class="rsl-changed-mark" title="Kept because it still has fixtures or records. Clear it on the Fixtures page, then save the dates again to remove it.">outside the season dates</span><?php endif; ?></td>
                             <td><form method="post" action="<?php echo esc_url($post); ?>"><?php echo self::fields('set_type', array('season' => $season, 'night_id' => $night->id, 'note' => $night->note)); ?>
-                                <select name="type" onchange="this.form.submit()"><?php foreach (RSL_Courts::NIGHT_TYPES as $k => $l): ?><option value="<?php echo esc_attr($k); ?>" <?php selected($night->type, $k); ?>><?php echo esc_html($l); ?></option><?php endforeach; ?></select></form></td>
+                                <select name="type" onchange="<?php echo esc_attr($on_change); ?>"><?php foreach (RSL_Courts::NIGHT_TYPES as $k => $l): ?><option value="<?php echo esc_attr($k); ?>" <?php selected($night->type, $k); ?>><?php echo esc_html($l); ?></option><?php endforeach; ?></select></form></td>
                             <?php foreach ($plan['venues'] as $v): ?>
                                 <?php
                                 $open = array_filter($v['courts'], function ($c) { return $c['available']; });

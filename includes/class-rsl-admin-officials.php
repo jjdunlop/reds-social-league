@@ -62,13 +62,13 @@ class RSL_Admin_Officials {
                 $status = array('approve' => 'approved', 'decline' => 'declined', 'remove_ref' => '', 'add_ref' => 'approved')[$do];
                 $r = RSL_Officials::set_ref($user_id, $status, $me);
                 $name = get_userdata($user_id) ? get_userdata($user_id)->display_name : '';
-                self::result($r, array('approve' => "$name is now a referee.", 'decline' => "$name's offer to referee was declined.", 'remove_ref' => "$name is no longer a referee.", 'add_ref' => "$name is now a referee.")[$do]);
+                self::result($r, array('approve' => "$name is now a referee.", 'decline' => "$name's offer to referee was declined.", 'remove_ref' => "$name is no longer a referee.", 'add_ref' => "$name is now a referee.")[$do] . self::released($r));
                 return self::url();
             case 'add_supervisor':
             case 'remove_supervisor':
                 $r = RSL_Officials::set_supervisor($user_id, $do === 'add_supervisor', $me);
                 $name = get_userdata($user_id) ? get_userdata($user_id)->display_name : '';
-                self::result($r, $do === 'add_supervisor' ? "$name can now take court supervisor jobs." : "$name is no longer a court supervisor.");
+                self::result($r, ($do === 'add_supervisor' ? "$name can now take court supervisor jobs." : "$name is no longer a court supervisor.") . self::released($r));
                 return self::url();
             case 'save_settings':
                 RSL_Officials::save_settings(array(
@@ -86,6 +86,12 @@ class RSL_Admin_Officials {
 
     private static function result($r, $ok) {
         self::notice(is_wp_error($r) ? 'error' : 'success', is_wp_error($r) ? $r->get_error_message() : $ok);
+    }
+
+    /** " 2 jobs still to come were released…" after removing someone who had jobs booked, else ''. */
+    private static function released($r) {
+        $n = !is_wp_error($r) && isset($r->released) ? intval($r->released) : 0;
+        return $n ? ' ' . $n . ' job' . ($n === 1 ? '' : 's') . ' still to come ' . ($n === 1 ? 'was' : 'were') . ' released — open again on the Ref Jobs page.' : '';
     }
 
     private static function notice($type, $message) {
@@ -124,12 +130,28 @@ class RSL_Admin_Officials {
         header('Content-Type: text/csv; charset=utf-8');
         header('Content-Disposition: attachment; filename="social-league-officials-pay-' . $from . '-to-' . $to . '.csv"');
         $out = fopen('php://output', 'w');
-        fputcsv($out, array('Name', 'Email', 'Games refereed', 'Referee pay', 'Nights supervised', 'Supervisor pay', 'Total'));
-        foreach (RSL_Officials::pay_report($from, $to) as $row) {
-            fputcsv($out, array($row['name'], $row['email'], $row['refs'], number_format($row['ref_pay'], 2, '.', ''), $row['supervised'], number_format($row['supervisor_pay'], 2, '.', ''), number_format($row['total'], 2, '.', '')));
+        foreach (self::csv_rows($from, $to) as $row) {
+            fputcsv($out, $row);
         }
         fclose($out);
         exit;
+    }
+
+    /**
+     * The pay report as CSV rows, header first. Names and emails are typed
+     * by people, so a cell starting with = + - @ (or a tab / return) gets a
+     * leading ' — a spreadsheet then shows it as text instead of running it
+     * as a formula. Testable.
+     */
+    public static function csv_rows($from, $to) {
+        $safe = function ($v) {
+            return is_string($v) && $v !== '' && preg_match('/^[=+\-@\t\r]/', $v) ? "'" . $v : $v;
+        };
+        $rows = array(array('Name', 'Email', 'Games refereed', 'Referee pay', 'Nights supervised', 'Supervisor pay', 'Total'));
+        foreach (RSL_Officials::pay_report($from, $to) as $row) {
+            $rows[] = array_map($safe, array($row['name'], $row['email'], $row['refs'], number_format($row['ref_pay'], 2, '.', ''), $row['supervised'], number_format($row['supervisor_pay'], 2, '.', ''), number_format($row['total'], 2, '.', '')));
+        }
+        return $rows;
     }
 
     // ------------------------------------------------------------------
@@ -179,7 +201,7 @@ class RSL_Admin_Officials {
                         <?php $e = RSL_Officials::earnings($p->user_id, $season); ?>
                         <tr><td><?php echo esc_html($p->display_name); ?><br><small><?php echo esc_html($p->user_email); ?></small></td>
                             <td><?php echo intval($e['done']); ?> done · <?php echo intval($e['booked']); ?> booked</td>
-                            <td><form method="post" action="<?php echo esc_url($post); ?>" onsubmit="return confirm('Remove <?php echo esc_js($p->display_name); ?> as a referee? Jobs already taken stay.');"><?php echo self::fields('remove_ref', array('user_id' => $p->user_id)); ?><button class="button-link button-link-delete">Remove</button></form></td></tr>
+                            <td><form method="post" action="<?php echo esc_url($post); ?>" onsubmit="return confirm('Remove <?php echo esc_js($p->display_name); ?> as a referee? Their jobs still to come are released; jobs already done stay on the pay report.');"><?php echo self::fields('remove_ref', array('user_id' => $p->user_id)); ?><button class="button-link button-link-delete">Remove</button></form></td></tr>
                     <?php endforeach; ?>
                     <?php if (!$refs): ?><tr><td colspan="3" class="description">No referees yet.</td></tr><?php endif; ?>
                     </tbody></table>
@@ -190,7 +212,7 @@ class RSL_Admin_Officials {
                     <table class="widefat striped rsl-off-table"><thead><tr><th>Name</th><th></th></tr></thead><tbody>
                     <?php foreach ($sups as $p): ?>
                         <tr><td><?php echo esc_html($p->display_name); ?><br><small><?php echo esc_html($p->user_email); ?></small></td>
-                            <td><form method="post" action="<?php echo esc_url($post); ?>"><?php echo self::fields('remove_supervisor', array('user_id' => $p->user_id)); ?><button class="button-link button-link-delete">Remove</button></form></td></tr>
+                            <td><form method="post" action="<?php echo esc_url($post); ?>" onsubmit="return confirm('Remove <?php echo esc_js($p->display_name); ?> as a court supervisor? Their nights still to come are released; nights already done stay on the pay report.');"><?php echo self::fields('remove_supervisor', array('user_id' => $p->user_id)); ?><button class="button-link button-link-delete">Remove</button></form></td></tr>
                     <?php endforeach; ?>
                     <?php if (!$sups): ?><tr><td colspan="2" class="description">No court supervisors yet.</td></tr><?php endif; ?>
                     </tbody></table>

@@ -89,24 +89,50 @@ class RSL_Public_Fixtures {
                     ? 'Fixtures for this week come out on ' . esc_html(date_i18n('l j F', strtotime($night->night_date . ' -6 days'))) . '.'
                     : 'No fixtures were published for this night.'; ?></p>
             <?php else: ?>
-                <?php echo self::night_games($night, $mine, $today, RSL_Stats::season($season)); ?>
-                <?php if ($night->night_date === $today): ?>
+                <?php $games = RSL_Fixtures::games_for_night($night->id); ?>
+                <?php echo self::night_games($games, $mine, $today, RSL_Stats::season($season)); ?>
+                <?php $window = $night->night_date === $today ? self::live_window($night, $games) : null; ?>
+                <?php if ($window): ?>
                     <script>
                     (function () {
-                        // Game night: keep scores up to date without reloading.
+                        // Game night: keep scores up to date without reloading — only while
+                        // games are on, never once every game has a result, and less often
+                        // while nothing changes. Random delays spread everyone's requests out.
+                        // The page itself is the first look, so the first poll waits the usual
+                        // interval (most visits are a quick check of the score).
                         var url = <?php echo wp_json_encode(add_query_arg(array('action' => 'rsl_live_night', 'night' => intval($night->id)), admin_url('admin-ajax.php'))); ?>;
-                        function poll() {
-                            if (document.hidden) { return; }
-                            fetch(url, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (r) {
-                                if (!r.success) { return; }
-                                Object.keys(r.data.games).forEach(function (id) {
-                                    var el = document.querySelector('.rsl-score[data-game="' + id + '"]');
-                                    if (el && el.innerHTML !== r.data.games[id]) { el.innerHTML = r.data.games[id]; }
-                                });
-                            }).catch(function () {});
+                        var from = <?php echo intval($window[0]); ?> * 1000, to = <?php echo intval($window[1]); ?> * 1000;
+                        var last = {}, quiet = 0, timer = null, stopped = false, lastPoll = Date.now();
+                        function later(ms) {
+                            clearTimeout(timer);
+                            if (!stopped) { timer = setTimeout(poll, ms + Math.random() * 3000); }
                         }
-                        setInterval(poll, 15000);
-                        document.addEventListener('visibilitychange', poll);
+                        function poll() {
+                            var now = Date.now();
+                            if (now > to) { stopped = true; return; }
+                            if (now < from) { later(from - now); return; }
+                            if (document.hidden) { return; } // picked up again when the page is shown
+                            lastPoll = now;
+                            fetch(url, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (r) {
+                                if (!r.success) { stopped = true; return; }
+                                var changed = false;
+                                Object.keys(r.data.games).forEach(function (id) {
+                                    if (last[id] === r.data.games[id]) { return; }
+                                    last[id] = r.data.games[id];
+                                    changed = true;
+                                    // Results already in when the page loaded keep their Upset!/Close one labels.
+                                    var el = document.querySelector('.rsl-score[data-game="' + id + '"]:not([data-final])');
+                                    if (el) { el.innerHTML = r.data.games[id]; }
+                                });
+                                if (r.data.all_done) { stopped = true; return; }
+                                quiet = changed ? 0 : quiet + 1;
+                                later(quiet >= 3 ? 60000 : 20000);
+                            }).catch(function () { later(60000); });
+                        }
+                        // Back on the page: catch up now only if the last look is over 20s old
+                        // (otherwise the poll already waiting is soon enough).
+                        document.addEventListener('visibilitychange', function () { if (!document.hidden && Date.now() - lastPoll > 20000) { later(0); } });
+                        later(20000);
                     })();
                     </script>
                 <?php endif; ?>
@@ -142,9 +168,32 @@ class RSL_Public_Fixtures {
         return $past ?: $nights[0];
     }
 
+    /**
+     * When the Fixtures page polls for live scores on game night, as real
+     * Unix times: array(from, to) — 15 minutes before the first game until
+     * 30 minutes after the last ends. Null when there's nothing to wait for
+     * (no games, or every game has a result).
+     */
+    public static function live_window($night, $games) {
+        $first = $last = null;
+        $open = false;
+        foreach ($games as $g) {
+            $open = $open || $g->status === 'scheduled';
+            $first = $first === null || RSL_Courts::hm($g->start_time) < $first ? RSL_Courts::hm($g->start_time) : $first;
+            $last = $last === null || RSL_Courts::hm($g->end_time) > $last ? RSL_Courts::hm($g->end_time) : $last;
+        }
+        if (!$open) {
+            return null;
+        }
+        $at = function ($hm) use ($night) {
+            $time = new DateTime($night->night_date . ' ' . $hm, wp_timezone());
+            return $time->getTimestamp();
+        };
+        return array($at($first) - 15 * MINUTE_IN_SECONDS, $at($last) + 30 * MINUTE_IN_SECONDS);
+    }
+
     /** One night's games, venue by venue, grouped by start time. */
-    private static function night_games($night, $mine, $today, $stats) {
-        $games = RSL_Fixtures::games_for_night($night->id);
+    private static function night_games($games, $mine, $today, $stats) {
         if (empty($games)) {
             return '<p class="rsl-empty">No games this week.</p>';
         }
@@ -205,7 +254,7 @@ class RSL_Public_Fixtures {
                     <a class="rsl-side rsl-side-home<?php echo $home_won ? ' is-winner' : ''; ?>" href="<?php echo esc_url(RSL_Public::team_url($home)); ?>">
                         <span class="rsl-side-text"><span class="rsl-side-name"><?php echo esc_html($home->name); ?></span><?php echo $ranked ? self::side_meta($h, $stats, $info) : ''; ?></span><?php echo RSL_Public::badge($home, 'small'); ?>
                     </a>
-                    <div class="rsl-score" data-game="<?php echo intval($g->id); ?>"><?php echo self::score_html($g, $today, $upset, $close); ?></div>
+                    <div class="rsl-score" data-game="<?php echo intval($g->id); ?>"<?php echo $g->status !== 'scheduled' ? ' data-final' : ''; ?>><?php echo self::score_html($g, $today, $upset, $close); ?></div>
                     <a class="rsl-side rsl-side-away<?php echo $away_won ? ' is-winner' : ''; ?>" href="<?php echo esc_url(RSL_Public::team_url($away)); ?>">
                         <?php echo RSL_Public::badge($away, 'small'); ?><span class="rsl-side-text"><span class="rsl-side-name"><?php echo esc_html($away->name); ?></span><?php echo $ranked ? self::side_meta($a, $stats, $info) : ''; ?></span>
                     </a>
@@ -258,18 +307,24 @@ class RSL_Public_Fixtures {
         return '<strong class="rsl-vs">vs</strong>';
     }
 
-    /** Live scores for a night (public, read-only): game_id => score HTML. Polled by the Fixtures page on game night. */
+    /** Live scores for a night (public, read-only). Polled by the Fixtures page on game night. */
     public static function ajax_live_night() {
         $night = RSL_Courts::get_night(isset($_GET['night']) ? intval($_GET['night']) : 0);
         if (!$night || !RSL_Fixtures::is_published($night)) {
             wp_send_json_error(array(), 404);
         }
+        wp_send_json_success(self::live_scores($night));
+    }
+
+    /** array(games => game_id => score HTML, all_done => every game has a result, so polling can stop). */
+    public static function live_scores($night) {
         $today = current_time('Y-m-d');
-        $out = array();
+        $out = array('games' => array(), 'all_done' => true);
         foreach (RSL_Fixtures::games_for_night($night->id) as $g) {
-            $out[intval($g->id)] = self::score_html($g, $today);
+            $out['games'][intval($g->id)] = self::score_html($g, $today);
+            $out['all_done'] = $out['all_done'] && $g->status !== 'scheduled';
         }
-        wp_send_json_success(array('games' => $out));
+        return $out;
     }
 
     /** Under a Ranked team's name: tier, ladder place, and (for a result) its rating change that night. */
@@ -360,8 +415,10 @@ class RSL_Public_Fixtures {
     public function render_ladder($atts = array()) {
         $season = RSL_Seasons::current();
         $mine = self::viewer_team_id($season);
-        $after = self::latest_result_label($season);
+        // Stats first: on a cache miss it reads the season afresh, and the
+        // label and ladders below then share that same snapshot.
         $stats = RSL_Stats::season($season);
+        $after = self::latest_result_label($season);
         ob_start();
         ?>
         <div class="rsl">
@@ -461,11 +518,11 @@ class RSL_Public_Fixtures {
             : '<span class="rsl-move is-down" title="Down ' . intval(-$move) . '">&#9660;' . intval(-$move) . '</span>';
     }
 
-    /** "Round 4 (18 Oct)" — the latest night with a result in. */
+    /** "Round 4 (18 Oct)" — the latest published night with a result in. */
     private static function latest_result_label($season) {
         $latest = null;
-        foreach (RSL_Fixtures::games_for_season($season) as $g) {
-            if (($g->status === 'played' || $g->status === 'forfeit') && ($latest === null || $g->night_date > $latest->night_date)) {
+        foreach (RSL_Ratings::season_data($season)['games'] as $g) {
+            if (!empty($g->published_at) && ($g->status === 'played' || $g->status === 'forfeit') && ($latest === null || $g->night_date > $latest->night_date)) {
                 $latest = $g;
             }
         }
@@ -485,6 +542,7 @@ class RSL_Public_Fixtures {
         $games = RSL_Fixtures::games_for_team($team->id);
         $labels = RSL_Fixtures::round_labels($team->season);
         $today = current_time('Y-m-d');
+        $stats = RSL_Stats::season($team->season); // first, so the standing below reads the same snapshot
         $standing = '';
         foreach (RSL_Ratings::ladder($team->season, $team->division) as $r) {
             if (intval($r['team']->id) !== intval($team->id)) {
@@ -501,7 +559,6 @@ class RSL_Public_Fixtures {
                 $standing = self::ordinal($r['position']) . ' on the ladder · ' . $record;
             }
         }
-        $stats = RSL_Stats::season($team->season);
         ob_start();
         ?>
         <?php if ($standing): ?><p class="rsl-standing"><?php echo esc_html($standing); ?> &middot; <a href="<?php echo esc_url(self::ladder_url()); ?>">Ladder</a></p><?php endif; ?>
@@ -626,11 +683,44 @@ class RSL_Public_Fixtures {
                                 if ($i === count($mine) - 1 && $upcoming) {
                                     if ($req && $req->type === 'cant_make') {
                                         echo '<br><span class="rsl-req-chip is-warn">' . ($req->status === 'handled' ? 'Sorted by the league' : 'You\'ve told the league you can\'t make it') . '</span>';
-                                        if ($captain && $req->status === 'active') {
+                                        // Captains can take it back only until the night starts or a result is in
+                                        // (RSL_Requests::cancel enforces it; admins can always withdraw it).
+                                        $start = RSL_Officials::night_start($n);
+                                        $too_late = ($start && current_time('timestamp') >= $start)
+                                            || array_filter($mine, function ($x) { return $x->status !== 'scheduled'; });
+                                        if ($captain && $req->status === 'active' && (!$too_late || current_user_can('manage_options'))) {
                                             echo $button('cancel_request', 'We can make it after all', $n, array('request_id' => $req->id));
                                         }
                                     } elseif ($captain && $r['outcome'] === 'pending') {
-                                        echo $button('cant_make', 'Can\'t make it', $n, array(), 'Tell the league your team can\'t make it this week? They\'ll sort it out with the other team.');
+                                        // Free before the cut-off; after it the team pays both teams' fees — say so before it's sent.
+                                        $until = RSL_Payments::free_cancel_until($n);
+                                        $when = $until !== null ? date_i18n('D j M, g:ia', $until) : '';
+                                        // As RSL_Payments::sync_night() will charge it: a late fee (both teams' fees) on each
+                                        // game not yet played, in place of the usual fee. A game already played is charged as
+                                        // normal, and a game the other team has already called off costs nothing (only the
+                                        // first team out of a game pays; this team has no "can't make it" yet).
+                                        $left = 0;
+                                        if ($until !== null && current_time('timestamp') > $until) {
+                                            $called_off = RSL_Requests::for_night($n->id, 'cant_make', array('active', 'handled'));
+                                            foreach ($mine as $x) {
+                                                $other = intval($x->home_team_id) === intval($team->id) ? intval($x->away_team_id) : intval($x->home_team_id);
+                                                if ($x->status !== 'played' && !isset($called_off[$other])) {
+                                                    $left++;
+                                                }
+                                            }
+                                        }
+                                        if ($left > 0) {
+                                            $fee = RSL_Payments::settings()['game_fee'];
+                                            echo $button('cant_make', 'Can\'t make it', $n, array(), 'It\'s past the free cut-off (' . $when . '), so your team will be charged both teams\' game fees for '
+                                                . ($left === 1 ? 'the game' : 'the ' . $left . ' games') . ' still to play: '
+                                                . RSL_Payments::money(2 * $fee * $left) . ' instead of ' . RSL_Payments::money($fee * $left) . '. Tell the league your team can\'t make it?');
+                                            echo '<br><small>Past the free cut-off — costs both teams\' fees</small>';
+                                        } else {
+                                            echo $button('cant_make', 'Can\'t make it', $n, array(), 'Tell the league your team can\'t make it this week? They\'ll sort it out with the other team.');
+                                            if ($until !== null && current_time('timestamp') <= $until) {
+                                                echo '<br><small>Free until ' . esc_html($when) . '</small>';
+                                            }
+                                        }
                                     }
                                 }
                             ?></td>

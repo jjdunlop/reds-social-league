@@ -9,7 +9,9 @@
  *               slot (ahead of teams that only opted in for the season).
  *  - cant_make: "we can't make it" — after fixtures are out, before the
  *               night. Goes to the league admins to sort out (the
- *               automatic replacement offer comes later). Emails the admin.
+ *               automatic replacement offer comes later). Emails the league
+ *               contact. The captain can take it back until the night
+ *               starts; RSL_Payments::sync_night() works out the fees.
  * Captains (or admins) only. Data only — returns rows or WP_Error.
  */
 
@@ -45,6 +47,11 @@ class RSL_Requests {
         if (in_array($type, array('off', 'double'), true) && $published) {
             return new WP_Error('rsl_published', 'This week\'s fixtures are already out. If you can\'t make it, use "Can\'t make it" instead.');
         }
+        // A "can't make it" (and any late fee) stays until it's withdrawn properly — a week-off request can't replace it.
+        $already = self::for_night($night->id, 'cant_make', array('active', 'handled'));
+        if (isset($already[intval($team->id)])) {
+            return new WP_Error('rsl_request', 'You\'ve already told the league your team can\'t make it' . ($type === 'cant_make' ? '.' : ' — talk to the league.'));
+        }
         if ($type === 'cant_make') {
             if (!$published) {
                 return new WP_Error('rsl_request', 'Fixtures aren\'t out yet — request the week off instead (it\'s free).');
@@ -55,16 +62,13 @@ class RSL_Requests {
             if (!$playing) {
                 return new WP_Error('rsl_request', 'Your team doesn\'t have a game that night.');
             }
-            $already = self::for_night($night->id, 'cant_make', array('active', 'handled'));
-            if (isset($already[intval($team->id)])) {
-                return new WP_Error('rsl_request', 'You\'ve already told the league your team can\'t make it.');
-            }
         }
         // One live request per team per night: a new one replaces the old.
         $wpdb->query($wpdb->prepare("UPDATE " . RSL_Database::table('requests') . " SET status = 'cancelled' WHERE team_id = %d AND night_id = %d AND status = 'active'", $team->id, $night->id));
         $until = $type === 'cant_make' ? RSL_Payments::free_cancel_until($night) : null;
         $late = $until !== null && current_time('timestamp') > $until ? 1 : 0;
-        $wpdb->insert(RSL_Database::table('requests'), array('team_id' => $team->id, 'night_id' => $night->id, 'type' => $type, 'requested_by' => $user_id, 'late' => $late));
+        $wpdb->insert(RSL_Database::table('requests'), array('team_id' => $team->id, 'night_id' => $night->id, 'type' => $type, 'requested_by' => $user_id, 'late' => $late,
+            'requested_at' => current_time('mysql')));
         $req = self::get($wpdb->insert_id);
         if ($type === 'cant_make') {
             RSL_Payments::on_cant_make($req);
@@ -73,19 +77,36 @@ class RSL_Requests {
         return $req;
     }
 
-    /** Withdraw an active request (captain/admin). A can't-make-it can be withdrawn until handled. */
+    /**
+     * Withdraw an active request (captain/admin). A captain can withdraw a
+     * can't-make-it until it's handled, the night starts, or a result is in
+     * for their game; an admin can withdraw one at any time, handled or not
+     * (e.g. the game went ahead after all).
+     */
     public static function cancel($request_id, $user_id) {
         global $wpdb;
         $req = self::get($request_id);
-        if (!$req || $req->status !== 'active') {
+        $admin = user_can($user_id, 'manage_options');
+        if (!$req || !($req->status === 'active' || ($admin && $req->type === 'cant_make' && $req->status === 'handled'))) {
             return new WP_Error('rsl_request', 'That request is no longer open.');
         }
-        if (!RSL_Teams::is_captain($req->team_id, $user_id) && !user_can($user_id, 'manage_options')) {
+        if (!RSL_Teams::is_captain($req->team_id, $user_id) && !$admin) {
             return new WP_Error('rsl_captain', 'Only the team captain can do that.');
         }
         $night = RSL_Courts::get_night($req->night_id);
         if ($req->type !== 'cant_make' && $night && RSL_Fixtures::is_published($night)) {
             return new WP_Error('rsl_published', 'This week\'s fixtures are already out, so the request can\'t be changed now.');
+        }
+        if ($req->type === 'cant_make' && !$admin && $night) {
+            $start = RSL_Officials::night_start($night);
+            if ($night->night_date < current_time('Y-m-d') || ($start && current_time('timestamp') >= $start)) {
+                return new WP_Error('rsl_started', 'The night has started, so this can\'t be changed now — talk to the league.');
+            }
+            foreach (RSL_Fixtures::games_for_night($night->id) as $g) {
+                if ($g->status !== 'scheduled' && in_array(intval($req->team_id), array(intval($g->home_team_id), intval($g->away_team_id)), true)) {
+                    return new WP_Error('rsl_started', 'The league has already recorded your game\'s result — talk to the league.');
+                }
+            }
         }
         $wpdb->update(RSL_Database::table('requests'), array('status' => 'cancelled'), array('id' => $req->id));
         if ($req->type === 'cant_make') {
@@ -97,7 +118,8 @@ class RSL_Requests {
     /** The fixtures left this team out for owing money (counts like a week off: no bye points, no finals round). */
     public static function record_unpaid($team_id, $night_id) {
         global $wpdb;
-        $wpdb->insert(RSL_Database::table('requests'), array('team_id' => intval($team_id), 'night_id' => intval($night_id), 'type' => 'unpaid', 'status' => 'handled', 'requested_by' => 0));
+        $wpdb->insert(RSL_Database::table('requests'), array('team_id' => intval($team_id), 'night_id' => intval($night_id), 'type' => 'unpaid', 'status' => 'handled', 'requested_by' => 0,
+            'requested_at' => current_time('mysql')));
     }
 
     /** Forget a night's "left out for owing" records (before the fixtures are remade). */
@@ -149,15 +171,20 @@ class RSL_Requests {
         return $out;
     }
 
+    /** Email the league contact(s) (Team Balances → Rules; else the site admin) — time-critical, so sent straight away. */
     private static function notify_admins($req, $team, $night) {
-        $to = apply_filters('rsl_requests_email', get_option('admin_email'));
+        $to = apply_filters('rsl_requests_email', RSL_Payments::contact_emails());
         if (!$to) {
             return;
         }
         $labels = RSL_Fixtures::round_labels($team->season);
-        wp_mail($to, '[Social League] ' . $team->name . " can't make " . $labels[$night->id],
-            $team->name . " has told us they can't make their game(s) on " . date_i18n('l j F', strtotime($night->night_date)) . ' (' . $labels[$night->id] . ").\n\n"
+        $sent = wp_mail($to, '[Social League] ' . $team->name . " can't make " . $labels[$night->id],
+            $team->name . " has told us they can't make their game(s) on " . date_i18n('l j F', strtotime($night->night_date)) . ' (' . $labels[$night->id] . ")"
+            . ($req->late ? (RSL_Payments::late_fees_for_request($req->id) > 0 ? ', after the cut-off (they pay both teams\' fees)' : ', after the cut-off, but the other team had already pulled out (no late fee)') : '') . ".\n\n"
             . "Sort it out with the other team, then mark it handled on Social League > Fixtures:\n"
             . admin_url('admin.php?page=' . RSL_Admin_Fixtures::PAGE . '&season=' . $team->season . '&night=' . $night->id) . "\n");
+        if (!$sent) {
+            error_log('Reds Social League: the "can\'t make it" email for request #' . intval($req->id) . ' could not be sent.');
+        }
     }
 }

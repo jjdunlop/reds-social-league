@@ -36,7 +36,8 @@ class RSL_Public {
     /** A published page holding $shortcode, remembered in $option. Returns its id. */
     public static function ensure_page($option, $title, $slug, $shortcode) {
         $page_id = intval(get_option($option));
-        if ($page_id && get_post_status($page_id)) {
+        // A trashed or deleted page counts as missing (otherwise links point nowhere).
+        if ($page_id && in_array(get_post_status($page_id), array('publish', 'private', 'draft', 'pending', 'future'), true)) {
             return $page_id;
         }
         $page_id = wp_insert_post(array(
@@ -60,18 +61,24 @@ class RSL_Public {
         }
         $path = get_page_uri($page);
         add_rewrite_rule('^' . preg_quote($path, '#') . '/([^/]+)/?$', 'index.php?page_id=' . $page_id . '&' . self::QUERY_VAR . '=$matches[1]', 'top');
+        // The page was moved or renamed since the rules were saved: refresh them once.
+        if (get_option('rsl_teams_rule_path') !== $path) {
+            update_option('rsl_teams_rule_path', $path, true);
+            flush_rewrite_rules(false);
+        }
     }
 
-    /** Public link to a team's page. */
+    /** Public link to a team's page (with its season when it isn't the current one). */
     public static function team_url($team) {
         $page_id = intval(get_option(self::PAGE_OPTION));
         if (!$page_id) {
             return '';
         }
         $base = get_permalink($page_id);
-        return get_option('permalink_structure')
+        $url = get_option('permalink_structure')
             ? trailingslashit($base) . rawurlencode($team->slug) . '/'
             : add_query_arg(self::QUERY_VAR, $team->slug, $base);
+        return !empty($team->season) && $team->season !== RSL_Seasons::current() ? add_query_arg('season', $team->season, $url) : $url;
     }
 
     // ------------------------------------------------------------------
@@ -79,7 +86,8 @@ class RSL_Public {
     // ------------------------------------------------------------------
 
     public function render_teams($atts = array()) {
-        $season = RSL_Seasons::current();
+        $asked = isset($_GET['season']) ? sanitize_key(wp_unslash($_GET['season'])) : '';
+        $season = RSL_Seasons::is_valid($asked) ? $asked : RSL_Seasons::current();
         $slug = get_query_var(self::QUERY_VAR);
         if ($slug === '' && isset($_GET[self::QUERY_VAR])) {
             $slug = sanitize_title(wp_unslash($_GET[self::QUERY_VAR]));

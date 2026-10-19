@@ -9,11 +9,14 @@
  *   at a time (so a night can be ref, ref, play, ref) and supervisors
  *   claim a venue for the night. Checks: never your own team's game, never
  *   two places at once, time to travel between venues, a cap on games per
- *   night, and a supervisor stays at the venue they supervise.
+ *   night, a supervisor stays at the venue they supervise, and nothing
+ *   that has already finished (an admin assigns those).
  * - Pay is a flat rate per game refereed and per night supervised (admin
  *   settings), recorded on the job when claimed. The pay report lists
- *   jobs on nights that have happened; admins remove no-shows.
- * - The ref of a game enters its score (the scoreboard on the Ref jobs page).
+ *   jobs on nights that have happened; admins remove no-shows. Removing a
+ *   ref or supervisor releases their jobs still to come.
+ * - The ref of a game enters its score (the scoreboard on the Ref jobs
+ *   page); a result the league entered is locked to them.
  *
  * Data only — returns rows or WP_Error.
  */
@@ -103,19 +106,30 @@ class RSL_Officials {
         return self::get($user_id)->ref === 'applied' ? self::save($user_id, array('ref' => ''), $user_id) : self::get($user_id);
     }
 
-    /** Admin: approved, declined, or '' (not a ref). */
+    /**
+     * Admin: approved, declined, or '' (not a ref). Someone who stops being
+     * a ref gives up their ref jobs still to come (jobs already done stay
+     * on the pay report); the returned row's ->released says how many.
+     */
     public static function set_ref($user_id, $status, $by) {
         if (!in_array($status, array('approved', 'declined', ''), true) || !get_userdata($user_id)) {
             return new WP_Error('rsl_official', 'That person or status isn\'t valid.');
         }
-        return self::save($user_id, array('ref' => $status), $by);
+        $released = $status === 'approved' ? 0 : self::release_jobs_to_come($user_id, 'ref');
+        $o = self::save($user_id, array('ref' => $status), $by);
+        $o->released = $released;
+        return $o;
     }
 
+    /** Admin: add or remove a court supervisor. Removing gives up their nights still to come (->released, as set_ref). */
     public static function set_supervisor($user_id, $on, $by) {
         if (!get_userdata($user_id)) {
             return new WP_Error('rsl_official', 'No account found for that person.');
         }
-        return self::save($user_id, array('supervisor' => $on ? 1 : 0), $by);
+        $released = $on ? 0 : self::release_jobs_to_come($user_id, 'supervisor');
+        $o = self::save($user_id, array('supervisor' => $on ? 1 : 0), $by);
+        $o->released = $released;
+        return $o;
     }
 
     /** Officials with names: everyone in the table with a ref status or the supervisor role. */
@@ -157,37 +171,48 @@ class RSL_Officials {
         return self::insert_job(intval($game->night_id), 'ref', intval($game->id), intval($game->venue_id), $user_id, self::settings()['ref_rate'], $by_admin);
     }
 
-    /** Could this person referee this game? The game, or WP_Error saying why not (for showing on the page too). */
+    /** Could this person referee this game? The game, or WP_Error saying why not. */
     public static function check_ref($game_id, $user_id, $by_admin = 0) {
         $game = RSL_Fixtures::get($game_id);
         if (!$game) {
             return new WP_Error('rsl_job', 'That game no longer exists.');
         }
-        $night = RSL_Courts::get_night($game->night_id);
+        if (!$by_admin && !self::is_ref($user_id)) {
+            return new WP_Error('rsl_job', 'Only approved referees can take ref jobs.');
+        }
+        $e = self::ref_eligibility($game, RSL_Courts::get_night($game->night_id), RSL_Teams::current_team_for_user($user_id, $game->season),
+            self::commitments($user_id, $game->night_id), $by_admin);
+        return $e ?: $game;
+    }
+
+    /**
+     * The rules for refereeing a game, given everything already loaded (no
+     * queries, so the Ref Jobs page can ask about every game of a night):
+     * null if it's fine, else WP_Error saying why not. $team: the person's
+     * team this season (or null); $mine: their commitments() that night.
+     * A game in progress can still be taken (a ref arriving late covers
+     * it); once it has finished, only an admin can assign it.
+     */
+    public static function ref_eligibility($game, $night, $team, $mine, $by_admin = 0) {
         if (!$by_admin) {
-            if (!self::is_ref($user_id)) {
-                return new WP_Error('rsl_job', 'Only approved referees can take ref jobs.');
-            }
             if ($e = self::open_for_claims($night)) {
                 return $e;
             }
+            if ($game->status !== 'scheduled') {
+                return new WP_Error('rsl_job', 'That game already has a result.');
+            }
+            if (self::finished($game->night_date, $game->end_time)) {
+                return new WP_Error('rsl_job', 'That game has finished — ask the league to assign it.');
+            }
         }
-        if ($game->status !== 'scheduled' && !$by_admin) {
-            return new WP_Error('rsl_job', 'That game already has a result.');
-        }
-        $team = RSL_Teams::current_team_for_user($user_id, $game->season);
         if ($team && in_array(intval($team->id), array(intval($game->home_team_id), intval($game->away_team_id)), true)) {
             return new WP_Error('rsl_job', 'You can\'t referee your own team\'s game.');
         }
-        $mine = self::commitments($user_id, $night->id);
         $refs = count(array_filter($mine, function ($c) { return $c['kind'] === 'ref'; }));
         if ($refs >= self::settings()['max_games']) {
             return new WP_Error('rsl_job', 'That\'s the most games one person can referee in a night (' . self::settings()['max_games'] . ').');
         }
-        if ($e = self::clash($mine, RSL_Courts::hm($game->start_time), RSL_Courts::hm($game->end_time), intval($game->venue_id))) {
-            return $e;
-        }
-        return $game;
+        return self::clash($mine, RSL_Courts::hm($game->start_time), RSL_Courts::hm($game->end_time), intval($game->venue_id));
     }
 
     /** Claim supervising a venue for a night. */
@@ -196,34 +221,87 @@ class RSL_Officials {
         if (!$night) {
             return new WP_Error('rsl_job', 'That night no longer exists.');
         }
-        if (!$by_admin) {
-            if (!self::is_supervisor($user_id)) {
-                return new WP_Error('rsl_job', 'Only court supervisors can take this job.');
-            }
-            if ($e = self::open_for_claims($night)) {
-                return $e;
-            }
+        if (!$by_admin && !self::is_supervisor($user_id)) {
+            return new WP_Error('rsl_job', 'Only court supervisors can take this job.');
         }
         $hosts = array_filter(RSL_Fixtures::games_for_night($night->id), function ($g) use ($venue_id) { return intval($g->venue_id) === intval($venue_id); });
+        if ($e = self::supervisor_eligibility($night, intval($venue_id), $hosts, self::commitments($user_id, $night->id), $by_admin)) {
+            return $e;
+        }
+        return self::insert_job($night->id, 'supervisor', 0, intval($venue_id), $user_id, self::settings()['supervisor_rate'], $by_admin);
+    }
+
+    /**
+     * The rules for supervising a venue, given everything already loaded
+     * (no queries): null if it's fine, else WP_Error. $hosts: the night's
+     * games at that venue; $mine: the person's commitments() that night.
+     * Like ref jobs, it can't be claimed once the venue's last game is over.
+     */
+    public static function supervisor_eligibility($night, $venue_id, $hosts, $mine, $by_admin = 0) {
+        if (!$by_admin && ($e = self::open_for_claims($night))) {
+            return $e;
+        }
         if (!$hosts) {
             return new WP_Error('rsl_job', 'There are no games at that venue that night.');
         }
-        foreach (self::commitments($user_id, $night->id) as $c) {
+        if (!$by_admin && self::finished($night->night_date, max(array_map(function ($g) { return RSL_Courts::hm($g->end_time); }, $hosts)))) {
+            return new WP_Error('rsl_job', 'The games at that venue have finished — ask the league to assign it.');
+        }
+        foreach ($mine as $c) {
             if ($c['venue_id'] && $c['venue_id'] !== intval($venue_id)) {
+                if ($c['kind'] === 'supervisor') {
+                    return new WP_Error('rsl_job', 'You\'re already supervising ' . $c['venue'] . ' that night.');
+                }
                 return new WP_Error('rsl_job', 'You\'re ' . ($c['kind'] === 'play' ? 'playing' : 'refereeing') . ' at another venue that night — a supervisor stays at their venue.');
             }
         }
-        return self::insert_job($night->id, 'supervisor', 0, intval($venue_id), $user_id, self::settings()['supervisor_rate'], $by_admin);
+        return null;
     }
 
     private static function insert_job($night_id, $type, $game_id, $venue_id, $user_id, $rate, $by_admin) {
         global $wpdb;
         $ok = $wpdb->insert(RSL_Database::table('jobs'), array('night_id' => $night_id, 'type' => $type, 'game_id' => $game_id, 'venue_id' => $venue_id,
-            'user_id' => $user_id, 'rate' => $rate, 'assigned_by' => $by_admin ?: null));
+            'user_id' => $user_id, 'rate' => $rate, 'claimed_at' => current_time('mysql'), 'assigned_by' => $by_admin ?: null));
         if (!$ok) {
             return new WP_Error('rsl_taken', 'Someone else has just taken that job.');
         }
         return self::job($wpdb->insert_id);
+    }
+
+    /**
+     * Give up a person's jobs of one type that are still to come: a game
+     * not yet over, or a venue whose games aren't all over (e.g. when they
+     * stop being a ref). Jobs already done stay on the pay report. Returns
+     * how many were released.
+     */
+    private static function release_jobs_to_come($user_id, $type) {
+        global $wpdb;
+        $jobs = RSL_Database::table('jobs');
+        $rows = $wpdb->get_results($wpdb->prepare("SELECT j.id, n.night_date, MAX(g.end_time) AS last_end FROM $jobs j
+            JOIN " . RSL_Database::table('nights') . " n ON n.id = j.night_id
+            LEFT JOIN " . RSL_Database::table('games') . " g ON (j.type = 'ref' AND g.id = j.game_id) OR (j.type = 'supervisor' AND g.night_id = j.night_id AND g.venue_id = j.venue_id)
+            WHERE j.user_id = %d AND j.type = %s AND n.night_date >= %s GROUP BY j.id, n.night_date", $user_id, $type, current_time('Y-m-d')));
+        $released = 0;
+        foreach ($rows as $r) {
+            if (!$r->last_end || !self::finished($r->night_date, $r->last_end)) {
+                $released += (int) $wpdb->delete($jobs, array('id' => $r->id));
+            }
+        }
+        return $released;
+    }
+
+    /**
+     * Can a ref still take this game themselves: no result yet and not over
+     * (the same two rules as ref_eligibility())? The Ref Jobs page counts
+     * these, not finished games only an admin can assign.
+     */
+    public static function open_to_refs($game) {
+        return $game->status === 'scheduled' && !self::finished($game->night_date, $game->end_time);
+    }
+
+    /** Is a game (or the last game at a venue) that ends at $end on $night_date over? */
+    private static function finished($night_date, $end) {
+        return strtotime($night_date . ' ' . RSL_Courts::hm($end)) <= current_time('timestamp');
     }
 
     /** Drop a job. Refs can until release_hours before the night starts; admins any time. */
@@ -246,7 +324,7 @@ class RSL_Officials {
         return true;
     }
 
-    /** Claims are open once fixtures are published, until the night is over. */
+    /** Claims are open once fixtures are published, until the night is over (each job also closes once its games finish). */
     private static function open_for_claims($night) {
         if (!$night || !RSL_Fixtures::is_published($night)) {
             return new WP_Error('rsl_job', 'Jobs open once that week\'s fixtures are out.');
@@ -283,7 +361,11 @@ class RSL_Officials {
         }
         $out = array();
         $team = RSL_Teams::current_team_for_user($user_id, $night->season);
+        $games = array();   // the night's games by id — a ref job's game is one of them, so no query per job
+        $venues = array();  // venue_id => name, from the same rows
         foreach (RSL_Fixtures::games_for_night($night->id) as $g) {
+            $games[intval($g->id)] = $g;
+            $venues[intval($g->venue_id)] = $g->venue_name;
             if ($team && in_array(intval($team->id), array(intval($g->home_team_id), intval($g->away_team_id)), true)) {
                 $out[] = array('kind' => 'play', 'start' => RSL_Courts::hm($g->start_time), 'end' => RSL_Courts::hm($g->end_time), 'venue_id' => intval($g->venue_id),
                     'venue' => $g->venue_name, 'court' => $g->court_name, 'game' => $g, 'job' => null);
@@ -292,14 +374,19 @@ class RSL_Officials {
         $jobs = $wpdb->get_results($wpdb->prepare("SELECT * FROM " . RSL_Database::table('jobs') . " WHERE night_id = %d AND user_id = %d", $night->id, $user_id));
         foreach ($jobs as $j) {
             if ($j->type === 'ref') {
-                $g = RSL_Fixtures::get($j->game_id);
+                $g = isset($games[intval($j->game_id)]) ? $games[intval($j->game_id)] : null;
                 if ($g) {
                     $out[] = array('kind' => 'ref', 'start' => RSL_Courts::hm($g->start_time), 'end' => RSL_Courts::hm($g->end_time), 'venue_id' => intval($g->venue_id),
                         'venue' => $g->venue_name, 'court' => $g->court_name, 'game' => $g, 'job' => $j);
                 }
             } else {
-                $v = RSL_Courts::get_venue($j->venue_id);
-                $out[] = array('kind' => 'supervisor', 'start' => '', 'end' => '', 'venue_id' => intval($j->venue_id), 'venue' => $v ? $v->name : '', 'court' => '', 'game' => null, 'job' => $j);
+                if (isset($venues[intval($j->venue_id)])) {
+                    $venue = $venues[intval($j->venue_id)];
+                } else {
+                    $v = RSL_Courts::get_venue($j->venue_id);
+                    $venue = $v ? $v->name : '';
+                }
+                $out[] = array('kind' => 'supervisor', 'start' => '', 'end' => '', 'venue_id' => intval($j->venue_id), 'venue' => $venue, 'court' => '', 'game' => null, 'job' => $j);
             }
         }
         usort($out, function ($a, $b) { return array($a['start'], $a['kind']) <=> array($b['start'], $b['kind']); });
@@ -333,20 +420,49 @@ class RSL_Officials {
     // Scores, pay
     // ------------------------------------------------------------------
 
-    /** The ref of a game (or an admin) can enter its score on the night and for two days after. */
-    public static function can_score($user_id, $game) {
-        if (!$user_id || !$game) {
-            return false;
+    /** Can this person enter this game's score? See why_cant_score(). $jobs: jobs_for_night() if already loaded. */
+    public static function can_score($user_id, $game, $jobs = null) {
+        return !self::why_cant_score($user_id, $game, $jobs);
+    }
+
+    /**
+     * Why this person can't enter this game's score (WP_Error), or null if
+     * they can. An admin always can. The ref of a game can on the night and
+     * for two days after, while they're still a ref (or the league assigned
+     * them the game) and not on either team — and not over a forfeit or a
+     * result someone else (the league) entered: a ref corrects only their
+     * own save (code rsl_locked). $jobs: jobs_for_night() if already loaded.
+     */
+    public static function why_cant_score($user_id, $game, $jobs = null) {
+        if (!$game) {
+            return new WP_Error('rsl_score', 'That game no longer exists.');
+        }
+        if (!$user_id) {
+            return new WP_Error('rsl_score', 'Log in to enter scores.');
         }
         if (user_can($user_id, 'manage_options')) {
-            return true;
+            return null;
+        }
+        $jobs = $jobs !== null ? $jobs : self::jobs_for_night($game->night_id);
+        $job = isset($jobs['ref'][intval($game->id)]) ? $jobs['ref'][intval($game->id)] : null;
+        if (!$job || intval($job->user_id) !== intval($user_id)) {
+            return new WP_Error('rsl_score', 'Only this game\'s referee can enter its score.');
         }
         $today = current_time('Y-m-d');
         if ($game->night_date > $today || $game->night_date < date('Y-m-d', strtotime($today . ' -2 days'))) {
-            return false;
+            return new WP_Error('rsl_score', 'Scores can be entered on the night, or the two days after.');
         }
-        $jobs = self::jobs_for_night($game->night_id);
-        return isset($jobs['ref'][intval($game->id)]) && intval($jobs['ref'][intval($game->id)]->user_id) === intval($user_id);
+        if ($game->status === 'forfeit' || ($game->status === 'played' && intval($game->result_by) !== intval($user_id))) {
+            return new WP_Error('rsl_locked', 'The league has entered this result, so it\'s locked — contact the league if it\'s wrong.');
+        }
+        if (empty($job->assigned_by) && !self::is_ref($user_id)) {
+            return new WP_Error('rsl_score', 'You\'re no longer a referee — contact the league.');
+        }
+        $team = RSL_Teams::current_team_for_user($user_id, $game->season);
+        if ($team && in_array(intval($team->id), array(intval($game->home_team_id), intval($game->away_team_id)), true)) {
+            return new WP_Error('rsl_score', 'You can\'t score your own team\'s game.');
+        }
+        return null;
     }
 
     /**

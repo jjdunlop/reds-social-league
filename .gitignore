@@ -7,6 +7,7 @@
 /exports/
 /backups/
 /report-screenshots/
+/committee-proposal/
 
 # Local / editor clutter
 .DS_Store

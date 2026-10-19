@@ -11,12 +11,13 @@ if (!defined('ABSPATH')) {
 
 class RSL_Players {
 
+    /** Highest level played, in plain words, lowest first (the keys are stored — never rename them). */
     public static function levels() {
         return array(
-            'never' => 'Never played competitively',
-            'social' => 'Social / casual only',
-            'school' => 'School or uni volleyball',
-            'vvl' => 'VVL (any division)',
+            'never' => 'Never played',
+            'school' => 'Played at school or uni',
+            'social' => 'Social comp regular',
+            'vvl' => 'Played club or VVL',
             'state' => 'State League or higher',
         );
     }
@@ -41,7 +42,9 @@ class RSL_Players {
 
     /**
      * Register (or update) a player. $data: level, years, positions (array),
-     * looking (bool). Returns true or WP_Error.
+     * looking (bool — a new registration only: updating someone's details
+     * never touches the free agent list, which has its own form). Returns
+     * true or WP_Error.
      */
     public static function register($user_id, $data) {
         global $wpdb;
@@ -61,14 +64,20 @@ class RSL_Players {
             'level' => $level,
             'years' => $years,
             'positions' => implode(',', $positions),
-            'looking' => empty($data['looking']) ? 0 : 1,
         );
         if (self::get($user_id)) {
+            // A stale looking flag (last season's list) must never sign them
+            // up for the next one with default choices they didn't see.
             $row['updated_at'] = current_time('mysql');
             $wpdb->update(RSL_Database::table('players'), $row, array('user_id' => $user_id));
-        } else {
-            $row['user_id'] = $user_id;
-            $wpdb->insert(RSL_Database::table('players'), $row);
+            return true;
+        }
+        $row['looking'] = empty($data['looking']) ? 0 : 1;
+        $row['user_id'] = $user_id;
+        $row['registered_at'] = current_time('mysql');
+        $wpdb->insert(RSL_Database::table('players'), $row);
+        if ($row['looking']) {
+            self::set_looking($user_id, true);
         }
         return true;
     }
@@ -82,9 +91,21 @@ class RSL_Players {
         return $user_id && (bool) self::get($user_id);
     }
 
+    /**
+     * On or off the free agent list for the sign-up season (RSL_Free_Agents
+     * keeps the list; the looking column mirrors it for older screens).
+     */
     public static function set_looking($user_id, $looking) {
         global $wpdb;
-        return (bool) $wpdb->update(RSL_Database::table('players'), array('looking' => $looking ? 1 : 0, 'updated_at' => current_time('mysql')), array('user_id' => $user_id));
+        $season = RSL_Seasons::signup();
+        if ($looking) {
+            $row = RSL_Free_Agents::get($user_id, $season);
+            $result = RSL_Free_Agents::is_open($row) ? $row : RSL_Free_Agents::join($user_id, $season, array('browsable' => 1));
+        } else {
+            $result = RSL_Free_Agents::is_open(RSL_Free_Agents::get($user_id, $season)) ? RSL_Free_Agents::leave($user_id, $season) : true;
+        }
+        $wpdb->update(RSL_Database::table('players'), array('looking' => $looking && !is_wp_error($result) ? 1 : 0, 'updated_at' => current_time('mysql')), array('user_id' => $user_id));
+        return !is_wp_error($result);
     }
 
     public static function count() {

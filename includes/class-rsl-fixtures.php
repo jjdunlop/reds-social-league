@@ -89,6 +89,7 @@ class RSL_Fixtures {
             'home_team_id' => $home->id,
             'away_team_id' => $away->id,
             'status' => 'scheduled',
+            'created_at' => current_time('mysql'),
         ));
         $id = $wpdb->insert_id;
         if (self::is_published($night)) {
@@ -97,15 +98,37 @@ class RSL_Fixtures {
         return self::get($id);
     }
 
-    public static function delete_game($game_id) {
+    /**
+     * Remove a game (its ref job goes with it). The venue's court supervisor
+     * goes with its last game that night, so no one is paid to supervise empty
+     * courts (and the night isn't left "in use"). A remake passes
+     * $tidy_supervisors = false and calls drop_idle_supervisors() once the new
+     * games are in, so a supervisor whose venue still has games keeps the job.
+     */
+    public static function delete_game($game_id, $tidy_supervisors = true) {
         global $wpdb;
         $game = self::get($game_id);
         $wpdb->delete(RSL_Database::table('jobs'), array('type' => 'ref', 'game_id' => $game_id));
         $deleted = (bool) $wpdb->delete(RSL_Database::table('games'), array('id' => $game_id));
         if ($game) {
+            if ($tidy_supervisors) {
+                self::drop_idle_supervisors($game->night_id);
+            }
             RSL_Payments::sync_night($game->night_id); // its fees come off
         }
         return $deleted;
+    }
+
+    /** Court supervisors on a venue with no games left that night come off. */
+    public static function drop_idle_supervisors($night_id) {
+        global $wpdb;
+        $jobs = RSL_Database::table('jobs');
+        $games = RSL_Database::table('games');
+        $wpdb->query($wpdb->prepare(
+            "DELETE j FROM $jobs j WHERE j.night_id = %d AND j.type = 'supervisor'
+             AND NOT EXISTS (SELECT 1 FROM $games g WHERE g.night_id = j.night_id AND g.venue_id = j.venue_id)",
+            $night_id
+        ));
     }
 
     public static function get($game_id) {
@@ -157,7 +180,9 @@ class RSL_Fixtures {
 
     /**
      * Record set scores, home first: "25-20, 23-25, 15-12" or
-     * array(array(25, 20), ...). Replaces any earlier result.
+     * array(array(25, 20), ...). Replaces any earlier result. Like a forfeit
+     * or clearing a result, it re-syncs the night's fees (a game played
+     * after a "can't make it" is charged as normal).
      */
     public static function record_result($game_id, $sets, $user_id = 0) {
         global $wpdb;
@@ -184,6 +209,7 @@ class RSL_Fixtures {
             'result_at' => current_time('mysql'),
             'live' => null,
         ), array('id' => $game->id));
+        RSL_Payments::sync_night($game->night_id);
         return self::get($game->id);
     }
 
@@ -244,6 +270,7 @@ class RSL_Fixtures {
             'result_by' => $user_id ?: null,
             'result_at' => current_time('mysql'),
         ), array('id' => $game->id));
+        RSL_Payments::sync_night($game->night_id);
         return self::get($game->id);
     }
 
@@ -252,7 +279,11 @@ class RSL_Fixtures {
         global $wpdb;
         $wpdb->update(RSL_Database::table('games'), array('status' => 'scheduled', 'forfeit_team_id' => null, 'sets' => '',
             'home_sets' => 0, 'away_sets' => 0, 'result_by' => null, 'result_at' => null, 'live' => null, 'live_seq' => 0), array('id' => intval($game_id)));
-        return self::get($game_id);
+        $game = self::get($game_id);
+        if ($game) {
+            RSL_Payments::sync_night($game->night_id);
+        }
+        return $game;
     }
 
     /**
@@ -335,19 +366,76 @@ class RSL_Fixtures {
     // Publishing
     // ------------------------------------------------------------------
 
-    /** Release (or pull back) a night's fixtures. */
+    /** Release (or pull back) a night's fixtures. Already in that state: the publish time is kept. */
     public static function publish_night($night_id, $publish = true) {
         global $wpdb;
-        if (!RSL_Courts::get_night($night_id)) {
+        $night = RSL_Courts::get_night($night_id);
+        if (!$night) {
             return new WP_Error('rsl_night', 'That night no longer exists.');
         }
-        $wpdb->update(RSL_Database::table('nights'), array('published_at' => $publish ? current_time('mysql') : null), array('id' => intval($night_id)));
+        if ((bool) $publish !== self::is_published($night)) {
+            $wpdb->update(RSL_Database::table('nights'), array('published_at' => $publish ? current_time('mysql') : null), array('id' => intval($night_id)));
+        }
         RSL_Payments::sync_night($night_id); // game fees are charged when fixtures are published
         return RSL_Courts::get_night($night_id);
     }
 
+    /**
+     * Whether a night may be published (or unpublished) now: true, or
+     * WP_Error saying why not. Publishing needs games, and none for a team
+     * that asked for the week off (the draft was made before they asked —
+     * remake it). Unpublishing isn't for a night with results: it would
+     * refund the night's fees and hide results the ladder still counts. Nor
+     * for one that has started (its results may just not be in yet), unless
+     * $called_off: the admin says it didn't go ahead, so its fees come off.
+     */
+    public static function check_publish($night_id, $publish = true, $called_off = false) {
+        $night = RSL_Courts::get_night($night_id);
+        if (!$night) {
+            return new WP_Error('rsl_night', 'That night no longer exists.');
+        }
+        $games = self::games_for_night($night->id);
+        if (!$publish) {
+            foreach ($games as $g) {
+                if ($g->status !== 'scheduled') {
+                    return new WP_Error('rsl_results', 'This night has results in, so it can\'t be unpublished (that would refund its fees and hide its results). Edit or clear the results instead.');
+                }
+            }
+            if ($games && !$called_off && self::has_started($night)) {
+                return new WP_Error('rsl_played', 'This night has already been played — enter its results instead of unpublishing (that would take every team\'s fees for it off). If it was called off, use "Called off? Unpublish".');
+            }
+            return true;
+        }
+        if (!$games) {
+            return new WP_Error('rsl_publish', 'There are no games to publish yet.');
+        }
+        $off = RSL_Requests::for_night($night->id, 'off', array('active', 'handled'));
+        $still = array();
+        foreach ($games as $g) {
+            foreach (array(intval($g->home_team_id), intval($g->away_team_id)) as $t) {
+                if (isset($off[$t])) {
+                    $still[$t] = $off[$t]->team_name;
+                }
+            }
+        }
+        if ($still) {
+            return new WP_Error('rsl_week_off', implode(', ', $still) . (count($still) === 1 ? ' has' : ' have') . ' asked for the week off but still '
+                . (count($still) === 1 ? 'has a game' : 'have games') . ' in this draft — remake or adjust the fixtures before publishing.');
+        }
+        return true;
+    }
+
     public static function is_published($night) {
         return $night && !empty($night->published_at);
+    }
+
+    /** The night is past, or its first game has started. */
+    public static function has_started($night) {
+        if (!$night) {
+            return false;
+        }
+        $start = RSL_Officials::night_start($night);
+        return $night->night_date < current_time('Y-m-d') || ($start && current_time('timestamp') >= $start);
     }
 
     /**

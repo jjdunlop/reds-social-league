@@ -8,8 +8,8 @@
  * Uses a far-future season and throwaway @example.test users; cleans up.
  */
 
-if (!defined('WP_CLI') || !WP_CLI) {
-    exit("Run with wp eval-file.\n");
+if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production' && !getenv('RSL_DEV'))) {
+    exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
 global $wpdb;
@@ -117,6 +117,18 @@ $check('team page: members see the roster and captain', strpos($member_view, "RS
 $check('team page: admins see the roster', strpos($render($admin, $t1->slug), "RSL b $suffix") !== false);
 $check('unknown team handled', strpos($render(0, 'no-such-team-' . $suffix), "isn't playing this season") !== false);
 $check('team link uses the team slug', strpos(RSL_Public::team_url($t1), $t1->slug) !== false);
+// A trashed Social League page is made again, so emails never link to the
+// trash (a throwaway page stands in for the real one, which isn't touched).
+$saved_portal = get_option(RSL_Portal::PAGE_OPTION, '__unset__');
+$stand_in = wp_insert_post(array('post_title' => "RSL portal $suffix", 'post_type' => 'page', 'post_status' => 'publish', 'post_content' => '[rsl_my_league]'));
+update_option(RSL_Portal::PAGE_OPTION, $stand_in, false);
+$check('the Social League page that exists is kept', intval(RSL_Portal::ensure_page()) === intval($stand_in));
+wp_trash_post($stand_in);
+$remade = RSL_Portal::ensure_page();
+$check('a trashed Social League page is made again', $remade && !is_wp_error($remade) && intval($remade) !== intval($stand_in) && get_post_status($remade) === 'publish');
+wp_delete_post($stand_in, true);
+if ($remade && !is_wp_error($remade) && intval($remade) !== intval($stand_in)) { wp_delete_post($remade, true); }
+if ($saved_portal === '__unset__') { delete_option(RSL_Portal::PAGE_OPTION); } else { update_option(RSL_Portal::PAGE_OPTION, $saved_portal, false); }
 
 // --- Cleanup -----------------------------------------------------------------------------
 wp_set_current_user(0);
@@ -124,6 +136,8 @@ set_query_var(RSL_Public::QUERY_VAR, '');
 foreach (RSL_Teams::list_for_season($season) as $t) { $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $t->id)); }
 $wpdb->delete(RSL_Database::table('teams'), array('season' => $season));
 foreach ($users as $u) { $wpdb->delete(RSL_Database::table('team_members'), array('user_id' => $u)); wp_delete_user($u); }
+// Removing a player queues them a "no longer on" email; it goes with the test users.
+$wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('outbox') . " WHERE to_email LIKE %s", '%-' . $suffix . '@example.test'));
 delete_transient(RSL_Admin::NOTICE_PREFIX . $admin);
 if ($saved_current === '__unset__') { delete_option(RSL_Seasons::CURRENT_OPTION); } else { update_option(RSL_Seasons::CURRENT_OPTION, $saved_current); }
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

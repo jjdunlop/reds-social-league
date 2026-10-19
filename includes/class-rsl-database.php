@@ -12,8 +12,9 @@ if (!defined('ABSPATH')) {
 class RSL_Database {
 
     /** Bump when the schema changes; maybe_upgrade() re-runs install(). */
-    const SCHEMA_VERSION = '9';
+    const SCHEMA_VERSION = '10';
     const SCHEMA_OPTION = 'rsl_schema_version';
+    const UPGRADE_LOCK = 'rsl_upgrade_lock';
 
     public static function table($name) {
         global $wpdb;
@@ -31,7 +32,10 @@ class RSL_Database {
         // invite code is what the captain shares so players can join.
         // est_level: the captain's rough level at sign-up — admin-only, the
         // seed for first-week Ranked matchmaking (never public). pref_*: the
-        // captain's fixturing preferences.
+        // captain's fixturing preferences. spots_*: "looking for players" —
+        // how many, which positions, who's welcome (the captain's own words,
+        // shown to free agents) and a short note. formed_by: 'placement' for
+        // a team made from free agents.
         dbDelta("CREATE TABLE " . self::table('teams') . " (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             season varchar(20) NOT NULL,
@@ -51,6 +55,11 @@ class RSL_Database {
             pref_double tinyint(1) NOT NULL DEFAULT 0,
             pref_double_shape varchar(10) NOT NULL DEFAULT 'back',
             pref_standby tinyint(1) NOT NULL DEFAULT 0,
+            spots_open tinyint(3) unsigned NOT NULL DEFAULT 0,
+            spots_positions varchar(100) NOT NULL DEFAULT '',
+            spots_level varchar(20) NOT NULL DEFAULT '',
+            spots_note varchar(100) NOT NULL DEFAULT '',
+            formed_by varchar(20) NOT NULL DEFAULT '',
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY  (id),
             UNIQUE KEY season_slug (season, slug),
@@ -91,9 +100,14 @@ class RSL_Database {
             KEY end_date (end_date)
         ) $charset;");
 
-        // A captain's invitation to a registered player (by email). The
-        // player must accept before they're on the team — until then the
-        // captain sees only the email they typed.
+        // A captain's invitation to a registered player. The player must
+        // accept before they're on the team. source: 'email' (the captain
+        // typed their email — until they accept the captain sees only that)
+        // or 'pool' (picked from the free agent list — email is '', the
+        // captain sees their first name). A pool invite to someone in a
+        // friend group carries group_code and takes the group. expires_at:
+        // NULL = never (email invites). Status: pending, accepted, declined,
+        // cancelled, expired, or closed (they joined another team).
         dbDelta("CREATE TABLE " . self::table('invites') . " (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             team_id bigint(20) unsigned NOT NULL,
@@ -101,11 +115,94 @@ class RSL_Database {
             email varchar(255) NOT NULL,
             invited_by bigint(20) unsigned NOT NULL,
             status varchar(20) NOT NULL DEFAULT 'pending',
+            source varchar(10) NOT NULL DEFAULT 'email',
+            group_code varchar(8) NOT NULL DEFAULT '',
+            expires_at datetime DEFAULT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             responded_at datetime DEFAULT NULL,
             PRIMARY KEY  (id),
             KEY team_id (team_id),
-            KEY user_id (user_id)
+            KEY user_id (user_id),
+            KEY status_expires (status, expires_at)
+        ) $charset;");
+
+        // The free agent list: one row per person per season. status:
+        // looking, placed (on a team — team_id, placed_via, placed_at),
+        // unplaced (the placement run couldn't fit them; unplaced_reason) or
+        // withdrawn. division_pref: unranked / ranked / either — ranked and
+        // either are the player's consent to a Ranked team. away_dates: CSV
+        // of night dates (Y-m-d) they'll miss. group_code: a friend group
+        // (up to a few people placed together). under18, band_override and
+        // admin_note are admin-only. proposed_*: the admin's placement draft
+        // (dest 't:<team id>' | 'n:<new team ref>' | 'none').
+        dbDelta("CREATE TABLE " . self::table('free_agents') . " (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            season varchar(20) NOT NULL,
+            user_id bigint(20) unsigned NOT NULL,
+            status varchar(20) NOT NULL DEFAULT 'looking',
+            division_pref varchar(10) NOT NULL DEFAULT 'unranked',
+            time_pref varchar(10) NOT NULL DEFAULT 'any',
+            away_dates varchar(255) NOT NULL DEFAULT '',
+            group_code varchar(8) NOT NULL DEFAULT '',
+            captain_ok tinyint(1) NOT NULL DEFAULT 0,
+            under18 tinyint(1) NOT NULL DEFAULT 0,
+            browsable tinyint(1) NOT NULL DEFAULT 1,
+            band_override decimal(3,1) DEFAULT NULL,
+            admin_note varchar(255) NOT NULL DEFAULT '',
+            team_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            placed_via varchar(20) NOT NULL DEFAULT '',
+            placed_at datetime DEFAULT NULL,
+            optout_until datetime DEFAULT NULL,
+            unplaced_reason varchar(255) NOT NULL DEFAULT '',
+            proposed_dest varchar(20) NOT NULL DEFAULT '',
+            proposed_reason varchar(255) NOT NULL DEFAULT '',
+            proposed_locked tinyint(1) NOT NULL DEFAULT 0,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            updated_at datetime DEFAULT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY season_user (season, user_id),
+            KEY season_status (season, status),
+            KEY season_group (season, group_code)
+        ) $charset;");
+
+        // A free agent asks a team to take them (and their friend group).
+        // Only that team's captain can answer — kept apart from invites so a
+        // player can never accept their own request. Status: pending,
+        // accepted, declined (final for that team this season), withdrawn,
+        // expired, or closed (they joined a team another way).
+        dbDelta("CREATE TABLE " . self::table('join_requests') . " (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            season varchar(20) NOT NULL,
+            team_id bigint(20) unsigned NOT NULL,
+            user_id bigint(20) unsigned NOT NULL,
+            group_code varchar(8) NOT NULL DEFAULT '',
+            status varchar(20) NOT NULL DEFAULT 'pending',
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            expires_at datetime NOT NULL,
+            responded_at datetime DEFAULT NULL,
+            responded_by bigint(20) unsigned DEFAULT NULL,
+            PRIMARY KEY  (id),
+            KEY team_status (team_id, status),
+            KEY user_status (user_id, status),
+            KEY status_expires (status, expires_at)
+        ) $charset;");
+
+        // Emails waiting to go (sent in small batches by cron). dedupe is
+        // UNIQUE — queueing the same message twice is a no-op.
+        dbDelta("CREATE TABLE " . self::table('outbox') . " (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            user_id bigint(20) unsigned DEFAULT NULL,
+            to_email varchar(255) NOT NULL,
+            subject varchar(255) NOT NULL,
+            body text NOT NULL,
+            dedupe varchar(120) NOT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            sent_at datetime DEFAULT NULL,
+            attempts tinyint(3) unsigned NOT NULL DEFAULT 0,
+            last_error varchar(255) NOT NULL DEFAULT '',
+            PRIMARY KEY  (id),
+            UNIQUE KEY dedupe (dedupe),
+            KEY pending (sent_at, attempts)
         ) $charset;");
 
         // Roster: one row per person per team. Leaving sets left_at (kept for
@@ -207,7 +304,7 @@ class RSL_Database {
             result_by bigint(20) unsigned DEFAULT NULL,
             result_at datetime DEFAULT NULL,
             live text DEFAULT NULL,
-            live_seq int(11) NOT NULL DEFAULT 0,
+            live_seq bigint(20) NOT NULL DEFAULT 0,
             live_at datetime DEFAULT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY  (id),
@@ -273,7 +370,14 @@ class RSL_Database {
         // night is published — managed to match the published fixtures),
         // late_fee (a late "can't make it"), topup (paid online — one row per
         // order item, UNIQUE: an insert failure there is the dedupe working),
-        // adjust (an admin's credit or charge, with a note).
+        // adjust (an admin's credit or charge, with a note), refund (a
+        // WooCommerce refund or cancellation of a top-up), carry (a balance
+        // carried between seasons: one row out, one in). charge_key: UNIQUE
+        // when set — one row per thing charged or credited ('game:<team>:
+        // <game>', 'late:<request>:<game>' — late fees are per game,
+        // 'refund:<item>:<refund item>', 'cancel:<item>', 'carry-out:' /
+        // 'carry-in:'), so two overlapping syncs or a repeated webhook can't
+        // write it twice. NULL for rows that don't need one.
         dbDelta("CREATE TABLE " . self::table('ledger') . " (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             team_id bigint(20) unsigned NOT NULL,
@@ -289,21 +393,62 @@ class RSL_Database {
             note varchar(255) NOT NULL DEFAULT '',
             created_by bigint(20) unsigned DEFAULT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            charge_key varchar(64) DEFAULT NULL,
             PRIMARY KEY  (id),
             UNIQUE KEY order_item_id (order_item_id),
+            UNIQUE KEY charge_key (charge_key),
             KEY team_id (team_id),
             KEY night_id (night_id)
         ) $charset;");
 
-        update_option(self::SCHEMA_OPTION, self::SCHEMA_VERSION, false);
+        // Read on every request, so autoloaded.
+        update_option(self::SCHEMA_OPTION, self::SCHEMA_VERSION, true);
     }
 
-    /** Runs on every load; cheap unless the schema version moved. True when it upgraded. */
+    /**
+     * Runs on every load; cheap unless the schema version moved. True when
+     * it upgraded. Only one request at a time runs the upgrade (a stale
+     * lock — a request that died part-way — is taken over after a minute);
+     * the others carry on with the old schema for that moment.
+     */
     public static function maybe_upgrade() {
-        if (get_option(self::SCHEMA_OPTION) !== self::SCHEMA_VERSION) {
-            self::install();
-            return true;
+        if (get_option(self::SCHEMA_OPTION) === self::SCHEMA_VERSION) {
+            return false;
         }
-        return false;
+        if (!add_option(self::UPGRADE_LOCK, time(), '', false)) {
+            $since = intval(get_option(self::UPGRADE_LOCK));
+            if ($since && time() - $since < 60) {
+                return false;
+            }
+            update_option(self::UPGRADE_LOCK, time(), false);
+        }
+        try {
+            self::install();
+            self::after_upgrade();
+        } finally {
+            delete_option(self::UPGRADE_LOCK);
+        }
+        return true;
+    }
+
+    /** One-off data steps that go with a schema change. Each is safe to repeat. */
+    private static function after_upgrade() {
+        // Options read on every request were once saved non-autoloaded.
+        $hot = array(self::SCHEMA_OPTION, 'rsl_current_season', 'rsl_signup_season', 'rsl_portal_page_id', 'rsl_teams_page_id',
+            'rsl_fixtures_page_id', 'rsl_ladder_page_id', 'rsl_refs_page_id', 'rsl_payment_settings', 'rsl_officials_settings',
+            'rsl_topup_product_id', 'rsl_rego_product_id', 'rsl_free_agent_settings');
+        if (function_exists('wp_set_option_autoload_values')) {
+            wp_set_option_autoload_values(array_fill_keys($hot, true));
+        }
+        if (method_exists('RSL_Payments', 'backfill_charge_keys')) {
+            RSL_Payments::backfill_charge_keys();
+        }
+        // Once only (schema 10, when the list arrived): players.looking stays
+        // set for anyone left on a season's list, so running this again on a
+        // later upgrade would quietly sign them up for the next season.
+        if (method_exists('RSL_Free_Agents', 'backfill') && !get_option('rsl_fa_backfill_10')) {
+            RSL_Free_Agents::backfill();
+            update_option('rsl_fa_backfill_10', 1, false);
+        }
     }
 }

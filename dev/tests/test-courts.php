@@ -1,14 +1,17 @@
 <?php
 /**
  * Courts and game nights: venues and courts with usual hours, season dates
- * and per-division game lengths, generated nights (kept on re-save),
- * per-night exceptions, the slot maths, copy-forward, and the admin screens.
+ * and per-division game lengths, generated nights (kept on re-save, and
+ * never removed while they have fixtures, results, jobs, can't-make-its or
+ * charges; week-off requests go with them), night types (no bye over
+ * games), per-night exceptions, the slot maths, copy-forward, and the admin
+ * screens.
  *
  *   wp eval-file dev/tests/test-courts.php
  */
 
-if (!defined('WP_CLI') || !WP_CLI) {
-    exit("Run with wp eval-file.\n");
+if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production' && !getenv('RSL_DEV'))) {
+    exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
 global $wpdb;
@@ -138,14 +141,105 @@ $_GET = array('page' => 'rsl-courts', 'tab' => 'venues');
 ob_start(); (new RSL_Admin_Courts())->render(); $venues_page = ob_get_clean();
 $check('venues page: court rows use their own forms', strpos($venues_page, 'form="rsl-court-' . $c1->id . '"') !== false);
 
+// --- Nights in use are kept ----------------------------------------------------------------
+// A published, played night (a result, ref and supervisor jobs, game fees) and a
+// night with a late fee are never removed when the dates change; empty nights are,
+// with the week-off and withdrawn requests on them (a week off is only a wish for
+// that date — the admin is told which teams to let know).
+$ta = RSL_Teams::create($season, array('name' => "Courts Aces $suffix", 'division' => 'ranked'));
+$tb = RSL_Teams::create($season, array('name' => "Courts Blockers $suffix", 'division' => 'ranked'));
+$played = $nights[2];
+$game = RSL_Fixtures::add_game($played->id, array('home' => $ta->id, 'away' => $tb->id, 'court_id' => $c1->id, 'start' => '19:00'));
+RSL_Fixtures::publish_night($played->id);
+$ref_job = RSL_Officials::claim_ref($game->id, $sub, $admin);
+$sup_job = RSL_Officials::claim_supervisor($played->id, $v1->id, $sub, $admin);
+RSL_Fixtures::record_result($game->id, '25-20, 25-22', $admin);
+$fees = function ($night_id) use ($wpdb) { return (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . RSL_Database::table('ledger') . " WHERE night_id = %d AND type = 'game'", $night_id)); };
+$jobs = function ($night_id) use ($wpdb) { return (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . RSL_Database::table('jobs') . " WHERE night_id = %d", $night_id)); };
+$check('set-up: a published, played night with two jobs and two game fees', !is_wp_error($game) && !is_wp_error($ref_job) && !is_wp_error($sup_job) && $jobs($played->id) === 2 && $fees($played->id) === 2);
+
+$e = RSL_Courts::set_night_type($played->id, 'bye');
+$check('a night with games can\'t become a bye (games, fees and jobs untouched)', is_wp_error($e) && strpos($e->get_error_message(), 'Fixtures page') !== false
+    && RSL_Courts::get_night($played->id)->type === 'regular' && $fees($played->id) === 2 && $jobs($played->id) === 2);
+$check('… or finals', is_wp_error(RSL_Courts::set_night_type($played->id, 'finals')) && RSL_Courts::get_night($played->id)->type === 'regular');
+$check('its note can still change', !is_wp_error(RSL_Courts::set_night_type($played->id, 'regular', 'Venue till 11')) && RSL_Courts::get_night($played->id)->note === 'Venue till 11');
+
+$off = RSL_Requests::request($ta->id, $nights[5]->id, 'off', $admin);
+$withdrawn = RSL_Requests::request($tb->id, $nights[6]->id, 'off', $admin);
+RSL_Requests::cancel($withdrawn->id, $admin);
+$wpdb->insert(RSL_Database::table('ledger'), array('team_id' => $ta->id, 'season' => $season, 'type' => 'late_fee', 'amount' => -150, 'night_id' => $nights[7]->id, 'note' => 'Test late fee', 'created_at' => current_time('mysql')));
+$check('set-up: a week off, a withdrawn request and a late fee', !is_wp_error($off) && !is_wp_error($withdrawn) && RSL_Requests::get($withdrawn->id)->status === 'cancelled');
+
+// Mondays instead of Sundays: every existing night is now outside the dates.
+RSL_Courts::save_settings($season, array('start' => '2092-04-01', 'end' => '2092-06-01', 'weekday' => 1, 'minutes' => array('ranked' => 60, 'unranked' => 50)));
+$g = RSL_Courts::generate_nights($season);
+$kept_dates = array_keys($g['kept']);
+sort($kept_dates);
+$check('changing the weekday keeps the played night with its result, jobs and fees', RSL_Courts::get_night($played->id) && RSL_Fixtures::get($game->id)
+    && RSL_Fixtures::get($game->id)->status === 'played' && $jobs($played->id) === 2 && $fees($played->id) === 2);
+$check('… and the night with a charge', $kept_dates === array($played->night_date, $nights[7]->night_date), implode(', ', $kept_dates));
+$check('kept nights say what\'s on them', in_array('published', $g['kept'][$played->night_date], true) && in_array('games', $g['kept'][$played->night_date], true)
+    && $g['kept'][$nights[7]->night_date] === array('team charges'));
+$check('empty nights outside the dates removed, withdrawn requests with them', $g['removed'] === 7 && $g['added'] === 8 && !RSL_Courts::get_night($nights[0]->id) && !RSL_Courts::get_night($nights[6]->id)
+    && !$wpdb->get_var($wpdb->prepare("SELECT id FROM " . RSL_Database::table('requests') . " WHERE night_id = %d", $nights[6]->id)), $g['removed'] . ' removed, ' . $g['added'] . ' added');
+$check('a night with only a week off is removed too, the week off with it (and listed)', !RSL_Courts::get_night($nights[5]->id) && !RSL_Requests::get($off->id)
+    && $g['dropped'] === array(array('team_id' => (int) $ta->id, 'type' => 'off', 'night_date' => $nights[5]->night_date)), wp_json_encode($g['dropped']));
+
+// A two-games request on the last Monday; the admin then ends the season a day earlier.
+$last_monday = $wpdb->get_var($wpdb->prepare("SELECT id FROM " . RSL_Database::table('nights') . " WHERE season = %s AND night_date = %s", $season, '2092-05-26'));
+$double = RSL_Requests::request($tb->id, $last_monday, 'double', $admin);
+$post(array('do' => 'save_settings', 'start' => '2092-04-01', 'end' => '2092-05-25', 'weekday' => 1, 'minutes' => array('ranked' => 60, 'unranked' => 50)));
+$check('admin: kept nights named in a warning', $notice()['type'] === 'warning' && strpos($notice()['message'], 'Kept 2 nights') !== false
+    && strpos($notice()['message'], date('D j M', strtotime($played->night_date)) . ' (published, games') !== false, $notice()['message']);
+$check('admin: the teams whose requests went with a removed night are named', !is_wp_error($double) && !RSL_Courts::get_night($last_monday)
+    && strpos($notice()['message'], "Courts Blockers $suffix (two games, Mon 26 May)") !== false, $notice()['message']);
+$_GET = array('page' => 'rsl-courts', 'season' => $season);
+ob_start(); (new RSL_Admin_Courts())->render(); $cal = ob_get_clean();
+$check('calendar: kept nights marked outside the season dates', substr_count($cal, 'outside the season dates</span>') === 2);
+$check('calendar: a published night asks before its type changes', substr_count($cal, 'fixtures are published. Change its type anyway?') === 1);
+$check('calendar: saving dates over existing nights asks first', strpos($cal, 'Empty nights outside the new dates are removed') !== false);
+$post(array('do' => 'set_type', 'night_id' => $played->id, 'type' => 'bye', 'note' => ''));
+$check('admin: a bye over games refused, saying what to do', $notice()['type'] === 'error' && strpos($notice()['message'], 'Unpublish and clear') !== false && RSL_Courts::get_night($played->id)->type === 'regular');
+
+// A team on the played night said they can't make it (it could have carried a late fee).
+add_filter('pre_wp_mail', '__return_true');
+$cant = RSL_Requests::request($tb->id, $played->id, 'cant_make', $admin);
+remove_filter('pre_wp_mail', '__return_true');
+
+// Cleared as on the Fixtures page (clear the result, unpublish, remove the game): no
+// fees, and the court supervisor goes with the venue's last game (nothing to
+// supervise). The can't make it still holds the night (the Fixtures page can
+// withdraw it). Made a bye, nothing is left to miss, so it's withdrawn too; then the
+// next save of the dates removes the now-empty night.
+RSL_Fixtures::clear_result($game->id);
+RSL_Fixtures::publish_night($played->id, false);
+RSL_Fixtures::delete_game($game->id);
+$check('set-up: cleared, no fees, and the supervisor went with the last game', !is_wp_error($cant) && $fees($played->id) === 0 && $jobs($played->id) === 0);
+$g = RSL_Courts::generate_nights($season);
+$check('… but a can\'t make it not yet withdrawn still keeps it', $g['removed'] === 0 && RSL_Courts::get_night($played->id)
+    && isset($g['kept'][$played->night_date]) && $g['kept'][$played->night_date] === array('can\'t make it requests'), wp_json_encode($g['kept']));
+$check('a cleared night can be a bye, with no fees, jobs or can\'t make it left', !is_wp_error(RSL_Courts::set_night_type($played->id, 'bye')) && $fees($played->id) === 0 && $jobs($played->id) === 0
+    && !is_wp_error($cant) && RSL_Requests::get($cant->id)->status === 'cancelled');
+$g = RSL_Courts::generate_nights($season);
+$check('once cleared, the next save removes it', $g['removed'] === 1 && !RSL_Courts::get_night($played->id) && count($g['kept']) === 1);
+
 // --- Cleanup -------------------------------------------------------------------------------
 wp_set_current_user(0);
 $_GET = array();
+$wpdb->delete(RSL_Database::table('games'), array('season' => $season));
+$wpdb->delete(RSL_Database::table('ledger'), array('season' => $season));
 foreach (RSL_Courts::nights($season) as $n) {
     $wpdb->delete(RSL_Database::table('night_courts'), array('night_id' => $n->id));
     $wpdb->delete(RSL_Database::table('night_venues'), array('night_id' => $n->id));
+    $wpdb->delete(RSL_Database::table('jobs'), array('night_id' => $n->id));
 }
 $wpdb->delete(RSL_Database::table('nights'), array('season' => $season));
+foreach (array($ta, $tb) as $t) {
+    $wpdb->delete(RSL_Database::table('requests'), array('team_id' => $t->id));
+    $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $t->id));
+    $wpdb->delete(RSL_Database::table('teams'), array('id' => $t->id));
+}
+$wpdb->delete(RSL_Database::table('jobs'), array('user_id' => $sub));
 foreach (array($v1->id, $v2->id) as $vid) { $wpdb->delete(RSL_Database::table('courts'), array('venue_id' => $vid)); $wpdb->delete(RSL_Database::table('venues'), array('id' => $vid)); }
 foreach (array($admin, $sub) as $u) { delete_transient(RSL_Admin::NOTICE_PREFIX . $u); wp_delete_user($u); }
 if ($saved_settings === '__unset__') { delete_option(RSL_Courts::SETTINGS_OPTION); } else { update_option(RSL_Courts::SETTINGS_OPTION, $saved_settings); }

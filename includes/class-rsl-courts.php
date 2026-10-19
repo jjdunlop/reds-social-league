@@ -7,7 +7,9 @@
  *  - A season has settings: first and last game night, the weekday
  *    (Sunday), and a game length per division.
  *  - Game nights are generated for the season (every weekday between the
- *    dates) and can be regular, finals or a bye.
+ *    dates) and can be regular, finals or a bye. A night with fixtures or
+ *    records is never removed by a change of dates, and a night with games
+ *    can't become a bye.
  *  - Exceptions are stored per night: a court off or on different hours,
  *    or a venue hosting the other division. No row = the usual.
  *  - slots_for_night() turns all that into game slots: court, start, end,
@@ -182,8 +184,13 @@ class RSL_Courts {
     /**
      * Make the season's nights match its dates: every chosen weekday from
      * the first to the last game night. Existing nights (and their
-     * exceptions) are kept; nights now outside the dates are removed.
-     * Returns array(added, removed).
+     * exceptions) are kept; empty nights now outside the dates are removed.
+     * A night outside the dates that's still in use (night_in_use()) is
+     * never removed — it's kept and listed, so an admin can clear it first.
+     * Captains' week-off and two-games requests on a removed night go with
+     * it (listed in `dropped`, so the admin can tell those teams).
+     * Returns array(added, removed, kept => night_date => what's on it,
+     * dropped => list of array(team_id, type, night_date)).
      */
     public static function generate_nights($season) {
         global $wpdb;
@@ -203,12 +210,22 @@ class RSL_Courts {
         $existing = $wpdb->get_results($wpdb->prepare("SELECT id, night_date FROM " . RSL_Database::table('nights') . " WHERE season = %s", $season));
         $have = array();
         $removed = 0;
+        $kept = array();
+        $dropped = array();
         foreach ($existing as $n) {
             if (in_array($n->night_date, $wanted, true)) {
                 $have[] = $n->night_date;
-            } else {
-                self::delete_night($n->id);
+                continue;
+            }
+            $wishes = $wpdb->get_results($wpdb->prepare("SELECT team_id, type FROM " . RSL_Database::table('requests')
+                . " WHERE night_id = %d AND type IN ('off', 'double') AND status IN ('active', 'handled') ORDER BY id", $n->id));
+            if (self::delete_night($n->id)) {
                 $removed++;
+                foreach ($wishes as $w) {
+                    $dropped[] = array('team_id' => (int) $w->team_id, 'type' => $w->type, 'night_date' => $n->night_date);
+                }
+            } else {
+                $kept[$n->night_date] = self::night_in_use($n->id);
             }
         }
         $added = 0;
@@ -216,17 +233,65 @@ class RSL_Courts {
             $wpdb->insert(RSL_Database::table('nights'), array('season' => $season, 'night_date' => $date, 'type' => 'regular'));
             $added++;
         }
-        return array('added' => $added, 'removed' => $removed);
+        return array('added' => $added, 'removed' => $removed, 'kept' => $kept, 'dropped' => $dropped);
     }
 
+    /**
+     * What stops a night being removed: published fixtures, games (and
+     * their results), ref or supervisor jobs, a captain's "can't make it"
+     * (not withdrawn — it can carry a late fee) or team charges. Every one
+     * can be cleared on the Fixtures page. Week-off and two-games requests
+     * don't count: they're only fixturing wishes for that date, and go with
+     * the night (as do withdrawn requests and "left out for owing" records).
+     * A list of short phrases for an admin notice; empty = nothing on it.
+     */
+    public static function night_in_use($night_id) {
+        $night = self::get_night($night_id);
+        if (!$night) {
+            return array();
+        }
+        $why = array();
+        if (!empty($night->published_at)) {
+            $why[] = 'published';
+        }
+        if (self::night_rows('games', $night->id)) {
+            $why[] = 'games';
+        }
+        if (self::night_rows('jobs', $night->id)) {
+            $why[] = 'ref or supervisor jobs';
+        }
+        if (self::night_rows('requests', $night->id, " AND type = 'cant_make' AND status IN ('active', 'handled')")) {
+            $why[] = 'can\'t make it requests';
+        }
+        if (self::night_rows('ledger', $night->id)) {
+            $why[] = 'team charges';
+        }
+        return $why;
+    }
+
+    /** How many rows of a table belong to a night ($and: an extra condition). */
+    private static function night_rows($table, $night_id, $and = '') {
+        global $wpdb;
+        return (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . RSL_Database::table($table) . " WHERE night_id = %d" . $and, $night_id));
+    }
+
+    /**
+     * Remove an empty night with its exceptions (and its week-off,
+     * two-games, withdrawn and "left out for owing" request rows — nothing
+     * else reads them once the night is gone). A night still in use is never
+     * removed — its results, ref pay and charges would go with it. Returns
+     * whether it was removed.
+     */
     private static function delete_night($night_id) {
         global $wpdb;
-        $wpdb->delete(RSL_Database::table('games'), array('night_id' => $night_id));
-        $wpdb->delete(RSL_Database::table('jobs'), array('night_id' => $night_id));
-        $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('ledger') . " WHERE night_id = %d AND type = 'game'", $night_id));
+        if (self::night_in_use($night_id)) {
+            return false;
+        }
+        $wpdb->delete(RSL_Database::table('requests'), array('night_id' => $night_id));
         $wpdb->delete(RSL_Database::table('night_courts'), array('night_id' => $night_id));
         $wpdb->delete(RSL_Database::table('night_venues'), array('night_id' => $night_id));
         $wpdb->delete(RSL_Database::table('nights'), array('id' => $night_id));
+        return true;
     }
 
     public static function nights($season) {
@@ -239,17 +304,40 @@ class RSL_Courts {
         return $wpdb->get_row($wpdb->prepare("SELECT * FROM " . RSL_Database::table('nights') . " WHERE id = %d", $night_id));
     }
 
+    /**
+     * Change a night's type (and note). A night with games can't become a
+     * bye or finals: a bye would hide its games, fees and ref jobs where no
+     * one can reach them, and finals are arranged separately. Its games have
+     * to be cleared first. A night made a bye loses its leftover jobs and
+     * "can't make it" requests.
+     */
     public static function set_night_type($night_id, $type, $note = null) {
         global $wpdb;
-        if (!isset(self::NIGHT_TYPES[$type]) || !self::get_night($night_id)) {
+        $night = self::get_night($night_id);
+        if (!isset(self::NIGHT_TYPES[$type]) || !$night) {
             return new WP_Error('rsl_night', 'That night or type isn\'t valid.');
+        }
+        $changed = $type !== $night->type;
+        if ($changed && $type !== 'regular' && self::night_rows('games', $night->id)) {
+            return new WP_Error('rsl_night_games', 'This night has games. Unpublish and clear this night\'s fixtures on the Fixtures page first.');
         }
         $data = array('type' => $type);
         if ($note !== null) {
             $data['note'] = substr(sanitize_text_field($note), 0, 255);
         }
-        $wpdb->update(RSL_Database::table('nights'), $data, array('id' => $night_id));
-        return self::get_night($night_id);
+        $wpdb->update(RSL_Database::table('nights'), $data, array('id' => $night->id));
+        if ($changed && $type === 'bye') {
+            // No games, so nothing to supervise: court supervisors left over from
+            // cleared fixtures come off (they'd be paid for a bye otherwise). Nor
+            // anything to miss: a "can't make it" left over is withdrawn (the
+            // Fixtures page shows a bye no requests, so it couldn't be there).
+            $wpdb->delete(RSL_Database::table('jobs'), array('night_id' => $night->id));
+            $wpdb->query($wpdb->prepare("UPDATE " . RSL_Database::table('requests') . " SET status = 'cancelled' WHERE night_id = %d AND type = 'cant_make' AND status IN ('active', 'handled')", $night->id));
+        }
+        if ($changed) {
+            RSL_Payments::sync_night($night->id); // a bye has no game charges
+        }
+        return self::get_night($night->id);
     }
 
     // ------------------------------------------------------------------

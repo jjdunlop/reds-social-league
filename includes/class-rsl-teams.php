@@ -126,6 +126,7 @@ class RSL_Teams {
             'est_level' => isset($args['level']) && isset(self::levels()[$args['level']]) ? $args['level'] : '',
             'applied_by' => isset($args['applied_by']) ? intval($args['applied_by']) : null,
             'applied_at' => isset($args['applied_by']) ? current_time('mysql') : null,
+            'created_at' => current_time('mysql'),
         ));
 
         return self::get($wpdb->insert_id);
@@ -149,14 +150,25 @@ class RSL_Teams {
         if (!isset($args['level']) || !isset(self::levels()[$args['level']])) {
             return new WP_Error('rsl_level', 'Pick roughly what level your team plays at — it helps us give you even games from week one.');
         }
+        if (self::withdrawn_count($user_id, $season) >= self::MAX_WITHDRAWN) {
+            return new WP_Error('rsl_withdrawn', 'You\'ve withdrawn ' . self::MAX_WITHDRAWN . ' applications this season — talk to the league to apply again.');
+        }
         $args['status'] = 'pending';
         $args['applied_by'] = $user_id;
         $team = self::create($season, $args);
         if (is_wp_error($team)) {
             return $team;
         }
-        self::add_member($team->id, $user_id, 'captain', true);
+        self::add_member($team->id, $user_id, 'captain', true, array('how' => 'apply'));
         return self::get($team->id);
+    }
+
+    /** Applying and withdrawing over and over would hold names; a few tries a season is plenty. */
+    const MAX_WITHDRAWN = 3;
+
+    private static function withdrawn_count($user_id, $season) {
+        global $wpdb;
+        return (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . RSL_Database::table('teams') . " WHERE applied_by = %d AND season = %s AND status = 'withdrawn'", $user_id, $season));
     }
 
     /** Admin approves: the team goes live and the captain can invite players. */
@@ -196,9 +208,11 @@ class RSL_Teams {
         return true;
     }
 
+    /** A pending team that won't happen: its members are freed, and the applicant goes back on the free agent list if they were on it. */
     private static function release_members($team_id) {
         global $wpdb;
         $wpdb->query($wpdb->prepare("UPDATE " . RSL_Database::table('team_members') . " SET left_at = %s WHERE team_id = %d AND left_at IS NULL", current_time('Y-m-d'), $team_id));
+        RSL_Free_Agents::application_closed($team_id);
     }
 
     /** Pending applications, oldest first, with the captain's name. */
@@ -238,11 +252,12 @@ class RSL_Teams {
         return null;
     }
 
+    /** Email the applicant; false when it couldn't be sent (the admin is told). */
     private static function notify_captain($team_id, $what) {
         $team = self::get($team_id);
         $captain = $team && $team->applied_by ? get_userdata($team->applied_by) : null;
         if (!$captain) {
-            return;
+            return false;
         }
         $portal = RSL_Portal::url();
         if ($what === 'approved') {
@@ -253,11 +268,17 @@ class RSL_Teams {
                 . "Everyone needs a current social rego (or full/life club membership) before their first game.\n";
         } else {
             $subject = 'Your team application for ' . $team->name;
+            $listed = RSL_Free_Agents::is_open(RSL_Free_Agents::get($captain->ID, $team->season));
             $body = "Hi {$captain->display_name},\n\nYour application for {$team->name} wasn't approved"
                 . ($team->decision_note !== '' ? ":\n\n" . $team->decision_note . "\n" : ".\n")
+                . ($listed ? "\nYou're back on the free agent list, so we'll still find you a team if you don't join one yourself.\n" : '')
                 . "\nYou can apply again or join another team from your league page:\n$portal\n";
         }
-        wp_mail($captain->user_email, $subject, $body);
+        $sent = wp_mail($captain->user_email, $subject, $body);
+        if (!$sent) {
+            set_transient('rsl_mail_failed_' . get_current_user_id(), $captain->display_name, 60);
+        }
+        return $sent;
     }
 
     // ------------------------------------------------------------------
@@ -295,14 +316,23 @@ class RSL_Teams {
         return $code;
     }
 
-    /** The active team with this code, or null. */
+    /** Seasons people can still join teams in: the one being played and the one signing up. */
+    public static function joinable_seasons() {
+        return array_values(array_unique(array(RSL_Seasons::current(), RSL_Seasons::signup())));
+    }
+
+    /** The active team with this code in a season people can join, or null (last season's links stop working). */
     public static function get_by_code($code) {
         global $wpdb;
         $code = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string) $code));
         if ($code === '') {
             return null;
         }
-        return $wpdb->get_row($wpdb->prepare("SELECT * FROM " . RSL_Database::table('teams') . " WHERE invite_code = %s AND status = 'active'", $code));
+        $seasons = self::joinable_seasons();
+        return $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM " . RSL_Database::table('teams') . " WHERE invite_code = %s AND status = 'active' AND season IN (" . implode(',', array_fill(0, count($seasons), '%s')) . ")",
+            array_merge(array($code), $seasons)
+        ));
     }
 
     /** A registered player joins with the captain's code. */
@@ -314,7 +344,7 @@ class RSL_Teams {
         if (!$team) {
             return new WP_Error('rsl_code', 'That invite code isn\'t valid any more — ask your captain for the current link.');
         }
-        $result = self::add_member($team->id, $user_id, 'player');
+        $result = self::add_member($team->id, $user_id, 'player', false, array('how' => 'code'));
         return is_wp_error($result) ? $result : $team;
     }
 
@@ -322,10 +352,15 @@ class RSL_Teams {
     // Invites by email (the player must accept)
     // ------------------------------------------------------------------
 
+    const EMAIL_INVITES_PER_DAY = 20;
+
     /**
-     * The captain invites a registered player by their exact email. Nothing
-     * about the player is shown to the captain, and they're not on the team
-     * until they accept.
+     * The captain invites someone by their exact email; they're not on the
+     * team until they accept. The answer is the same whether or not that
+     * email belongs to a registered player — a captain can't use this to
+     * find out who's registered. An email nobody has registered with yet is
+     * kept (user_id 0) and offered to whoever registers with it later. Only
+     * registered players are emailed. Returns the invite id or WP_Error.
      */
     public static function invite_by_email($team_id, $captain_id, $email) {
         global $wpdb;
@@ -337,56 +372,112 @@ class RSL_Teams {
             return new WP_Error('rsl_not_captain', 'Only the captain can invite players.');
         }
         $email = sanitize_email($email);
-        $user = $email ? get_user_by('email', $email) : null;
-        if (!$user || !RSL_Players::is_registered($user->ID)) {
-            return new WP_Error('rsl_unknown', 'Nobody has registered for the league with that email yet — send them your invite link instead.');
-        }
-        if (self::is_member($team->id, $user->ID)) {
-            return new WP_Error('rsl_already', 'They\'re already on your team.');
+        if (!$email || !is_email($email)) {
+            return new WP_Error('rsl_email', 'That doesn\'t look like an email address.');
         }
         $table = RSL_Database::table('invites');
-        if ($wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE team_id = %d AND user_id = %d AND status = 'pending'", $team->id, $user->ID))) {
+        $today = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table WHERE invited_by = %d AND source = 'email' AND created_at > %s", $captain_id, date('Y-m-d H:i:s', current_time('timestamp') - DAY_IN_SECONDS)));
+        if ($today >= self::EMAIL_INVITES_PER_DAY && !user_can($captain_id, 'manage_options')) {
+            return new WP_Error('rsl_invite_cap', 'That\'s ' . self::EMAIL_INVITES_PER_DAY . ' email invites today — share your invite link instead.');
+        }
+        $user = get_user_by('email', $email);
+        $user_id = $user && RSL_Players::is_registered($user->ID) ? (int) $user->ID : 0;
+        // Only the captain's own email invites count as "already invited" (a
+        // pool invite must not confirm a free agent's email), and a teammate's
+        // email gets the usual answer too (not emailed; their own page skips
+        // invites to a team they're on).
+        if ($wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE team_id = %d AND status = 'pending' AND source = 'email' AND (email = %s OR (user_id = %d AND user_id <> 0))", $team->id, $email, $user_id))) {
             return new WP_Error('rsl_invited', 'You\'ve already invited them — they need to accept it.');
         }
-        $wpdb->insert($table, array('team_id' => $team->id, 'user_id' => $user->ID, 'email' => $email, 'invited_by' => $captain_id));
-        wp_mail($user->user_email, 'You\'re invited to join ' . $team->name,
-            "Hi {$user->display_name},\n\nYou've been invited to join {$team->name} in the Reds Social League.\n\nAccept or decline on your league page:\n" . RSL_Portal::url() . "\n");
-        return (int) $wpdb->insert_id;
+        $wpdb->insert($table, array('team_id' => $team->id, 'user_id' => $user_id, 'email' => $email, 'invited_by' => $captain_id, 'source' => 'email', 'created_at' => current_time('mysql')));
+        $id = (int) $wpdb->insert_id;
+        if ($user_id && !self::is_member($team->id, $user_id)) {
+            wp_mail($user->user_email, 'You\'re invited to join ' . $team->name,
+                "Hi {$user->display_name},\n\nYou've been invited to join {$team->name} in the Reds Social League.\n\nAccept or decline on your league page:\n" . RSL_Portal::url() . "\n");
+        }
+        return $id;
     }
 
-    /** Invites waiting on this player, with team names. */
+    /**
+     * Invites waiting on this player, with team names: those sent to them,
+     * and email invites sent to their address before they registered. Only
+     * for seasons people can still join; expired ones, and any to a team
+     * they're already on, are left out.
+     */
     public static function pending_invites_for_user($user_id) {
         global $wpdb;
+        $user = get_userdata($user_id);
+        if (!$user) {
+            return array();
+        }
+        $seasons = self::joinable_seasons();
         return $wpdb->get_results($wpdb->prepare("
-            SELECT i.*, t.name AS team_name, t.season, t.colour, t.slug
+            SELECT i.*, t.name AS team_name, t.season, t.colour, t.slug, t.division
             FROM " . RSL_Database::table('invites') . " i
             JOIN " . RSL_Database::table('teams') . " t ON t.id = i.team_id
-            WHERE i.user_id = %d AND i.status = 'pending' AND t.status = 'active'
+            WHERE (i.user_id = %d OR (i.user_id = 0 AND i.source = 'email' AND i.email = %s))
+                AND i.status = 'pending' AND t.status = 'active'
+                AND (i.expires_at IS NULL OR i.expires_at > %s)
+                AND NOT EXISTS (SELECT 1 FROM " . RSL_Database::table('team_members') . " m WHERE m.team_id = i.team_id AND m.user_id = %d AND m.left_at IS NULL)
+                AND t.season IN (" . implode(',', array_fill(0, count($seasons), '%s')) . ")
             ORDER BY i.created_at
-        ", $user_id));
+        ", array_merge(array($user_id, $user->user_email, current_time('mysql'), $user_id), $seasons)));
     }
 
-    /** Invites the team is waiting on (email as typed by the captain only). */
+    /**
+     * Invites the team is waiting on. For an email invite the captain sees
+     * only the email they typed; for a pool invite, the player's first name.
+     */
     public static function pending_invites_for_team($team_id) {
         global $wpdb;
-        return $wpdb->get_results($wpdb->prepare("SELECT id, email, created_at FROM " . RSL_Database::table('invites') . " WHERE team_id = %d AND status = 'pending' ORDER BY created_at", $team_id));
+        $rows = $wpdb->get_results($wpdb->prepare("SELECT id, user_id, email, source, group_code, created_at, expires_at FROM " . RSL_Database::table('invites') . " WHERE team_id = %d AND status = 'pending' AND (expires_at IS NULL OR expires_at > %s) ORDER BY created_at", $team_id, current_time('mysql')));
+        foreach ($rows as $r) {
+            $r->label = $r->source === 'pool' ? RSL_Free_Agents::first_name($r->user_id) . ' (free agent' . ($r->group_code !== '' ? ' + friends' : '') . ')' : $r->email;
+        }
+        return $rows;
     }
 
-    /** The invited player accepts or declines. */
+    /**
+     * The invited player accepts or declines. A pool invite to someone in a
+     * friend group brings the whole group as it is now (if there's room for
+     * everyone) — refused if the group changed since the invite or a friend
+     * hasn't agreed to the team's division (RSL_Free_Agents::pool_invite_ids()).
+     */
     public static function respond_invite($invite_id, $user_id, $accept) {
         global $wpdb;
         $table = RSL_Database::table('invites');
-        $invite = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d AND user_id = %d AND status = 'pending'", $invite_id, $user_id));
-        if (!$invite) {
+        $user = get_userdata($user_id);
+        $invite = $user ? $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM $table WHERE id = %d AND status = 'pending' AND (user_id = %d OR (user_id = 0 AND source = 'email' AND email = %s))",
+            $invite_id, $user_id, $user->user_email
+        )) : null;
+        $team = $invite ? self::get($invite->team_id) : null;
+        if (!$invite || !$team || !in_array($team->season, self::joinable_seasons(), true)) {
             return new WP_Error('rsl_invite', 'That invite isn\'t open any more.');
         }
+        if ($invite->expires_at && $invite->expires_at <= current_time('mysql')) {
+            $wpdb->update($table, array('status' => 'expired'), array('id' => $invite->id));
+            return new WP_Error('rsl_invite', 'That invite has expired — ask the captain to invite you again.');
+        }
+        $ids = array(intval($user_id));
         if ($accept) {
-            $result = self::add_member($invite->team_id, $user_id, 'player');
+            if (!RSL_Players::is_registered($user_id)) {
+                return new WP_Error('rsl_unregistered', 'Register for the league first.');
+            }
+            if ($invite->source === 'pool') {
+                $ids = RSL_Free_Agents::pool_invite_ids($invite, $team, $user_id);
+                $result = is_wp_error($ids) ? $ids : RSL_Free_Agents::add_unit($team->id, $ids, 'pool');
+            } else {
+                $result = self::add_member($team->id, $user_id, 'player', false, array('how' => 'invite'));
+            }
             if (is_wp_error($result)) {
                 return $result;
             }
         }
-        $wpdb->update($table, array('status' => $accept ? 'accepted' : 'declined', 'responded_at' => current_time('mysql')), array('id' => $invite->id));
+        $wpdb->update($table, array('status' => $accept ? 'accepted' : 'declined', 'user_id' => $user_id, 'responded_at' => current_time('mysql')), array('id' => $invite->id));
+        if ($accept && $invite->source === 'pool') {
+            RSL_Free_Agents::mail_contact_swap($team, $ids, 'inv-ok:' . $invite->id);
+        }
         return true;
     }
 
@@ -448,9 +539,10 @@ class RSL_Teams {
         return $wpdb->get_row($wpdb->prepare("SELECT * FROM " . RSL_Database::table('teams') . " WHERE season = %s AND slug = %s", $season, $slug));
     }
 
+    /** A live (active or pending) team with this name — withdrawn and declined applications free the name. */
     private static function find_by_name($season, $name) {
         global $wpdb;
-        return $wpdb->get_row($wpdb->prepare("SELECT * FROM " . RSL_Database::table('teams') . " WHERE season = %s AND name = %s", $season, $name));
+        return $wpdb->get_row($wpdb->prepare("SELECT * FROM " . RSL_Database::table('teams') . " WHERE season = %s AND name = %s AND status IN ('active', 'pending')", $season, $name));
     }
 
     /** Active teams in a season, with a current member count, by division then name. */
@@ -487,7 +579,7 @@ class RSL_Teams {
      * season: someone already on another team this season is refused —
      * subs for a night come later, through the sub list.
      */
-    public static function add_member($team_id, $user_id, $role = 'player', $allow_pending = false) {
+    public static function add_member($team_id, $user_id, $role = 'player', $allow_pending = false, $opts = array()) {
         global $wpdb;
         $team = self::get($team_id);
         $user = get_userdata($user_id);
@@ -498,30 +590,81 @@ class RSL_Teams {
             return new WP_Error('rsl_user', 'No account found for that person.');
         }
         $role = isset(self::ROLES[$role]) ? $role : 'player';
+        $how = isset($opts['how']) ? sanitize_key($opts['how']) : 'admin';
+        $capped = $team->status === 'active' && empty($opts['admin']);
 
-        $elsewhere = self::current_team_for_user($user_id, $team->season);
-        if ($elsewhere && intval($elsewhere->id) !== intval($team->id)) {
-            return new WP_Error('rsl_elsewhere', $user->display_name . ' is already on ' . $elsewhere->name . ' this season.');
+        // Two captains accepting the same player at once must not put them
+        // on two teams, and two people joining a nearly full team at once
+        // must not take it over the maximum: the checks and the insert run
+        // under a per-person lock and, when the maximum applies, the team's
+        // lock. Always team first, then person (RSL_Free_Agents::add_unit()
+        // holds the team lock around several adds; it's re-entrant).
+        $team_lock = $capped ? self::team_lock_name($team->id) : '';
+        if ($team_lock !== '' && !self::lock($team_lock)) {
+            return new WP_Error('rsl_busy', 'Lots of people are joining ' . $team->name . ' right now — please try again.');
         }
-        $pending = self::pending_application_for_user($user_id, $team->season);
-        if ($pending && intval($pending->id) !== intval($team->id)) {
-            return new WP_Error('rsl_pending', $user->display_name . ' has a team application waiting for approval (' . $pending->name . ').');
+        $lock = 'rsl_join_' . intval($user_id);
+        if (!self::lock($lock)) {
+            if ($team_lock !== '') {
+                self::unlock($team_lock);
+            }
+            return new WP_Error('rsl_busy', 'Something else is updating ' . $user->display_name . '\'s team right now — please try again.');
         }
+        try {
+            $elsewhere = self::current_team_for_user($user_id, $team->season);
+            if ($elsewhere && intval($elsewhere->id) !== intval($team->id)) {
+                return new WP_Error('rsl_elsewhere', $user->display_name . ' is already on ' . $elsewhere->name . ' this season.');
+            }
+            $pending = self::pending_application_for_user($user_id, $team->season);
+            if ($pending && intval($pending->id) !== intval($team->id)) {
+                return new WP_Error('rsl_pending', $user->display_name . ' has a team application waiting for approval (' . $pending->name . ').');
+            }
 
-        $table = RSL_Database::table('team_members');
-        $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE team_id = %d AND user_id = %d", $team->id, $user_id));
-        if ($row && $row->left_at === null) {
-            return new WP_Error('rsl_already', $user->display_name . ' is already on this team.');
+            $table = RSL_Database::table('team_members');
+            $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE team_id = %d AND user_id = %d", $team->id, $user_id));
+            if ($row && $row->left_at === null) {
+                return new WP_Error('rsl_already', $user->display_name . ' is already on this team.');
+            }
+            // The roster maximum holds on every route except an admin's.
+            if ($capped) {
+                $count = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table WHERE team_id = %d AND left_at IS NULL", $team->id));
+                $max = RSL_Free_Agents::settings()['max_roster'];
+                if ($count >= $max) {
+                    return new WP_Error('rsl_full', $team->name . ' is full (' . $max . ' players) — ask the captain.');
+                }
+            }
+            if ($row) {
+                $wpdb->update($table, array('left_at' => null, 'role' => $role, 'joined_at' => current_time('Y-m-d')), array('id' => $row->id), array('%s', '%s', '%s'), array('%d'));
+            } else {
+                $wpdb->insert($table, array('team_id' => $team->id, 'user_id' => $user_id, 'role' => $role, 'joined_at' => current_time('Y-m-d')), array('%d', '%d', '%s', '%s'));
+            }
+            if ($role === 'captain') {
+                self::set_captain($team->id, $user_id);
+            }
+        } finally {
+            self::unlock($lock);
+            if ($team_lock !== '') {
+                self::unlock($team_lock);
+            }
         }
-        if ($row) {
-            $wpdb->update($table, array('left_at' => null, 'role' => $role, 'joined_at' => current_time('Y-m-d')), array('id' => $row->id), array('%s', '%s', '%s'), array('%d'));
-        } else {
-            $wpdb->insert($table, array('team_id' => $team->id, 'user_id' => $user_id, 'role' => $role, 'joined_at' => current_time('Y-m-d')), array('%d', '%d', '%s', '%s'));
-        }
-        if ($role === 'captain') {
-            self::set_captain($team->id, $user_id);
-        }
+        do_action('rsl_member_added', (int) $team->id, (int) $user_id, $how);
         return true;
+    }
+
+    /** The lock name guarding a team's roster maximum. */
+    public static function team_lock_name($team_id) {
+        return 'rsl_team_' . intval($team_id);
+    }
+
+    /** Take a named database lock (waits up to 5 seconds); true when held. Pair with unlock(). */
+    public static function lock($name) {
+        global $wpdb;
+        return (string) $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 5)', $name)) === '1';
+    }
+
+    public static function unlock($name) {
+        global $wpdb;
+        $wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $name));
     }
 
     /** Take a person off a team. Their row stays, with left_at, for history. */
@@ -531,7 +674,23 @@ class RSL_Teams {
             "UPDATE " . RSL_Database::table('team_members') . " SET left_at = %s, role = 'player' WHERE team_id = %d AND user_id = %d AND left_at IS NULL",
             current_time('Y-m-d'), $team_id, $user_id
         ));
-        return $updated ? true : new WP_Error('rsl_not_member', 'That person isn\'t on this team.');
+        if (!$updated) {
+            return new WP_Error('rsl_not_member', 'That person isn\'t on this team.');
+        }
+        do_action('rsl_member_removed', (int) $team_id, (int) $user_id);
+        return true;
+    }
+
+    /** A player leaves their own team (a wrong link, a change of plan). Captains hand over first. */
+    public static function leave($team_id, $user_id) {
+        $team = self::get($team_id);
+        if (!$team || !self::is_member($team->id, $user_id)) {
+            return new WP_Error('rsl_not_member', 'You\'re not on that team.');
+        }
+        if (self::is_captain($team->id, $user_id)) {
+            return new WP_Error('rsl_captain', 'Captains can\'t leave their own team — ask the league to hand the captaincy to someone else first.');
+        }
+        return self::remove_member($team->id, $user_id);
     }
 
     /** Make one current member the captain (one per team). */

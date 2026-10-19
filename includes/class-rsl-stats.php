@@ -20,8 +20,11 @@
  *
  * Also: per-night rating changes, form, streaks, upsets (winner had under
  * UPSET_CHANCE to win a set), close games, achievements, season leaders.
+ * No set chance, upset or rating change involves a team in placements —
+ * any of them would give away its hidden starting estimate.
  * Only published nights count. Built from RSL_Ratings snapshots after
- * each round (memoised per request).
+ * each round; memoised per request and saved between page views under a
+ * fingerprint of the rows it's built from (any change makes a new key).
  */
 
 if (!defined('ABSPATH')) {
@@ -48,6 +51,7 @@ class RSL_Stats {
     const POINTS = array('played' => 10, 'win' => 5, 'draw' => 3, 'close' => 3, 'upset' => 5, 'achievement' => 10);
     const LEVEL_POINTS = 40;
     const FINALS_MIN_ROUNDS = 5;    // default; option rsl_finals_min_rounds / filter rsl_finals_min_rounds
+    const CACHE_PREFIX = 'rsl_stats_'; // transient per season: array(key => fingerprint, data => season())
 
     /** Regular-season rounds a Ranked team must have played to make finals. */
     public static function finals_min_rounds() {
@@ -105,8 +109,17 @@ class RSL_Stats {
         return array('level' => intdiv(max(0, $points), self::LEVEL_POINTS) + 1, 'into' => max(0, $points) % self::LEVEL_POINTS, 'need' => self::LEVEL_POINTS);
     }
 
+    /** Forget this request's copy. (The copy saved between page views is keyed by the data, so it never needs flushing.) */
     public static function flush() {
         self::$memo = array();
+    }
+
+    /**
+     * The day a team joined the league (Y-m-d): when it was approved, or
+     * created if it never needed approving. Nights before that aren't its byes.
+     */
+    public static function joined_date($team) {
+        return substr((string) (!empty($team->decided_at) ? $team->decided_at : $team->created_at), 0, 10);
     }
 
     /**
@@ -114,26 +127,79 @@ class RSL_Stats {
      *   games => game_id => array(p_home, upset_team, close, delta => team_id => change|null),
      *   teams => team_id => array(form, streak, history, achievements, peak, upsets, points, now => array(rating,
      *            provisional, position, tier (earned), at_risk, progress (0–1 to next tier), next)),
-     *   leaders => array(improved, giant_killer, points => division => row)
+     *   leaders => array(improved, giant_killer, points => division => row),
+     *   ratings => the latest RSL_Ratings::compute(),
+     *   meetings => meeting_key => list of array(date, status, winner (team id, 0 = draw), sets (home, away)), oldest first
      * )
      */
     public static function season($season) {
         if (isset(self::$memo[$season])) {
             return self::$memo[$season];
         }
-        $games = array_values(array_filter(RSL_Fixtures::games_for_season($season), function ($g) {
+        // Worked out before the build, so a change made meanwhile still
+        // makes a new key next time.
+        $key = self::fingerprint($season);
+        $saved = $key !== null ? get_transient(self::CACHE_PREFIX . $season) : false;
+        if (is_array($saved) && isset($saved['key']) && $saved['key'] === $key) {
+            return self::$memo[$season] = $saved['data'];
+        }
+        // This request may already hold an RSL_Ratings snapshot read before
+        // the fingerprint; building from it could save old data under the new
+        // key. Read it afresh (misses are rare, so two extra queries).
+        RSL_Ratings::flush();
+        $out = self::build($season);
+        if ($key !== null) {
+            set_transient(self::CACHE_PREFIX . $season, array('key' => $key, 'data' => $out), HOUR_IN_SECONDS);
+        }
+        return self::$memo[$season] = $out;
+    }
+
+    /**
+     * A cheap fingerprint of everything season() is built from: the season's
+     * games (results, not live scores), nights, active teams and night
+     * requests, plus the finals rule and the plugin version. One query;
+     * null if it fails (then nothing is saved). Each row is hashed with MD5
+     * (64 bits of it), not CRC32: CRC32 is linear over XOR, so two rows
+     * swapping values (scores entered against the wrong court, then fixed)
+     * would cancel out and keep the old key.
+     */
+    private static function fingerprint($season) {
+        global $wpdb;
+        $nights = RSL_Database::table('nights');
+        $row = $wpdb->get_row($wpdb->prepare("
+            SELECT COUNT(*) AS n, BIT_XOR(CAST(CONV(SUBSTRING(MD5(x), 1, 16), 16, 10) AS UNSIGNED)) AS h FROM (
+                SELECT CONCAT_WS('|', 'g', id, night_id, division, start_time, home_team_id, away_team_id, status, sets, home_sets, away_sets, IFNULL(forfeit_team_id, 0)) AS x
+                    FROM " . RSL_Database::table('games') . " WHERE season = %s
+                UNION ALL
+                SELECT CONCAT_WS('|', 'n', id, night_date, type, IFNULL(published_at, '')) FROM $nights WHERE season = %s
+                UNION ALL
+                SELECT CONCAT_WS('|', 't', id, status, division, est_level, name, slug, colour, IFNULL(created_at, ''), IFNULL(decided_at, ''))
+                    FROM " . RSL_Database::table('teams') . " WHERE season = %s AND status = 'active'
+                UNION ALL
+                SELECT CONCAT_WS('|', 'r', r.id, r.team_id, r.night_id, r.type, r.status)
+                    FROM " . RSL_Database::table('requests') . " r JOIN $nights rn ON rn.id = r.night_id WHERE rn.season = %s
+            ) f", $season, $season, $season, $season));
+        if (!$row) {
+            return null;
+        }
+        return implode('|', array($row->n, $row->h, self::finals_min_rounds(), defined('RSL_VERSION') ? RSL_VERSION : ''));
+    }
+
+    private static function build($season) {
+        $data = RSL_Ratings::season_data($season);
+        $games = array_values(array_filter($data['games'], function ($g) {
             return !empty($g->published_at);
         }));
         $done = array_values(array_filter($games, function ($g) { return $g->status === 'played' || $g->status === 'forfeit'; }));
         $dates = array_values(array_unique(array_map(function ($g) { return $g->night_date; }, $done)));
         sort($dates);
         $teams = array();
-        foreach (RSL_Teams::list_for_season($season) as $t) {
+        foreach ($data['teams'] as $t) {
             $teams[intval($t->id)] = array('team' => $t, 'form' => array(), 'streak' => '', 'history' => array(), 'achievements' => array(),
                 'peak' => null, 'now' => null, 'upsets' => 0, 'points' => 0, 'earned' => null, 'below' => 0, 'first_rating' => null,
                 'rounds' => 0, 'finals' => null);
         }
-        $out = array('games' => array(), 'teams' => array(), 'dates' => $dates, 'leaders' => array());
+        $out = array('games' => array(), 'teams' => array(), 'dates' => $dates, 'leaders' => array(), 'ratings' => array(), 'meetings' => array());
 
         $before = $dates ? RSL_Ratings::compute($season, date('Y-m-d', strtotime($dates[0] . ' -1 day'))) : array();
         $weeks_off = RSL_Requests::weeks_off($season);
@@ -142,6 +208,8 @@ class RSL_Stats {
             $after = RSL_Ratings::compute($season, $date);
             $positions = self::positions($after);
             $tonight = array_filter($done, function ($g) use ($date) { return $g->night_date === $date; });
+            $first = reset($tonight);
+            $cant_make = RSL_Requests::for_night(intval($first->night_id), 'cant_make', array('active', 'handled'));
             $night_wins = array();
             $turned_up = array();   // team => true once it has a game (not a forfeit loss) tonight
             $had_game = array();    // team => true if it had any game tonight
@@ -163,8 +231,15 @@ class RSL_Stats {
                     }
                     $info['close'] = count($sets) >= 3 || intval($g->home_sets) === intval($g->away_sets) || abs($pts[0] - $pts[1]) <= self::CLOSE_POINTS;
                 }
+                // For hype(): who won the last time these two met.
+                $out['meetings'][RSL_Pairing::meeting_key($h, $a)][] = array('date' => $date, 'status' => $g->status,
+                    'winner' => intval($g->home_sets) === intval($g->away_sets) ? 0 : (intval($g->home_sets) > intval($g->away_sets) ? $h : $a),
+                    'sets' => array(intval($g->home_sets), intval($g->away_sets)));
                 if ($g->division === 'ranked' && isset($before[$h]) && isset($before[$a])) {
-                    $info['p_home'] = RSL_Pairing::set_win_probability($before[$h]['rating'], $before[$h]['sd'], $before[$a]['rating'], $before[$a]['sd']);
+                    // No set chance (so no upset) while either team is in placements.
+                    if (!$before[$h]['provisional'] && !$before[$a]['provisional']) {
+                        $info['p_home'] = RSL_Pairing::set_win_probability($before[$h]['rating'], $before[$h]['sd'], $before[$a]['rating'], $before[$a]['sd']);
+                    }
                     foreach (array($h, $a) as $t) {
                         // No change shown while a team is in placements.
                         $info['delta'][$t] = (!$before[$t]['provisional'] && isset($after[$t]) && !$after[$t]['provisional'])
@@ -202,7 +277,7 @@ class RSL_Stats {
                             $info['upset_team'] = $t;
                             $teams[$t]['upsets']++;
                             $teams[$t]['points'] += self::POINTS['upset'];
-                            self::earn($teams[$t], 'giant_killer', 'Giant killer', 'Beat a team they had a ' . round(100 * $chance) . '% set chance against', $date);
+                            self::earn($teams[$t], 'giant_killer', 'Giant killer', 'Beat a higher-rated team', $date);
                         }
                         if ($r['sets'] && $r['sets'][0][0] < $r['sets'][0][1]) {
                             self::earn($teams[$t], 'comeback', 'Comeback', 'Won after losing the first set', $date);
@@ -228,15 +303,16 @@ class RSL_Stats {
             }
             // A team the fixtures left out (odd numbers) isn't penalised: it
             // gets the turn-up points and the round counts towards finals.
-            // A forfeit loss is neither, and nor is a week off the team asked for.
+            // A forfeit loss is neither, and nor is a week off the team asked
+            // for, or a night it said it couldn't make (its game unplayed).
             foreach ($teams as $t => &$row) {
                 if (empty($divisions_tonight[$row['team']->division])) {
                     continue;
                 }
                 $bye = empty($had_game[$t]);
-                $joined = substr((string) $row['team']->created_at, 0, 10);
-                if ($bye && (($joined !== '' && $joined > $date) || isset($weeks_off[$date][$t]))) {
-                    continue; // not in the league yet that night, or took the week off
+                $joined = self::joined_date($row['team']);
+                if ($bye && (($joined !== '' && $joined > $date) || isset($weeks_off[$date][$t]) || isset($cant_make[$t]))) {
+                    continue; // not in the league yet that night, took the week off, or couldn't make it
                 }
                 if ($bye) {
                     $row['points'] += self::POINTS['played'];
@@ -337,7 +413,8 @@ class RSL_Stats {
         }
         $out['leaders'] = $leaders;
         $out['teams'] = $teams;
-        return self::$memo[$season] = $out;
+        $out['ratings'] = $now;
+        return $out;
     }
 
     /**
@@ -368,10 +445,14 @@ class RSL_Stats {
         return array('earned' => self::tier_by_rank(max($floor, $earned['rank'] - 1, $raw['rank'])), 'below' => 0, 'promoted' => false);
     }
 
-    /** Set-win chance for a game not yet played (Ranked), from the latest ratings. */
+    /**
+     * Set-win chance for a game not yet played (Ranked), from the latest
+     * ratings — null while either team is in placements (it would give
+     * away the hidden starting estimate).
+     */
     public static function chance_now($season, $home_id, $away_id) {
-        $now = RSL_Ratings::compute($season);
-        if (!isset($now[$home_id]) || !isset($now[$away_id])) {
+        $now = self::season($season)['ratings'];
+        if (!isset($now[$home_id]) || !isset($now[$away_id]) || $now[$home_id]['provisional'] || $now[$away_id]['provisional']) {
             return null;
         }
         return RSL_Pairing::set_win_probability($now[$home_id]['rating'], $now[$home_id]['sd'], $now[$away_id]['rating'], $now[$away_id]['sd']);
@@ -379,8 +460,9 @@ class RSL_Stats {
 
     /**
      * Hype for a game still to come — no odds: Top-of-table clash, Even
-     * match, Rematch (with last time's result), First meeting, Win streak
-     * on the line. Returns a list of short labels.
+     * match (both teams out of placements), Rematch (with last time's
+     * result), First meeting, Win streak on the line. Returns a list of
+     * short labels. No queries once season() is loaded.
      */
     public static function hype($g) {
         $stats = self::season($g->season);
@@ -397,24 +479,22 @@ class RSL_Stats {
                 $tags[] = 'Even match';
             }
         }
+        // The latest meeting before this game's night (season() lists them oldest first).
         $last = null;
-        foreach (RSL_Fixtures::games_for_season($g->season) as $x) {
-            if (intval($x->id) === intval($g->id) || $x->night_date >= $g->night_date || empty($x->published_at)) {
-                continue;
-            }
-            if (RSL_Pairing::meeting_key(intval($x->home_team_id), intval($x->away_team_id)) === RSL_Pairing::meeting_key($h, $a)
-                && ($x->status === 'played' || $x->status === 'forfeit')) {
-                $last = $x;
+        $key = RSL_Pairing::meeting_key($h, $a);
+        foreach (isset($stats['meetings'][$key]) ? $stats['meetings'][$key] : array() as $m) {
+            if ($m['date'] < $g->night_date) {
+                $last = $m;
             }
         }
         if ($last) {
-            if ($last->status === 'forfeit') {
+            if ($last['status'] === 'forfeit') {
                 $tags[] = 'Rematch';
-            } elseif (intval($last->home_sets) === intval($last->away_sets)) {
-                $tags[] = 'Rematch — last time it finished ' . intval($last->home_sets) . '–' . intval($last->away_sets);
+            } elseif ($last['winner'] === 0) {
+                $tags[] = 'Rematch — last time it finished ' . $last['sets'][0] . '–' . $last['sets'][1];
             } else {
-                $winner = intval($last->home_sets) > intval($last->away_sets) ? $last->home_name : $last->away_name;
-                $tags[] = 'Rematch — ' . $winner . ' won ' . max(intval($last->home_sets), intval($last->away_sets)) . '–' . min(intval($last->home_sets), intval($last->away_sets)) . ' last time';
+                $winner = $last['winner'] === $h ? $g->home_name : $g->away_name;
+                $tags[] = 'Rematch — ' . $winner . ' won ' . max($last['sets']) . '–' . min($last['sets']) . ' last time';
             }
         } else {
             $tags[] = 'First meeting';

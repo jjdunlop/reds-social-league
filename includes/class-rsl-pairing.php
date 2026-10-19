@@ -446,6 +446,8 @@ class RSL_Pairing {
         foreach ($by_night as $night_id => $games) {
             $played = array();
             $off = isset($weeks_off[$games[0]->night_date]) ? $weeks_off[$games[0]->night_date] : array();
+            // A team that said it couldn't make it (its game since removed) didn't sit out for the fixtures' sake either.
+            $off += RSL_Requests::for_night($night_id, 'cant_make', array('active', 'handled'));
             foreach (array_keys(RSL_Teams::DIVISIONS) as $division) {
                 $in = array_filter($games, function ($g) use ($division) { return $g->division === $division; });
                 if (!$in) {
@@ -468,7 +470,7 @@ class RSL_Pairing {
                     }
                 }
                 foreach ($teams as $t) {
-                    $joined = substr((string) $t->created_at, 0, 10);
+                    $joined = RSL_Stats::joined_date($t); // approved (or created) by then — not just applied
                     if ($t->division === $division && empty($played[intval($t->id)]) && empty($off[intval($t->id)]) && ($joined === '' || $joined <= $games[0]->night_date)) {
                         $ctx['byes'][intval($t->id)] = (isset($ctx['byes'][intval($t->id)]) ? $ctx['byes'][intval($t->id)] : 0) + 1;
                     }
@@ -680,8 +682,10 @@ class RSL_Pairing {
         if (is_wp_error($plan)) {
             return $plan;
         }
+        // Supervisors are tidied once the new games are in, so a venue that
+        // still has games after the remake keeps its supervisor.
         foreach ($existing as $g) {
-            RSL_Fixtures::delete_game($g->id);
+            RSL_Fixtures::delete_game($g->id, false);
         }
         foreach ($plan['divisions'] as $d) {
             foreach ($d['out'] as $team_id => $why) {
@@ -709,6 +713,7 @@ class RSL_Pairing {
                 }
             }
         }
+        RSL_Fixtures::drop_idle_supervisors($night->id);
         return array('created' => $created, 'out' => $out, 'notes' => $notes);
     }
 

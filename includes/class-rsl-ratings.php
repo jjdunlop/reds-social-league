@@ -16,6 +16,8 @@
  *   aren't held back by their first month.
  * - Each team gets an uncertainty; above PROVISIONAL_SD it's provisional.
  * - Forfeits and missing results aren't played games — they never count.
+ * - Only published nights count (as on every public page), so unpublishing
+ *   a night takes its results out of the ratings and ladders too.
  * - A team with no played games has no public rating (showing its seed
  *   would reveal the hidden estimate); it sits under the rated teams.
  *
@@ -45,25 +47,39 @@ class RSL_Ratings {
     const SD_CALIBRATION = 0.6;   // the model's raw uncertainty is ~1.7x too cautious in simulation; this makes it honest
 
     private static $memo = array();
+    private static $data = array();
+
+    /**
+     * A season's active teams and games (every division, published or not),
+     * read once per request and shared by the ratings, the ladders and
+     * RSL_Stats, so every view in a request agrees. flush() forgets it.
+     */
+    public static function season_data($season) {
+        if (!isset(self::$data[$season])) {
+            self::$data[$season] = array('teams' => RSL_Teams::list_for_season($season), 'games' => RSL_Fixtures::games_for_season($season));
+        }
+        return self::$data[$season];
+    }
 
     /**
      * Ranked ratings for a season from games on or before $as_of (Y-m-d,
      * null = everything). team_id => array(rating, sd, provisional, games).
-     * Only active Ranked teams.
+     * Only active Ranked teams, and only published nights.
      */
     public static function compute($season, $as_of = null) {
         $key = $season . '|' . $as_of;
         if (isset(self::$memo[$key])) {
             return self::$memo[$key];
         }
+        $data = self::season_data($season);
         $seeds = array();
-        foreach (RSL_Teams::list_for_season($season) as $t) {
+        foreach ($data['teams'] as $t) {
             if ($t->division === 'ranked') {
                 $seeds[intval($t->id)] = RSL_Teams::level_seed_rating($t->est_level);
             }
         }
-        $played = array_filter(RSL_Fixtures::games_for_season($season, 'ranked'), function ($g) use ($as_of, $seeds) {
-            return $g->status === 'played' && ($as_of === null || $g->night_date <= $as_of)
+        $played = array_filter($data['games'], function ($g) use ($as_of, $seeds) {
+            return $g->division === 'ranked' && !empty($g->published_at) && $g->status === 'played' && ($as_of === null || $g->night_date <= $as_of)
                 && isset($seeds[intval($g->home_team_id)]) && isset($seeds[intval($g->away_team_id)]);
         });
         $latest = $as_of;
@@ -180,9 +196,10 @@ class RSL_Ratings {
         return $out;
     }
 
-    /** Forget memoised ratings (after results change in the same request). */
+    /** Forget memoised ratings and season data (after results change in the same request). */
     public static function flush() {
         self::$memo = array();
+        self::$data = array();
     }
 
     /**
@@ -194,17 +211,19 @@ class RSL_Ratings {
      * no position yet); then teams without a played game (position null).
      * move = places gained since the previous round.
      * Unranked: by wins, then set difference, then sets won.
+     * Published nights only.
      */
     public static function ladder($season, $division) {
-        $teams = array_values(array_filter(RSL_Teams::list_for_season($season), function ($t) use ($division) { return $t->division === $division; }));
+        $data = self::season_data($season);
+        $teams = array_values(array_filter($data['teams'], function ($t) use ($division) { return $t->division === $division; }));
         $rows = array();
         foreach ($teams as $t) {
             $rows[intval($t->id)] = array('team' => $t, 'position' => null, 'played' => 0, 'won' => 0, 'drawn' => 0, 'lost' => 0, 'forfeits' => 0,
                 'sets_for' => 0, 'sets_against' => 0, 'rating' => null, 'provisional' => false, 'move' => null, 'new' => false, 'placement' => false);
         }
         $nights_played = array();
-        foreach (RSL_Fixtures::games_for_season($season, $division) as $g) {
-            if ($g->status !== 'played' && $g->status !== 'forfeit') {
+        foreach ($data['games'] as $g) {
+            if ($g->division !== $division || empty($g->published_at) || ($g->status !== 'played' && $g->status !== 'forfeit')) {
                 continue;
             }
             $nights_played[$g->night_date] = true;

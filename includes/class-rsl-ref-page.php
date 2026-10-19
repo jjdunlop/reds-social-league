@@ -32,8 +32,8 @@ class RSL_Ref_Page {
             wp_send_json_error(array('message' => 'Session expired.'), 403);
         }
         $game = RSL_Fixtures::get(isset($_POST['game_id']) ? intval($_POST['game_id']) : 0);
-        if (!RSL_Officials::can_score(get_current_user_id(), $game)) {
-            wp_send_json_error(array('message' => 'Not this game\'s referee.'), 403);
+        if ($why = RSL_Officials::why_cant_score(get_current_user_id(), $game)) {
+            wp_send_json_error(array('message' => $why->get_error_message()), 403);
         }
         $state = json_decode(isset($_POST['state']) ? wp_unslash($_POST['state']) : '', true);
         $stored = RSL_Fixtures::set_live($game->id, is_array($state) ? $state : array(), isset($_POST['seq']) ? intval($_POST['seq']) : 0);
@@ -97,8 +97,8 @@ class RSL_Ref_Page {
             wp_send_json_error(array('message' => 'Your session expired — reload the page and try again.'), 403);
         }
         $game = RSL_Fixtures::get(isset($_POST['game_id']) ? intval($_POST['game_id']) : 0);
-        if (!RSL_Officials::can_score($user_id, $game)) {
-            wp_send_json_error(array('message' => 'Only this game\'s referee can enter its score (on the night, or the two days after).'), 403);
+        if ($why = RSL_Officials::why_cant_score($user_id, $game)) {
+            wp_send_json_error(array('message' => $why->get_error_message()), 403);
         }
         $r = RSL_Fixtures::record_result($game->id, isset($_POST['sets']) ? sanitize_text_field(wp_unslash($_POST['sets'])) : '', $user_id);
         if (is_wp_error($r)) {
@@ -181,15 +181,19 @@ class RSL_Ref_Page {
                 <?php endforeach; ?>
             </nav>
         <?php endif; ?>
+        <?php
+        // Loaded once for the whole night (both sections, every game's checks).
+        $mine = RSL_Officials::commitments($user_id, $night->id);
+        $jobs = RSL_Officials::jobs_for_night($night->id);
+        ?>
         <h3 class="rsl-night-title"><?php echo esc_html($labels[$night->id]); ?> <span>&middot; <?php echo esc_html(date_i18n('l j F', strtotime($night->night_date))); ?></span></h3>
-        <?php echo $this->my_night($user_id, $night, $today); ?>
-        <?php echo $this->open_jobs($user_id, $night, $today); ?>
+        <?php echo $this->my_night($user_id, $night, $today, $mine, $jobs); ?>
+        <?php echo $this->open_jobs($user_id, $night, $today, $mine, $jobs); ?>
         <?php
     }
 
-    /** The person's night in time order, with release buttons and the scoreboard for their games. */
-    private function my_night($user_id, $night, $today) {
-        $items = RSL_Officials::commitments($user_id, $night->id);
+    /** The person's night in time order ($items: their commitments), with release buttons and the scoreboard for their games. */
+    private function my_night($user_id, $night, $today, $items, $jobs) {
         $s = RSL_Officials::settings();
         $opened = false; // only the next game still to score starts open
         $start = RSL_Officials::night_start($night);
@@ -218,9 +222,12 @@ class RSL_Ref_Page {
                                     <form method="post"><?php echo self::fields('release', $night->id, array('job_id' => $c['job']->id)); ?><button type="submit" class="rsl-req-btn">Drop</button></form>
                                 <?php endif; ?>
                             </span>
-                            <?php if ($c['kind'] === 'ref' && RSL_Officials::can_score($user_id, $c['game'])): ?>
+                            <?php $why = $c['kind'] === 'ref' ? RSL_Officials::why_cant_score($user_id, $c['game'], $jobs) : null; ?>
+                            <?php if ($c['kind'] === 'ref' && !$why): ?>
                                 <?php $open = !$opened && $c['game']->status === 'scheduled'; $opened = $opened || $open; ?>
                                 <?php echo self::scoreboard($c['game'], $open); ?>
+                            <?php elseif ($why && $why->get_error_code() === 'rsl_locked'): ?>
+                                <p class="rsl-hint rsl-sb-locked"><?php echo esc_html($why->get_error_message()); ?></p>
                             <?php endif; ?>
                         </li>
                     <?php endforeach; ?>
@@ -232,44 +239,49 @@ class RSL_Ref_Page {
         return ob_get_clean();
     }
 
-    /** Every game (and supervisor role) of the night: take it, yours, or taken. */
-    private function open_jobs($user_id, $night, $today) {
+    /**
+     * Every game (and supervisor role) of the night: take it, yours, taken,
+     * or why not. $mine and $jobs come loaded, so the per-game checks
+     * (RSL_Officials::ref_eligibility) run without queries.
+     */
+    private function open_jobs($user_id, $night, $today, $mine, $jobs) {
         if ($night->night_date < $today) {
             return '';
         }
         $s = RSL_Officials::settings();
-        $jobs = RSL_Officials::jobs_for_night($night->id);
         $is_ref = RSL_Officials::is_ref($user_id);
         $is_sup = RSL_Officials::is_supervisor($user_id);
+        $team = $is_ref ? RSL_Teams::current_team_for_user($user_id, $night->season) : null;
         $by_venue = array();
         foreach (RSL_Fixtures::games_for_night($night->id) as $g) {
             $by_venue[intval($g->venue_id)]['name'] = $g->venue_name;
             $by_venue[intval($g->venue_id)]['division'] = $g->division;
             $by_venue[intval($g->venue_id)]['games'][] = $g;
         }
-        $open = 0;
+        $open = 0; // unclaimed games a ref can still take (not finished ones only an admin can assign)
         foreach ($by_venue as $vid => $v) {
-            $open += count(array_filter($v['games'], function ($g) use ($jobs) { return !isset($jobs['ref'][intval($g->id)]); }));
+            $open += count(array_filter($v['games'], function ($g) use ($jobs) { return !isset($jobs['ref'][intval($g->id)]) && RSL_Officials::open_to_refs($g); }));
         }
         ob_start();
         ?>
         <section class="rsl-jobs">
-            <h4>Jobs this night <span class="rsl-empty">· <?php echo intval($open); ?> game<?php echo $open === 1 ? '' : 's'; ?> still need a ref</span></h4>
+            <h4>Jobs this night <span class="rsl-empty">· <?php echo intval($open); ?> <?php echo $open === 1 ? 'game still needs' : 'games still need'; ?> a ref</span></h4>
             <?php foreach ($by_venue as $vid => $v): ?>
                 <h5 class="rsl-division"><?php echo esc_html(RSL_Teams::DIVISIONS[$v['division']]); ?> <span>&middot; <?php echo esc_html($v['name']); ?></span></h5>
                 <?php if ($is_sup || isset($jobs['supervisor'][$vid])): ?>
                     <?php $sj = isset($jobs['supervisor'][$vid]) ? $jobs['supervisor'][$vid] : null; ?>
+                    <?php $why = !$sj && $is_sup ? RSL_Officials::supervisor_eligibility($night, $vid, $v['games'], $mine) : null; ?>
                     <div class="rsl-job rsl-job-sup">
                         <span class="rsl-job-time">All night</span>
                         <span class="rsl-job-what"><strong>Court supervisor</strong><small>Questions, first aid, keeping the night running · <?php echo esc_html(RSL_Officials::money($s['supervisor_rate'])); ?></small></span>
                         <span class="rsl-job-act"><?php echo self::job_action($sj, $user_id, $is_sup, function () use ($night, $vid) {
                             return self::fields('claim_supervisor', $night->id, array('venue_id' => $vid));
-                        }, null); ?></span>
+                        }, is_wp_error($why) ? $why->get_error_message() : null); ?></span>
                     </div>
                 <?php endif; ?>
                 <?php foreach ($v['games'] as $g): ?>
                     <?php $j = isset($jobs['ref'][intval($g->id)]) ? $jobs['ref'][intval($g->id)] : null; ?>
-                    <?php $why = !$j && $is_ref ? RSL_Officials::check_ref($g->id, $user_id) : null; ?>
+                    <?php $why = !$j && $is_ref ? RSL_Officials::ref_eligibility($g, $night, $team, $mine) : null; ?>
                     <div class="rsl-job">
                         <span class="rsl-job-time"><?php echo esc_html(RSL_Courts::pretty_time(RSL_Courts::hm($g->start_time))); ?></span>
                         <span class="rsl-job-what"><strong><?php echo esc_html($g->home_name . ' v ' . $g->away_name); ?></strong><small><?php echo esc_html($g->court_name); ?> · <?php echo esc_html(RSL_Officials::money($s['ref_rate'])); ?></small></span>
@@ -314,7 +326,8 @@ class RSL_Ref_Page {
      * Tap-to-score for one game: tap a team to add a point, undo, swap
      * sides, sets end at 25 (third set 15 or 25, chosen by the ref) by two
      * clear, "Time's up" ends the set as it stands.
-     * - Every tap is recorded on the phone first (never waits for signal).
+     * - Every tap is recorded on the phone first (never waits for signal),
+     *   with the undo history, so Undo still works after a reload.
      * - The score so far is sent quietly after each point (live on the
      *   public Fixtures page). Each update carries the whole score and a
      *   time-based sequence number, so a lost update doesn't matter and a
@@ -367,20 +380,24 @@ class RSL_Ref_Page {
     function init(el) {
         var d = JSON.parse(el.getAttribute('data-sb')), key = 'rsl_sb_' + d.game;
         var st = { sets: [], s: [0, 0], third: 15, done: false, flip: false }, hist = [];
-        try { var saved = JSON.parse(localStorage.getItem(key) || 'null'); if (saved) { st = saved; } } catch (e) {}
+        // Kept as { st, hist } so Undo still works after a reload; older saves are just st.
+        try {
+            var saved = JSON.parse(localStorage.getItem(key) || 'null');
+            if (saved && saved.st) { st = saved.st; hist = Array.isArray(saved.hist) ? saved.hist : []; } else if (saved) { st = saved; }
+        } catch (e) {}
         var q = function (s) { return el.querySelector(s); }, qa = function (s) { return el.querySelectorAll(s); };
         var msg = q('.rsl-sb-msg'), third = q('.rsl-sb-third select'), live = q('.rsl-sb-live');
         var wrap = el.closest('.rsl-sb-wrap'), timer = null, sending = false, again = false;
         third.value = String(st.third);
         function target() { return st.sets.length === 2 ? st.third : 25; }
         function won() { var w = [0, 0]; st.sets.forEach(function (x) { w[x[0] > x[1] ? 0 : 1]++; }); return w; }
-        function keep() { try { localStorage.setItem(key, JSON.stringify(st)); } catch (e) {} }
+        function keep() { try { localStorage.setItem(key, JSON.stringify({ st: st, hist: hist.slice(-300) })); } catch (e) {} }
         function liveState(state, text) { live.setAttribute('data-state', state); live.textContent = text; }
         // Send the whole score so far; a newer tap while sending just sends again after.
         function push() {
             if (sending) { again = true; return; }
             sending = true; liveState('sending', 'Sending…');
-            var seq = Math.floor((Date.now() - 1704067200000) / 100);
+            var seq = Math.floor((Date.now() - 1704067200000) / 100); // tenths of a second since 2024 (live_seq is BIGINT, so no overflow)
             var body = new URLSearchParams({ action: 'rsl_live_score', nonce: d.nonce, game_id: d.game, seq: seq, state: JSON.stringify({ sets: st.sets, current: st.s }) });
             fetch(d.ajax, { method: 'POST', credentials: 'same-origin', body: body }).then(function (r) { return r.json(); }).then(function (r) {
                 liveState(r.success ? 'live' : 'error', r.success ? 'Live' : 'Not sent');
@@ -477,7 +494,8 @@ JS;
             .rsl-tl-supervisor::before { border-color: #b98a00; }
             .rsl-tl-time { font-weight: 800; font-size: 13px; }
             .rsl-tl-what small { color: var(--rsl-muted); }
-            .rsl-tl .rsl-sb-wrap { grid-column: 1 / -1; }
+            .rsl-tl .rsl-sb-wrap, .rsl-tl .rsl-sb-locked { grid-column: 1 / -1; }
+            .rsl-tl .rsl-sb-locked { margin: 4px 0 0; }
             .rsl-job { display: grid; grid-template-columns: 70px 1fr auto; gap: 8px; align-items: center; padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--rsl-border); border-radius: 8px; }
             .rsl-job-sup { border-color: #e7cf7a; background: #fffbea; }
             .rsl-job-time { font-weight: 800; font-size: 13px; }

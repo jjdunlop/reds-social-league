@@ -82,16 +82,17 @@ class RSL_Admin_Fixtures {
                 self::notice('success', 'Removed ' . $n . ' game' . ($n === 1 ? '' : 's') . '.');
                 return $back;
             case 'publish':
-                if (!RSL_Fixtures::games_for_night($night->id)) {
-                    self::notice('error', 'There are no games to publish yet.');
+            case 'unpublish':
+                $publish = $do === 'publish';
+                $called_off = !$publish && !empty($post['called_off']);
+                $ok = RSL_Fixtures::check_publish($night->id, $publish, $called_off);
+                if (is_wp_error($ok)) {
+                    self::notice('error', $ok->get_error_message());
                     return $back;
                 }
-                RSL_Fixtures::publish_night($night->id, true);
-                self::notice('success', 'Published — the fixtures are on the public Fixtures & Results page.');
-                return $back;
-            case 'unpublish':
-                RSL_Fixtures::publish_night($night->id, false);
-                self::notice('success', 'Unpublished — the fixtures are hidden again.');
+                RSL_Fixtures::publish_night($night->id, $publish);
+                self::notice('success', $publish ? 'Published — the fixtures are on the public Fixtures & Results page.'
+                    : ($called_off ? 'Unpublished as called off — its fees are off every team\'s balance.' : 'Unpublished — the fixtures are hidden again.'));
                 return $back;
             case 'add_game':
                 if ($locked) {
@@ -143,6 +144,13 @@ class RSL_Admin_Fixtures {
                 if ($req && intval($req->night_id) === intval($night->id)) {
                     RSL_Requests::mark_handled($req->id, get_current_user_id());
                     self::notice('success', 'Marked as handled — the team page now says it\'s sorted.');
+                }
+                return $back;
+            case 'withdraw_request':
+                // A "can't make it" taken back (handled or not) — e.g. they're playing after all.
+                $req = RSL_Requests::get(isset($post['request_id']) ? intval($post['request_id']) : 0);
+                if ($req && intval($req->night_id) === intval($night->id)) {
+                    self::result(RSL_Requests::cancel($req->id, get_current_user_id()), 'Withdrawn — that team\'s fees for the night are back to normal.');
                 }
                 return $back;
         }
@@ -275,17 +283,30 @@ class RSL_Admin_Fixtures {
             <div class="notice notice-warning inline rsl-fx-cant"><p><strong>Can't make it:</strong></p><ul>
                 <?php foreach ($cant as $r): ?>
                     <li><?php echo esc_html($r->team_name); ?> told us <?php echo esc_html(human_time_diff(strtotime($r->requested_at), current_time('timestamp'))); ?> ago
-                        <strong><?php echo $r->late ? '(after the cut-off: they pay both teams\' fees, ' . esc_html(RSL_Payments::money(2 * RSL_Payments::settings()['game_fee'])) . ')' : '(before the cut-off: no fee for either team)'; ?></strong> —
+                        <?php $carries = $r->late ? RSL_Payments::late_fees_for_request($r->id) : 0; ?>
+                        <strong><?php echo !$r->late ? '(before the cut-off: no fee for either team)'
+                            : ($carries > 0 ? '(after the cut-off: they pay both teams\' fees — ' . esc_html(RSL_Payments::money($carries)) . ' late fee)' : '(after the cut-off, but no late fee: the other team was out first, or the game was played)'); ?></strong> —
                         <?php if ($r->status === 'handled'): ?><em>handled</em>
                         <?php else: ?>sort it out with their opponent (swap in a standby team, or give the opponent the night off), then
                             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="rsl-fx-inline-form"><?php echo self::fields('handle_request', $season, $night->id, array('request_id' => $r->id)); ?><button class="button button-small">Mark handled</button></form>
-                        <?php endif; ?></li>
+                        <?php endif; ?>
+                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="rsl-fx-inline-form" onsubmit="return confirm('Withdraw this \'can\'t make it\'? Their game fees go back to normal and any late fee comes off.');"><?php echo self::fields('withdraw_request', $season, $night->id, array('request_id' => $r->id)); ?><button class="button-link">Withdraw (they're playing after all)</button></form></li>
                 <?php endforeach; ?>
-            </ul></div>
+            </ul><p class="description">A game that's played anyway is charged to both teams as normal, with no late fee for it. Only the first team out of a game pays for it: a team pulling out of a game the other team had already left pays no late fee for that game.</p></div>
         <?php endif; ?>
+        <?php
+        $playing = array();
+        foreach ($games as $g) {
+            $playing[intval($g->home_team_id)] = true;
+            $playing[intval($g->away_team_id)] = true;
+        }
+        ?>
         <?php if ($off || $double): ?>
             <p class="rsl-fx-requests">
-                <?php if ($off): ?><strong>Week off:</strong> <?php echo esc_html(implode(', ', array_map(function ($r) { return $r->team_name; }, $off))); ?> (left out of the fixtures). <?php endif; ?>
+                <?php if ($off): ?><strong>Week off:</strong> <?php echo esc_html(implode(', ', array_map(function ($r) use ($playing) {
+                    // Asked after this draft was made: it still has their game until it's remade.
+                    return $r->team_name . (isset($playing[intval($r->team_id)]) ? ' (still has a game in this draft — remake or remove it)' : ' (left out of the fixtures)');
+                }, $off))); ?>. <?php endif; ?>
                 <?php if ($double): ?><strong>Asked for two games:</strong> <?php echo esc_html(implode(', ', array_map(function ($r) { return $r->team_name; }, $double))); ?> (first in line for spare slots).<?php endif; ?>
             </p>
         <?php endif; ?>
@@ -298,9 +319,14 @@ class RSL_Admin_Fixtures {
                 </form>
             <?php endif; ?>
             <?php if ($games && !$published): ?>
-                <form method="post" action="<?php echo esc_url($post); ?>"><?php echo self::fields('publish', $season, $night->id); ?><button class="button button-primary">Publish fixtures</button></form>
+                <form method="post" action="<?php echo esc_url($post); ?>" onsubmit="this.querySelector('button').disabled = true;"><?php echo self::fields('publish', $season, $night->id); ?><button class="button button-primary">Publish fixtures</button></form>
+            <?php elseif ($published && !$has_results && !RSL_Fixtures::has_started($night)): ?>
+                <form method="post" action="<?php echo esc_url($post); ?>" onsubmit="this.querySelector('button').disabled = true;"><?php echo self::fields('unpublish', $season, $night->id); ?><button class="button">Unpublish</button></form>
+            <?php elseif ($published && !$has_results): ?>
+                <span class="description">This night has been played, so it stays published — enter its results below.</span>
+                <form method="post" action="<?php echo esc_url($post); ?>" class="rsl-fx-inline-form" onsubmit="return confirm('Only if the night didn\'t go ahead: unpublishing takes every team\'s fees for it off. Unpublish it as called off?');"><?php echo self::fields('unpublish', $season, $night->id, array('called_off' => 1)); ?><button class="button-link button-link-delete">Called off? Unpublish</button></form>
             <?php elseif ($published): ?>
-                <form method="post" action="<?php echo esc_url($post); ?>"><?php echo self::fields('unpublish', $season, $night->id); ?><button class="button">Unpublish</button></form>
+                <span class="description">Results are in, so this night stays published — edit or clear results below.</span>
             <?php endif; ?>
             <?php if ($games && !$published && !$has_results): ?>
                 <form method="post" action="<?php echo esc_url($post); ?>" onsubmit="return confirm('Remove all of this night\'s games?');"><?php echo self::fields('clear', $season, $night->id); ?><button class="button button-link-delete">Clear all</button></form>
@@ -355,6 +381,9 @@ class RSL_Admin_Fixtures {
                 <?php endforeach; ?>
                 </tbody>
             </table>
+            <?php if ($published): ?>
+                <p class="description">A result or forfeit saved here is locked for the game's ref — they can't change it on the Ref Jobs page (clear it here to let them).</p>
+            <?php endif; ?>
             <?php if (!empty($why['_resting'])): ?>
                 <?php $unpaid = RSL_Requests::for_night($night->id, 'unpaid', array('handled')); ?>
                 <p><strong>Not playing this night:</strong> <?php echo esc_html(implode(', ', array_map(function ($id) use ($teams, $off, $unpaid) {

@@ -10,8 +10,8 @@
  *   wp eval-file dev/tests/test-registration.php
  */
 
-if (!defined('WP_CLI') || !WP_CLI) {
-    exit("Run with wp eval-file.\n");
+if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production' && !getenv('RSL_DEV'))) {
+    exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
 global $wpdb;
@@ -24,11 +24,12 @@ $check = function ($label, $ok, $detail = '') use (&$fails) {
     echo ($ok ? "OK: $label\n" : "FAIL: $label" . ($detail !== '' ? " — $detail" : '') . "\n");
 };
 $saved = array();
-foreach (array(RSL_Seasons::CURRENT_OPTION, RSL_Rego::PRODUCT_OPTION) as $opt) { $saved[$opt] = get_option($opt, '__unset__'); }
+foreach (array(RSL_Seasons::CURRENT_OPTION, RSL_Seasons::SIGNUP_OPTION, RSL_Rego::PRODUCT_OPTION) as $opt) { $saved[$opt] = get_option($opt, '__unset__'); }
 // Regos made during this test are removed at the end — including any the
 // past-order scan picks up for other (real, local) accounts.
 $rego_id_before = (int) $wpdb->get_var("SELECT COALESCE(MAX(id), 0) FROM " . RSL_Database::table('regos'));
 update_option(RSL_Seasons::CURRENT_OPTION, $season);
+delete_option(RSL_Seasons::SIGNUP_OPTION);
 $sent = array();
 $mail = function ($null, $atts) use (&$sent) { $sent[] = $atts; return true; };
 add_filter('pre_wp_mail', $mail, 10, 2);
@@ -134,7 +135,10 @@ RSL_Teams::regenerate_code($team->id);
 $check('a new code stops the old link', is_wp_error(RSL_Teams::join_by_code($p1, $old)));
 
 // --- Invites by email -----------------------------------------------------------------------
-$check('invite an unregistered email: told to send the link', ($e = RSL_Teams::invite_by_email($team->id, $cap, "rslr-out-$suffix@example.test")) && is_wp_error($e) && strpos($e->get_error_message(), 'invite link') !== false);
+$e = RSL_Teams::invite_by_email($team->id, $cap, "rslr-out-$suffix@example.test");
+$check('invite an unregistered email: same answer as a registered one (no way to tell who\'s registered)', is_int($e) && $e > 0);
+$check('it waits for them to register (they see it, can\'t accept yet)', count(RSL_Teams::pending_invites_for_user($out)) === 1 && is_wp_error(RSL_Teams::respond_invite($e, $out, true)));
+$check('a bad email is refused', is_wp_error(RSL_Teams::invite_by_email($team->id, $cap, 'not an email')));
 $check('only the captain can invite', is_wp_error(RSL_Teams::invite_by_email($team->id, $p3, "rslr-p1-$suffix@example.test")));
 $sent = array();
 $inv = RSL_Teams::invite_by_email($team->id, $cap, "rslr-p1-$suffix@example.test");
@@ -142,7 +146,8 @@ $check('invite a registered player: pending, not on the team yet', is_int($inv) 
 $check('the player is emailed', count($sent) === 1 && $sent[0]['to'] === "rslr-p1-$suffix@example.test");
 $check('no double invites', is_wp_error(RSL_Teams::invite_by_email($team->id, $cap, "rslr-p1-$suffix@example.test")));
 $team_invites = RSL_Teams::pending_invites_for_team($team->id);
-$check('captain sees only the email they typed', count($team_invites) === 1 && $team_invites[0]->email === "rslr-p1-$suffix@example.test" && !isset($team_invites[0]->display_name));
+$check('captain sees only the emails they typed, both the same way', count($team_invites) === 2 && $team_invites[1]->label === "rslr-p1-$suffix@example.test"
+    && $team_invites[0]->label === "rslr-out-$suffix@example.test" && !isset($team_invites[1]->display_name));
 $check('the player sees the invite', count(RSL_Teams::pending_invites_for_user($p1)) === 1);
 $check('someone else can\'t accept it', is_wp_error(RSL_Teams::respond_invite($inv, $p2, true)));
 $check('accepting puts them on the team', RSL_Teams::respond_invite($inv, $p1, true) === true && RSL_Teams::is_member($team->id, $p1));
@@ -151,6 +156,11 @@ $inv2 = RSL_Teams::invite_by_email($team->id, $cap, "rslr-p2-$suffix@example.tes
 $check('declining leaves them off', RSL_Teams::respond_invite($inv2, $p2, false) === true && !RSL_Teams::is_member($team->id, $p2));
 $inv3 = RSL_Teams::invite_by_email($team->id, $cap, "rslr-p2-$suffix@example.test");
 $check('captain can cancel an invite', RSL_Teams::cancel_invite($inv3, $cap) === true && count(RSL_Teams::pending_invites_for_user($p2)) === 0);
+$sent = array();
+$mate = RSL_Teams::invite_by_email($team->id, $cap, "rslr-p3-$suffix@example.test");
+$check('a teammate\'s email gets the same answer too (no way to tell who\'s on the team)', is_int($mate) && $mate > 0 && count($sent) === 0
+    && !array_filter(RSL_Teams::pending_invites_for_user($p3), function ($i) use ($mate) { return intval($i->id) === $mate; }));
+if (is_int($mate)) { RSL_Teams::cancel_invite($mate, $cap); }
 
 // --- The league page ----------------------------------------------------------------------------
 $portal = new RSL_Portal();
@@ -171,6 +181,16 @@ RSL_Portal::process(array('rsl_nonce' => wp_create_nonce('rsl_front'), 'do' => '
 $check('registering through the invite joins the team', RSL_Players::is_registered($new) && RSL_Teams::is_member($team->id, $new));
 $html = $page($new);
 $check('not cleared: told to pay, with the pay link', strpos($html, 'You need a social rego before your first game') !== false && strpos($html, 'add-to-cart=' . $product_id) !== false);
+// On a team this season and on next season's list too: they play now, so
+// it's still "pay before your first game", not "no rush".
+$next_season = RSL_Seasons::next($season);
+RSL_Seasons::set_signup($next_season);
+$fa_next = RSL_Free_Agents::join($new, $next_season, array('division_pref' => 'unranked'), true);
+$html = $page($new);
+RSL_Seasons::set_signup('');
+$wpdb->delete(RSL_Database::table('free_agents'), array('season' => $next_season, 'user_id' => $new));
+$check('on a team now and on next season\'s list: still told to pay before their first game', !is_wp_error($fa_next)
+    && strpos($html, 'You need a social rego before your first game') !== false && strpos($html, 'no rush') === false);
 $cap_view = $page($cap);
 $roster = substr($cap_view, strpos($cap_view, '<h4>Players'), strpos($cap_view, '<h4>Add players') - strpos($cap_view, '<h4>Players'));
 $check('captain: teammates show cleared / needs rego', strpos($roster, '&#10003; Cleared') !== false && strpos($roster, '&#10007; Needs rego') !== false);
@@ -192,6 +212,9 @@ $free = $mk('free'); $reg($free);
 wp_set_current_user($free);
 RSL_Portal::process(array('rsl_nonce' => wp_create_nonce('rsl_front'), 'do' => 'looking', 'looking' => '1'));
 $check('free agent list', (int) RSL_Players::get($free)->looking === 1);
+$free_view = $page($free);
+$check('on the list with no team: the rego can wait until they\'re placed', strpos($free_view, 'no rush') !== false);
+$check('...and their season steps include paying the rego', strpos($free_view, 'Your season') !== false && strpos($free_view, 'Pay your rego') !== false && strpos($free_view, 'Cleared to play') === false);
 
 // --- Admin ---------------------------------------------------------------------------------------
 wp_set_current_user($admin);
@@ -206,6 +229,9 @@ RSL_Admin::process(array('rsl_nonce' => wp_create_nonce('rsl_team_action'), 'sea
 $check('admin adds a rego by hand', RSL_Rego::clearance($free)['by'] === 'rego');
 ob_start(); (new RSL_Admin())->render_registration(); $reg_page = ob_get_clean();
 $check('registration page renders with the product chosen', strpos($reg_page, 'Rego product') !== false && strpos($reg_page, 'value="' . $product_id . '"  selected=\'selected\'') !== false, substr($reg_page, strpos($reg_page, 'value="' . $product_id . '"'), 60));
+$free_view = $page($free);
+$check('a free agent who\'s already cleared isn\'t asked to pay in their season steps', strpos($free_view, 'Your season') !== false && strpos($free_view, 'Cleared to play') !== false && strpos($free_view, 'Pay your rego') === false);
+wp_set_current_user($admin);
 
 // --- Cleanup ---------------------------------------------------------------------------------------
 wp_set_current_user(0);
@@ -218,6 +244,9 @@ foreach ($team_ids as $tid) {
     $wpdb->delete(RSL_Database::table('invites'), array('team_id' => $tid));
 }
 $wpdb->delete(RSL_Database::table('teams'), array('season' => $season));
+$wpdb->delete(RSL_Database::table('free_agents'), array('season' => $season));
+$wpdb->delete(RSL_Database::table('join_requests'), array('season' => $season));
+$wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('outbox') . " WHERE to_email LIKE %s", '%-' . $suffix . '@example.test'));
 $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('regos') . " WHERE id > %d", $rego_id_before));
 foreach ($users as $u) {
     foreach (array('players', 'regos', 'team_members', 'invites') as $t) { $wpdb->delete(RSL_Database::table($t), array('user_id' => $u)); }

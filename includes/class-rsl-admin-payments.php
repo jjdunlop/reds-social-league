@@ -3,9 +3,11 @@
  * Admin: Social League → Team Balances.
  *  - Rules: game fee, how long before a night "can't make it" is free,
  *    how much a team may owe and still be fixtured; the WooCommerce
- *    product used for top-ups.
+ *    product used for top-ups; who's emailed about "can't make it"s.
  *  - Every team's balance (most owing first), and one team's full history
  *    with credits / charges (cash paid, refunds, corrections) with a note.
+ *  - Earlier seasons' balances not yet cleared, each with "carry it to
+ *    this season's team".
  * Every change posts to admin-post.php (nonce + manage_options).
  */
 
@@ -50,14 +52,21 @@ class RSL_Admin_Payments {
                     'game_fee' => isset($post['game_fee']) ? $post['game_fee'] : 75,
                     'free_cancel_hours' => isset($post['free_cancel_hours']) ? $post['free_cancel_hours'] : 48,
                     'max_owing' => isset($post['max_owing']) ? $post['max_owing'] : 75,
+                    'contact_emails' => isset($post['contact_emails']) ? sanitize_text_field(wp_unslash($post['contact_emails'])) : '',
                 ));
-                update_option(RSL_Payments::PRODUCT_OPTION, isset($post['product_id']) ? intval($post['product_id']) : 0, false);
+                update_option(RSL_Payments::PRODUCT_OPTION, isset($post['product_id']) ? intval($post['product_id']) : 0, true);
                 self::notice('success', 'Saved. A new game fee applies to fixtures published from now on.');
                 return $back;
             case 'adjust':
                 $r = RSL_Payments::adjust($team_id, isset($post['amount']) ? $post['amount'] : 0, isset($post['note']) ? wp_unslash($post['note']) : '', get_current_user_id());
                 self::notice(is_wp_error($r) ? 'error' : 'success', is_wp_error($r) ? $r->get_error_message() : 'Recorded.');
                 return $back;
+            case 'carry':
+                $to = RSL_Teams::get(isset($post['to_team_id']) ? intval($post['to_team_id']) : 0);
+                $r = RSL_Payments::carry_balance($team_id, $to ? $to->id : 0, get_current_user_id());
+                self::notice(is_wp_error($r) ? 'error' : 'success', is_wp_error($r) ? $r->get_error_message()
+                    : ($r < 0 ? 'Debt of ' . RSL_Payments::money(-$r) : 'Credit of ' . RSL_Payments::money($r)) . ' carried to ' . $to->name . '.');
+                return self::url();
         }
         self::notice('error', 'Unknown action.');
         return $back;
@@ -136,12 +145,62 @@ class RSL_Admin_Payments {
             </tbody>
         </table>
 
+        <?php $earlier = RSL_Payments::earlier_balances($season); ?>
+        <?php if ($earlier): ?>
+            <h2>Earlier seasons — not cleared yet</h2>
+            <p class="description">A team is a new entry each season, so what it owed or had in credit stays behind. Carry it to the team's entry this season (credit or debt), or record a payment or refund on its history. It's listed here until its balance is zero.</p>
+            <?php
+            $now = array();
+            foreach (RSL_Teams::list_for_season($season) as $t) {
+                $now[intval($t->id)] = $t;
+            }
+            ?>
+            <table class="widefat striped rsl-pay-table">
+                <thead><tr><th>Team</th><th>Season</th><th class="num">Balance</th><th>Carry to <?php echo esc_html(RSL_Seasons::label($season)); ?></th><th></th></tr></thead>
+                <tbody>
+                <?php foreach ($earlier as $r): ?>
+                    <?php
+                    // Likely the same team this season: its old captain's team now, else the same name.
+                    $cap = RSL_Teams::captain($r->team->id);
+                    $guess = $cap ? RSL_Teams::current_team_for_user($cap->user_id, $season) : null;
+                    $guess_id = $guess ? intval($guess->id) : 0;
+                    foreach ($now as $t) {
+                        if (!$guess_id && strcasecmp($t->name, $r->team->name) === 0) {
+                            $guess_id = intval($t->id);
+                        }
+                    }
+                    ?>
+                    <tr>
+                        <td><strong><?php echo esc_html($r->team->name); ?></strong></td>
+                        <td><?php echo esc_html(RSL_Seasons::label($r->team->season)); ?></td>
+                        <td class="num <?php echo $r->balance < 0 ? 'is-owing' : 'is-ok'; ?>"><?php echo $r->balance < 0 ? 'owes ' . esc_html(RSL_Payments::money(-$r->balance)) : esc_html(RSL_Payments::money($r->balance)) . ' credit'; ?></td>
+                        <td>
+                            <?php if ($now): ?>
+                                <form method="post" action="<?php echo esc_url($post); ?>" style="display: flex; gap: 4px; align-items: center;" onsubmit="this.querySelector('button').disabled = true;">
+                                    <?php echo self::fields('carry', array('team_id' => $r->team->id)); ?>
+                                    <select name="to_team_id" required>
+                                        <option value="">Team…</option>
+                                        <?php foreach ($now as $t): ?><option value="<?php echo intval($t->id); ?>" <?php selected($guess_id, intval($t->id)); ?>><?php echo esc_html($t->name); ?></option><?php endforeach; ?>
+                                    </select>
+                                    <button class="button button-small">Carry over</button>
+                                </form>
+                            <?php else: ?><span class="description">No teams this season yet.</span><?php endif; ?>
+                        </td>
+                        <td><a href="<?php echo esc_url(self::url(array('team' => $r->team->id))); ?>">History &amp; adjust</a></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+
         <h2>Rules</h2>
         <form method="post" action="<?php echo esc_url($post); ?>" class="rsl-pay-settings">
             <?php echo self::fields('save_settings'); ?>
             <label>Game fee $<input type="number" name="game_fee" min="0" step="0.5" value="<?php echo esc_attr($s['game_fee']); ?>"> incl. GST</label>
-            <label>"Can't make it" is free until <input type="number" name="free_cancel_hours" min="0" max="336" value="<?php echo esc_attr($s['free_cancel_hours']); ?>"> hours before the night (after that the team pays both fees)</label>
+            <label>"Can't make it" is free until <input type="number" name="free_cancel_hours" min="0" max="336" value="<?php echo esc_attr($s['free_cancel_hours']); ?>"> hours before the night (after that the team pays both teams' fees for each of its games — unless the other team had already pulled out of that game)</label>
             <label>Not fixtured when owing more than $<input type="number" name="max_owing" min="0" step="1" value="<?php echo esc_attr($s['max_owing']); ?>"></label>
+            <label>League contact email(s) <input type="text" name="contact_emails" value="<?php echo esc_attr($s['contact_emails']); ?>" placeholder="<?php echo esc_attr(get_option('admin_email')); ?>" style="width: 300px;"></label>
+            <span class="description">Who's emailed straight away when a team says it can't make it (separate several with commas). Empty: the site admin email.</span>
             <label>Top-up product
                 <select name="product_id">
                     <option value="0">— Not set: teams can't pay online —</option>
@@ -171,7 +230,7 @@ class RSL_Admin_Payments {
             <label>Amount $<input type="number" name="amount" step="0.01" required style="width: 100px;"></label>
             <label>Note <input type="text" name="note" required maxlength="200" placeholder="e.g. Cash paid at the venue / Refund for cancelled night"></label>
             <button class="button button-primary">Record</button>
-            <span class="description">Positive = money in or a credit · negative = a charge</span>
+            <span class="description">Positive = money in or a credit · negative = a charge. The captain sees the note; other players see "Adjustment by the league".</span>
         </form>
 
         <h3>History</h3>
@@ -179,7 +238,7 @@ class RSL_Admin_Payments {
             <thead><tr><th>Date</th><th>What</th><th class="num">Amount</th></tr></thead>
             <tbody>
             <?php foreach (RSL_Payments::ledger($team->id) as $r): ?>
-                <tr><td><?php echo esc_html(date_i18n('j M Y', strtotime($r->created_at))); ?></td><td><?php echo esc_html(RSL_Payments::describe($r, $labels)); ?><?php echo $r->type === 'topup' && $r->order_id ? ' <span class="description">· order #' . intval($r->order_id) . '</span>' : ''; ?></td>
+                <tr><td><?php echo esc_html(date_i18n('j M Y', strtotime($r->created_at))); ?></td><td><?php echo esc_html(RSL_Payments::describe($r, $labels)); ?><?php echo in_array($r->type, array('topup', 'refund'), true) && $r->order_id ? ' <span class="description">· order #' . intval($r->order_id) . '</span>' : ''; ?></td>
                     <td class="num <?php echo $r->amount < 0 ? 'is-owing' : 'is-ok'; ?>"><?php echo ($r->amount < 0 ? '&minus;' : '+') . esc_html(RSL_Payments::money(abs($r->amount))); ?></td></tr>
             <?php endforeach; ?>
             </tbody>

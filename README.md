@@ -1,9 +1,124 @@
 # Reds Social League
 
 WordPress plugin for MURVC's social volleyball league: registration and
-rego, teams and invites, courts and game nights, fixtures, results,
-ratings and ladders so far; admin fixture tools, refs, team balances,
-automatic pairing and finals to come (see `CLAUDE.md`).
+rego, teams and invites, free agents and placement, courts and game
+nights, automatic fixtures, results, ratings and ladders, referees and a
+live scoreboard, and team balances. Still to come: the sub list and
+finals (see `CLAUDE.md`).
+
+## Players without a team: free agents and placement (0.12.0)
+
+- **Sign-up season.** `RSL_Seasons::signup()` is the season people join,
+  apply for and go on the free agent list for. It's the current season
+  until next season's first night is set and its team-building window has
+  opened — then it's next season, while this one finishes. An admin can pin
+  it. The league page shows "This season" and "Next season" while both run.
+- **Four routes at registration:** join a team I know (invite link or code),
+  start a team (captain application), **find me a team** (the free agent
+  list), or not yet.
+- **The free agent list** (`rsl_free_agents`, one row per person per
+  season): division (Unranked by default for beginners; Ranked or Either is
+  the player's consent to Ranked), earlier/later games, weeks away, a friend
+  group (up to 3, joined with a shareable code — never looked up by email),
+  happy to captain, under 18 (admin-only), let captains find me.
+- **The team-building window** (settings, counted back from night 1): the
+  list opens 21 days before; until the deadline (10 days before) captains
+  with open spots ("Looking for players?") can browse the list and invite
+  (the player accepts), and free agents can ask up to 3 teams (only that
+  team's captain can say yes; requests expire after 3 days and never past
+  the deadline; "not this time" is final for that team that season).
+- **What captains see:** first name, level, positions and "+N friends" —
+  built in one place (`RSL_Free_Agents::browse_for_captain()`), never
+  emails, surnames, ages, the under-18 box, weeks away or bands. Under-18s
+  are left out of browsing (unless an admin turns that on), though an
+  under-18 can still ask a team themselves. No free text from players. When someone joins through the league (pool invite, request,
+  placement, admin), the player and their captain are emailed each other's
+  name and email; rosters still show names only.
+- **Placement** (`RSL_Placement`, pure core like the pairing engine): after
+  the deadline it fills short teams first (under 7), tops up teams that
+  asked (to 8), then forms new teams of about 8 from the rest — grouped by
+  level and game time, friend groups never split, a volunteer captain in
+  each, Unranked-only players never in Ranked, nobody over 10. The admin
+  reviews it on **Social League → Free Agents → Placement**, moves anyone
+  (whole groups move together; a stale tab is refused), names new teams,
+  and confirms (safe to run twice). Anyone not placed is told why, charged
+  nothing, and first in line. Placed players get 3 days to say "Not for me".
+- **One team per person per season** holds on every route: joining runs
+  under a per-person database lock; the roster maximum (10) applies to
+  every route except an admin's, under a per-team lock so two people
+  joining at once can't push a team over it. Joining by any route marks the free agent
+  placed and closes their other requests and invites.
+- **Email queue** (`rsl_outbox`, `RSL_Mail`): free-agent emails are queued
+  with a dedupe key and sent in batches of 25 by cron (`rsl_hourly`,
+  `rsl_send_outbox`); sent mail is deleted after 30 days. The Free Agents
+  screen shows queued/failed mail and can send now or retry.
+- **Money:** registering, the list and being placed are free; the rego is
+  needed before a first game. Team cards offer "Pay my share": each
+  player's fair part of what the rest of the season still needs, less what
+  they have already topped up, so it comes off as they pay and together the
+  shares cover the season.
+
+### Review fixes (0.12.0)
+
+A five-lens review (scalability, security, privacy, correctness,
+robustness) with skeptical verification of every finding kept 46 issues;
+they are fixed (or found not to be real) and each fix has a test. What
+changed for people:
+
+- **Money.** `RSL_Payments::sync_night()` is the one place game fees and
+  late fees are worked out, under a per-night lock, and every row carries a
+  unique charge key — two overlapping publishes can't double-charge. **Late
+  fees are per game** (a late double-header withdrawal is $300). Only the
+  first team out of a game pays: pulling out of a game the other team had
+  already left costs nothing. A game that
+  was played after a "can't make it" is charged normally to both teams; a
+  forfeit by the withdrawing team never charges its opponent. A captain
+  can't withdraw a "can't make it" once the night has started or a result is
+  in; admins can (also for handled ones). Publishing refuses while a team
+  with a week off still has a game in the draft; a night with results, or
+  one that has already started, can't be unpublished (an admin can still
+  unpublish a played night as called off, which takes its fees off).
+- **Refunds.** WooCommerce refunds and cancelled orders reverse top-ups
+  (capped at what was credited) and end the rego bought in that order; a
+  cancelled order set back to Processing or Completed puts the top-up back
+  (less any refunds) and gives the rego back (not one an admin removed);
+  admins can remove a rego by hand. The rego is sold one at a time.
+- **Seasons.** Admins carry a team's balance to next season (paired rows);
+  earlier seasons' non-zero balances stay listed until cleared. A "League
+  contact email(s)" setting (Team Balances) gets the league's notices.
+- **Calendar.** Re-saving season dates only removes empty nights; a night
+  with fixtures, results, ref jobs, "can't make it" requests or charges is
+  kept and marked until it's cleared on the Fixtures page; week-off and
+  two-games requests on a removed night go with it (the save notice names
+  those teams). Making a night a Bye also withdraws any leftover "can't
+  make it". A night with games can't be made a Bye or Finals. Both ask
+  before changing a published night.
+- **Refs.** Refs can't take a game once it has finished (supervisors: a
+  venue once its last game ends) — admins assign those. A result or forfeit
+  the league enters is locked to the ref, who can correct only their own
+  save. Removing a ref or supervisor releases their jobs still to come; a
+  venue's supervisor goes with its last game that night, but remaking a
+  night's fixtures keeps the supervisor of a venue that still has games. The
+  pay report CSV is safe to open in a spreadsheet. Scoreboard Undo survives a
+  reload.
+- **Public pages.** The season's stats are cached between views (keyed by a
+  one-query fingerprint of the data, so they're never stale), "hype" no
+  longer runs a query per game, live scores are polled only during the
+  night's games (from 15 minutes before to 30 after, slower when nothing
+  changes, stopping when every result is in). No "Even match", upset or
+  giant-killer percentage while a team is in placements (it would leak the
+  hidden starting level). Ratings and ladders count published nights only.
+  "Can't make it" shows "Free until …" or the charge before confirming.
+- **Teams.** Last season's invite links stop working; an email invite gets
+  the same answer whether or not the email is registered (unregistered
+  emails wait for the person to register); captains get 20 email invites a
+  day; withdrawn and declined applications free the team name; players can
+  leave a team; admins can use the captain buttons.
+- **Housekeeping.** Options read on every request are autoloaded; only one
+  request runs a schema upgrade at a time; timestamps are written in the
+  site's time; the dev scripts and tests refuse to run on a production site
+  unless `RSL_DEV=1` is set, and are left out of release downloads
+  (`.gitattributes`).
 
 ## Team balances and payments (0.11.0)
 
@@ -61,8 +176,8 @@ automatic pairing and finals to come (see `CLAUDE.md`).
   time-based sequence, so a late update never overwrites a newer one).
   One scoreboard open at a time; it closes after saving.
 - **Live on the public Fixtures page:** games in progress show **LIVE**
-  with the sets so far and the current set; on game night the page
-  updates itself every 15 seconds (no reload).
+  with the sets so far and the current set; during the night's games the
+  page updates itself about every 20 seconds (no reload) — see 0.12.0.
 - Tables `rsl_officials`, `rsl_jobs`; `games.live` (schema 8).
   Classes `RSL_Officials`, `RSL_Ref_Page`, `RSL_Admin_Officials`.
 
@@ -272,8 +387,9 @@ Social League → **Courts & Nights** — what fixtures will be made from.
   game-night hours (a court can finish earlier than the rest).
 - **Season calendar** — set the first and last game night, the weekday
   (Sundays), and the **game length for Ranked and for Unranked**. Saving
-  lists every game night; re-saving keeps nights already set up and drops
-  any outside new dates.
+  lists every game night; re-saving keeps nights already set up and
+  removes empty nights outside the new dates (a night already in use is
+  kept and marked — see 0.12.0).
 - **The grid** — one row per night, one column per venue: courts, hours,
   how many games and for which division, with byes greyed, finals marked
   and nights that differ from the usual flagged. Each night is Regular,

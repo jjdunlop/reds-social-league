@@ -6,8 +6,8 @@
  *   wp eval-file dev/tests/test-pairing.php
  */
 
-if (!defined('WP_CLI') || !WP_CLI) {
-    exit("Run with wp eval-file.\n");
+if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production' && !getenv('RSL_DEV'))) {
+    exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
 global $wpdb;
@@ -172,11 +172,55 @@ RSL_Fixtures::publish_night($nights[0]->id, false);
 $check('nor one with results in', is_wp_error(RSL_Pairing::generate($nights[0]->id)) && RSL_Pairing::generate($nights[0]->id)->get_error_code() === 'rsl_results');
 RSL_Fixtures::publish_night($nights[0]->id);
 
+// Byes: a team only sat out for the fixtures' sake if it was in the league by then (approved,
+// not just applied) and hadn't said it couldn't make that night. Three teams that weren't in week one.
+$extra = array();
+foreach (array('Bye', 'Late', 'Cant') as $tag) {
+    $extra[$tag] = RSL_Teams::create($season, array('name' => "Pair $tag $suffix", 'division' => 'ranked', 'level' => 'solid'));
+    $wpdb->update(RSL_Database::table('teams'), array('created_at' => date('Y-m-d H:i:s', strtotime($nights[0]->night_date . ' -3 days'))), array('id' => $extra[$tag]->id));
+}
+$wpdb->update(RSL_Database::table('teams'), array('decided_at' => date('Y-m-d 10:00:00', strtotime($nights[0]->night_date . ' +1 day'))), array('id' => $extra['Late']->id));
+$wpdb->insert(RSL_Database::table('requests'), array('team_id' => $extra['Cant']->id, 'night_id' => $nights[0]->id, 'type' => 'cant_make', 'status' => 'handled',
+    'requested_by' => 0, 'requested_at' => current_time('mysql')));
+$ctx = RSL_Pairing::context($nights[1]);
+$check('a team in the league but left out of a night has sat out once', isset($ctx['byes'][intval($extra['Bye']->id)]) && $ctx['byes'][intval($extra['Bye']->id)] === 1);
+$check('...but not one approved after that night, or one that said it couldn\'t make it', !isset($ctx['byes'][intval($extra['Late']->id)]) && !isset($ctx['byes'][intval($extra['Cant']->id)]));
+foreach ($extra as $t) {
+    $wpdb->delete(RSL_Database::table('requests'), array('team_id' => $t->id));
+    $wpdb->delete(RSL_Database::table('teams'), array('id' => $t->id));
+}
+
 RSL_Ratings::flush();
 RSL_Pairing::generate($nights[1]->id);
 $week1 = array_map(function ($g) { return RSL_Pairing::meeting_key(intval($g->home_team_id), intval($g->away_team_id)); }, RSL_Fixtures::games_for_night($nights[0]->id));
 $week2 = array_map(function ($g) { return RSL_Pairing::meeting_key(intval($g->home_team_id), intval($g->away_team_id)); }, RSL_Fixtures::games_for_night($nights[1]->id));
 $check('week two repeats no week-one game', !array_intersect($week1, $week2) && count($week2) >= 3);
+
+// Court supervisors: a remake keeps a venue's supervisor when the venue still has games;
+// removing a venue's last game takes its supervisor off (one of two games doesn't).
+$n5 = $nights[4];
+$jobs_t = RSL_Database::table('jobs');
+RSL_Pairing::generate($n5->id);
+foreach (array($hall, $uni) as $v) {
+    $wpdb->insert($jobs_t, array('night_id' => $n5->id, 'type' => 'supervisor', 'venue_id' => $v->id, 'user_id' => 1, 'rate' => 30));
+}
+$sup_jobs = function ($venue_id = 0) use ($wpdb, $jobs_t, $n5) {
+    return array_map('intval', $wpdb->get_col($wpdb->prepare("SELECT id FROM $jobs_t WHERE night_id = %d AND type = 'supervisor'" . ($venue_id ? ' AND venue_id = ' . intval($venue_id) : '') . " ORDER BY id", $n5->id)));
+};
+$before = $sup_jobs();
+$re = RSL_Pairing::generate($n5->id);
+$check('a remake keeps the supervisors of venues that still have games (the same jobs)', !is_wp_error($re) && count($before) === 2 && $sup_jobs() === $before, implode(',', $sup_jobs()) . ' vs ' . implode(',', $before));
+$at_venue = function ($venue) use ($n5) {
+    return array_values(array_filter(RSL_Fixtures::games_for_night($n5->id), function ($g) use ($venue) { return intval($g->venue_id) === intval($venue->id); }));
+};
+$hall_games = $at_venue($hall);
+RSL_Fixtures::delete_game($hall_games[0]->id);
+$check('removing one of a venue\'s games keeps its supervisor', count($hall_games) === 3 && count($sup_jobs($hall->id)) === 1, count($hall_games) . ' hall games');
+$uni_games = $at_venue($uni);
+foreach ($uni_games as $g) { RSL_Fixtures::delete_game($g->id); }
+$check('removing a venue\'s last game takes its supervisor off (the other venue\'s stays)', count($uni_games) >= 1 && count($sup_jobs($uni->id)) === 0 && count($sup_jobs($hall->id)) === 1);
+foreach (RSL_Fixtures::games_for_night($n5->id) as $g) { RSL_Fixtures::delete_game($g->id); }
+$check('clearing the night leaves no supervisor', $sup_jobs() === array());
 
 // --- Admin page ----------------------------------------------------------------------------------
 $admin = wp_insert_user(array('user_login' => "rslpa-$suffix", 'user_email' => "rslpa-$suffix@example.test", 'user_pass' => wp_generate_password(), 'role' => 'administrator'));
@@ -222,6 +266,7 @@ wp_delete_user($admin);
 $wpdb->delete(RSL_Database::table('games'), array('season' => $season));
 $wpdb->delete(RSL_Database::table('ledger'), array('season' => $season));
 foreach (RSL_Courts::nights($season) as $n) {
+    $wpdb->delete(RSL_Database::table('jobs'), array('night_id' => $n->id));
     $wpdb->delete(RSL_Database::table('night_courts'), array('night_id' => $n->id));
     $wpdb->delete(RSL_Database::table('night_venues'), array('night_id' => $n->id));
 }

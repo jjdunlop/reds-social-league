@@ -11,8 +11,8 @@
  * exactly that. Refuses to run outside WP-CLI.
  */
 
-if (!defined('WP_CLI') || !WP_CLI) {
-    exit("Run this with wp eval-file, on a local copy only.\n");
+if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production' && !getenv('RSL_DEV'))) {
+    exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 
 require_once ABSPATH . 'wp-admin/includes/user.php';
