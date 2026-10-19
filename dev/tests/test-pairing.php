@@ -21,16 +21,18 @@ $w = RSL_Pairing::weights();
 $r = function ($list) { $out = array(); foreach ($list as $id => $rating) { $out[$id] = array('rating' => $rating, 'sd' => 0); } return $out; };
 $has_pair = function ($pairs, $a, $b) { foreach ($pairs as $p) { if (($p[0] == $a && $p[1] == $b) || ($p[0] == $b && $p[1] == $a)) { return true; } } return false; };
 
-// --- Expected sets and costs ---------------------------------------------------------
+// --- Set-win chances and costs -------------------------------------------------------
 $check('even teams: 50/50 a set', abs(RSL_Pairing::set_win_probability(1500, 0, 1500, 0) - 0.5) < 1e-9);
 $check('400 points apart: about 10 to 1', abs(RSL_Pairing::set_win_probability(1900, 0, 1500, 0) - 10 / 11) < 1e-6);
 $check('uncertain ratings are pulled towards 50/50', RSL_Pairing::set_win_probability(1900, 200, 1500, 200) < RSL_Pairing::set_win_probability(1900, 0, 1500, 0));
-$gap = 400 * log10(2); // p = 2/3: an expected 2-1
+$gap = 400 * log10(2); // a 67/33 set-win chance
 $c = RSL_Pairing::pair_cost(1, 2, $r(array(1 => 1500 + $gap, 2 => 1500)), array(), $w);
-$check('an expected 2-1 costs 1', abs($c['closeness'] - 1) < 1e-6 && abs($c['margin'] - 1) < 1e-6);
+$check('a 67/33 matchup costs 1', abs($c['closeness'] - 1) < 1e-6 && abs($c['p'] - 2 / 3) < 1e-6 && abs($c['edge'] - 1 / 3) < 1e-6);
+$c = RSL_Pairing::pair_cost(1, 2, $r(array(1 => 1500 + 400 * log10(3), 2 => 1500)), array(), $w);
+$check('a 75/25 matchup costs 2.25', abs($c['closeness'] - 2.25) < 1e-6);
 $check('an even first meeting costs (almost) nothing', RSL_Pairing::pair_cost(1, 2, $r(array(1 => 1500, 2 => 1500)), array(), $w)['cost'] < 0.01);
 $m = array('1-2' => array('count' => 1, 'last' => 4));
-$check('a second meeting costs one expected 2-1', abs(RSL_Pairing::pair_cost(1, 2, null, $m, $w)['repeat'] - 1) < 1e-9);
+$check('a second meeting costs the same as a 67/33 game', abs(RSL_Pairing::pair_cost(1, 2, null, $m, $w)['repeat'] - 1) < 1e-9);
 $m = array('1-2' => array('count' => 2, 'last' => 4));
 $check('a third meeting costs far more than any lopsided game', RSL_Pairing::pair_cost(1, 2, null, $m, $w)['repeat'] > 9);
 $m = array('1-2' => array('count' => 1, 'last' => 1));
@@ -157,7 +159,7 @@ $check('odd Unranked: the spare team gets a game against the double-header team'
     && count(array_filter($ug, function ($g) use ($u) { return in_array(intval($u[0]->id), array(intval($g->home_team_id), intval($g->away_team_id)), true); })) === 2);
 $why = RSL_Pairing::explain_night($nights[0]->id);
 $first = reset($ranked_games);
-$check('each game explains itself (first meeting, expected score)', isset($why[intval($first->id)]) && $why[intval($first->id)]['count'] === 0 && $why[intval($first->id)]['p'] !== null);
+$check('each game explains itself (first meeting, set chance)', isset($why[intval($first->id)]) && $why[intval($first->id)]['count'] === 0 && $why[intval($first->id)]['p'] !== null);
 
 $again = RSL_Pairing::generate($nights[0]->id);
 $check('remaking replaces the night\'s games', !is_wp_error($again) && count(RSL_Fixtures::games_for_night($nights[0]->id)) === count($games));
@@ -209,7 +211,8 @@ ob_start(); (new RSL_Admin_Fixtures())->render(); $html = ob_get_clean();
 $check('admin page offers automatic fixtures on an empty night', strpos($html, 'Make fixtures automatically') !== false && strpos($html, 'How automatic fixtures are made') !== false);
 $_GET = array('page' => 'rsl-fixtures', 'season' => $season, 'night' => $nights[1]->id);
 ob_start(); (new RSL_Admin_Fixtures())->render(); $html = ob_get_clean();
-$check('admin page shows expected scores and meetings', strpos($html, 'meeting') !== false && preg_match('/\d\.\d–\d\.\d/u', $html) === 1);
+$check('admin page shows set chances (not expected scores) and meetings', strpos($html, 'meeting') !== false && preg_match('/\d+% · \d+%/u', $html) === 1
+    && strpos($html, 'Set chance') !== false && strpos($html, 'expected one-sided') === false);
 
 // --- Cleanup --------------------------------------------------------------------------------------
 $_GET = array();

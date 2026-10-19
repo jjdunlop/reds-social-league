@@ -5,23 +5,63 @@ rego, teams and invites, courts and game nights, fixtures, results,
 ratings and ladders so far; admin fixture tools, refs, team balances,
 automatic pairing and finals to come (see `CLAUDE.md`).
 
+## Timed-game ratings, set chances and game-style pages (0.7.0)
+
+**Ratings for timed games.** Games are best of three inside an hour: a set
+can end when time's up (the score as it stands counts as a set win), a
+third set may go to 15 or just run to time, and a game can end 1–1 (a
+draw on the record). Ratings now use the **points in every set** (each
+rally a small contest, discounted because rallies aren't independent)
+plus a **small bonus for winning sets**, with sets counted in proportion
+to how complete they were. A 1–1 draw where one team won far more points
+still moves the ratings. `dev/simulate-ratings.php` plays timed seasons
+rally by rally: points + set bonus finds the true order faster than sets
+alone (after 2 rounds about as well as sets alone after 4) and is closer
+at season's end (48 vs 53 rating points off). Uncertainty is calibrated
+from the same simulations; a team is provisional for about its first two games.
+
+**Set chance, not expected score.** Closeness is each team's chance of
+winning any one set (independent of how many sets fit in the hour). The
+admin Fixtures page shows it as "62% · 38%"; costs: 50/50 = 0, 67/33 = 1,
+75/25 = 2.25, 80/20 = 3.2. Compared in simulation with ladder places
+apart, raw rating points and standard deviations apart — all similar in
+an evenly spread league; win chance edges ahead in a lumpy one (a few
+strong teams, a bunched middle).
+
+**Game-style public pages** (`RSL_Stats`, teams only):
+- **Tiers** (Ranked): Bronze < 1350 ≤ Silver < 1500 ≤ Gold < 1650 ≤
+  Platinum < 1800 ≤ Diamond. New teams are **In placements** until their
+  rating settles — no tier or rating change shown (which also keeps the
+  hidden starting estimate hidden). Names/bands in `RSL_Stats::TIERS`.
+- **Fixtures:** tier and ladder place under each Ranked team; the night's
+  rating change on results; an **Upset!** flag when the winner had under
+  a 35% set chance; for coming games a match-up bar in the teams' colours
+  with each side's set chance and a verdict (Even match / Close — slight
+  edge / Upset alert).
+- **Ladder:** tier and last-5 form for each team.
+- **Team page:** a profile card under the name — tier (and peak), form,
+  streak, journey (e.g. In placements → Silver R2 → Gold R4) and
+  achievements: Giant killer, Comeback, Flawless, On fire (3 wins in a
+  row), Double trouble (won both games of a double-header), Top spot.
+  Each result shows the rating change and any upset win.
+
 ## Automatic fixtures and the Fixtures admin (0.6.0)
 
 Social League → **Fixtures**: one game night at a time — *Make fixtures
-automatically*, check them (each game shows its expected score, earlier
+automatically*, check them (each game shows each team's set chance, earlier
 meetings, double-headers and whether time preferences were met), adjust
 by hand (remove / add a game in a free slot), **Publish**, then enter
 results or forfeits. Published nights are locked; a night with results
 can't be remade.
 
 How the engine (`RSL_Pairing`) pairs a night — every possible pairing
-gets a cost in one currency, "expected one-sided sets", and the cheapest
-full set of games wins (exact matching up to 18 teams, a strong search above):
+gets a cost in one unit, "a 2-to-1 matchup", and the cheapest full set
+of games wins (exact matching up to 18 teams, a strong search above):
 
-- **Closeness (Ranked):** (expected set margin)² from the two ratings —
-  an even game costs 0, an expected 2–1 costs 1, an expected 2.5–0.5
-  costs 4. New teams' ratings count as uncertain (pulled towards 50/50).
-- **Variety:** a 2nd meeting costs 1 (an expected 2–1); a 3rd costs 25,
+- **Closeness (Ranked):** from the two ratings, each team's chance of
+  winning a set — 50/50 costs 0, 67/33 costs 1, 75/25 costs 2.25,
+  80/20 costs 3.2. New teams' ratings count as uncertain (pulled towards 50/50).
+- **Variety:** a 2nd meeting costs 1 (the same as a 67/33 game); a 3rd costs 25,
   so twice a season is the cap unless there's no alternative. Last
   week's opponent never; two rounds ago +1.
 - **Unranked:** no ratings, so purely least-played, longest-ago.
@@ -36,6 +76,8 @@ full set of games wins (exact matching up to 18 teams, a strong search above):
 
 `dev/simulate-pairing.php` plays many pretend seasons through the real
 code to compare strategies (14 teams, 10 rounds, 40 seasons each):
+
+(Expected set gap = how one-sided games were by true strength, over a 3-set game; lower is closer.)
 
 | Strategy | Expected set gap | 2–1 games | Opponents per team | 3rd+ meetings / season | Most meetings |
 |---|---|---|---|---|---|

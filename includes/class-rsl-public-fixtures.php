@@ -83,7 +83,7 @@ class RSL_Public_Fixtures {
                     ? 'Fixtures for this week come out on ' . esc_html(date_i18n('l j F', strtotime($night->night_date . ' -6 days'))) . '.'
                     : 'No fixtures were published for this night.'; ?></p>
             <?php else: ?>
-                <?php echo self::night_games($night, $mine, $today); ?>
+                <?php echo self::night_games($night, $mine, $today, RSL_Stats::season($season)); ?>
             <?php endif; ?>
 
             <p class="rsl-links"><a href="<?php echo esc_url(self::ladder_url()); ?>">League ladder &rarr;</a> &nbsp; <a href="<?php echo esc_url(get_permalink(intval(get_option(RSL_Public::PAGE_OPTION)))); ?>">All teams &rarr;</a></p>
@@ -117,7 +117,7 @@ class RSL_Public_Fixtures {
     }
 
     /** One night's games, venue by venue, grouped by start time. */
-    private static function night_games($night, $mine, $today) {
+    private static function night_games($night, $mine, $today, $stats) {
         $games = RSL_Fixtures::games_for_night($night->id);
         if (empty($games)) {
             return '<p class="rsl-empty">No games this week.</p>';
@@ -136,7 +136,7 @@ class RSL_Public_Fixtures {
                 <?php foreach ($v['times'] as $time => $at): ?>
                     <div class="rsl-time"><?php echo esc_html(RSL_Courts::pretty_time($time)); ?></div>
                     <?php foreach ($at as $g): ?>
-                        <?php echo self::game_row($g, $mine, $today); ?>
+                        <?php echo self::game_row($g, $mine, $today, $stats); ?>
                     <?php endforeach; ?>
                 <?php endforeach; ?>
             </section>
@@ -145,8 +145,10 @@ class RSL_Public_Fixtures {
         return ob_get_clean();
     }
 
-    private static function game_row($g, $mine, $today) {
-        $is_mine = $mine && in_array($mine, array(intval($g->home_team_id), intval($g->away_team_id)), true);
+    private static function game_row($g, $mine, $today, $stats) {
+        $h = intval($g->home_team_id);
+        $a = intval($g->away_team_id);
+        $is_mine = $mine && in_array($mine, array($h, $a), true);
         $home = (object) array('name' => $g->home_name, 'slug' => $g->home_slug, 'colour' => $g->home_colour);
         $away = (object) array('name' => $g->away_name, 'slug' => $g->away_slug, 'colour' => $g->away_colour);
         $home_won = $away_won = false;
@@ -154,37 +156,94 @@ class RSL_Public_Fixtures {
             $home_won = intval($g->home_sets) > intval($g->away_sets);
             $away_won = intval($g->away_sets) > intval($g->home_sets);
         } elseif ($g->status === 'forfeit') {
-            $home_won = intval($g->forfeit_team_id) === intval($g->away_team_id);
+            $home_won = intval($g->forfeit_team_id) === $a;
             $away_won = !$home_won;
         }
+        $info = isset($stats['games'][intval($g->id)]) ? $stats['games'][intval($g->id)] : null;
+        $ranked = $g->division === 'ranked';
+        // The match-up: set chances going in (played) or from today's ratings (coming up).
+        $p = null;
+        if ($ranked && $g->status === 'scheduled' && $g->night_date >= $today) {
+            $p = RSL_Stats::chance_now($g->season, $h, $a);
+        }
+        $upset = $info && $info['upset_team'] ? intval($info['upset_team']) : 0;
         ob_start();
         ?>
-        <div class="rsl-game<?php echo $is_mine ? ' is-mine' : ''; ?>">
+        <div class="rsl-game<?php echo $is_mine ? ' is-mine' : ''; ?><?php echo $upset ? ' is-upset' : ''; ?>">
             <div class="rsl-game-court"><?php echo esc_html($g->court_name); ?><?php if ($is_mine): ?> <span class="rsl-chip">Your game</span><?php endif; ?></div>
-            <div class="rsl-game-match">
-                <a class="rsl-side rsl-side-home<?php echo $home_won ? ' is-winner' : ''; ?>" href="<?php echo esc_url(RSL_Public::team_url($home)); ?>">
-                    <span class="rsl-side-name"><?php echo esc_html($home->name); ?></span><?php echo RSL_Public::badge($home, 'small'); ?>
-                </a>
-                <div class="rsl-score">
-                    <?php if ($g->status === 'played'): ?>
-                        <strong><?php echo intval($g->home_sets); ?>&ndash;<?php echo intval($g->away_sets); ?></strong>
-                        <small><?php echo esc_html(RSL_Fixtures::format_sets($g->sets, ' · ')); ?></small>
-                    <?php elseif ($g->status === 'forfeit'): ?>
-                        <strong>Forfeit</strong>
-                        <small><?php echo esc_html(intval($g->forfeit_team_id) === intval($g->home_team_id) ? $g->home_name : $g->away_name); ?> forfeited</small>
-                    <?php elseif ($g->night_date < $today): ?>
-                        <strong class="rsl-vs">vs</strong><small>Result to come</small>
-                    <?php else: ?>
-                        <strong class="rsl-vs">vs</strong>
-                    <?php endif; ?>
+            <div class="rsl-game-body">
+                <div class="rsl-game-match">
+                    <a class="rsl-side rsl-side-home<?php echo $home_won ? ' is-winner' : ''; ?>" href="<?php echo esc_url(RSL_Public::team_url($home)); ?>">
+                        <span class="rsl-side-text"><span class="rsl-side-name"><?php echo esc_html($home->name); ?></span><?php echo $ranked ? self::side_meta($h, $stats, $info) : ''; ?></span><?php echo RSL_Public::badge($home, 'small'); ?>
+                    </a>
+                    <div class="rsl-score">
+                        <?php if ($upset): ?><span class="rsl-upset">Upset!</span><?php endif; ?>
+                        <?php if ($g->status === 'played'): ?>
+                            <strong><?php echo intval($g->home_sets); ?>&ndash;<?php echo intval($g->away_sets); ?></strong>
+                            <small><?php echo esc_html(RSL_Fixtures::format_sets($g->sets, ' · ')); ?></small>
+                        <?php elseif ($g->status === 'forfeit'): ?>
+                            <strong>Forfeit</strong>
+                            <small><?php echo esc_html(intval($g->forfeit_team_id) === $h ? $g->home_name : $g->away_name); ?> forfeited</small>
+                        <?php elseif ($g->night_date < $today): ?>
+                            <strong class="rsl-vs">vs</strong><small>Result to come</small>
+                        <?php else: ?>
+                            <strong class="rsl-vs">vs</strong>
+                        <?php endif; ?>
+                    </div>
+                    <a class="rsl-side rsl-side-away<?php echo $away_won ? ' is-winner' : ''; ?>" href="<?php echo esc_url(RSL_Public::team_url($away)); ?>">
+                        <?php echo RSL_Public::badge($away, 'small'); ?><span class="rsl-side-text"><span class="rsl-side-name"><?php echo esc_html($away->name); ?></span><?php echo $ranked ? self::side_meta($a, $stats, $info) : ''; ?></span>
+                    </a>
                 </div>
-                <a class="rsl-side rsl-side-away<?php echo $away_won ? ' is-winner' : ''; ?>" href="<?php echo esc_url(RSL_Public::team_url($away)); ?>">
-                    <?php echo RSL_Public::badge($away, 'small'); ?><span class="rsl-side-name"><?php echo esc_html($away->name); ?></span>
-                </a>
+                <?php if ($p !== null): ?>
+                    <?php $hp = (int) round(100 * $p); ?>
+                    <div class="rsl-odds" title="Each team's chance of winning any one set, from their ratings">
+                        <span class="rsl-odds-num"><?php echo $hp; ?>%</span>
+                        <span class="rsl-odds-bar"><span style="width:<?php echo $hp; ?>%; background:<?php echo esc_attr($g->home_colour); ?>"></span><span style="width:<?php echo 100 - $hp; ?>%; background:<?php echo esc_attr($g->away_colour); ?>"></span></span>
+                        <span class="rsl-odds-num"><?php echo 100 - $hp; ?>%</span>
+                        <span class="rsl-odds-label"><?php
+                            $fav = $hp > 50 ? $g->home_name : $g->away_name;
+                            $dog = $hp > 50 ? $g->away_name : $g->home_name;
+                            echo esc_html(abs($hp - 50) <= 5 ? 'Even match' : (abs($hp - 50) <= 15 ? 'Close — slight edge to ' . $fav : 'Upset alert — ' . $dog . ' are the underdogs'));
+                        ?></span>
+                    </div>
+                <?php endif; ?>
             </div>
         </div>
         <?php
         return ob_get_clean();
+    }
+
+    /** Under a Ranked team's name: tier, ladder place, and (for a result) its rating change that night. */
+    private static function side_meta($team_id, $stats, $info) {
+        $now = isset($stats['teams'][$team_id]['now']) ? $stats['teams'][$team_id]['now'] : null;
+        if (!$now) {
+            return '';
+        }
+        $html = '<span class="rsl-side-meta">' . self::tier_chip($now['tier']);
+        if ($now['position']) {
+            $html .= '<span class="rsl-pos">#' . intval($now['position']) . '</span>';
+        }
+        if ($info && isset($info['delta'][$team_id]) && $info['delta'][$team_id] !== null) {
+            $d = intval($info['delta'][$team_id]);
+            $html .= '<span class="rsl-delta ' . ($d >= 0 ? 'is-up' : 'is-down') . '" title="Rating change that night">' . ($d >= 0 ? '+' : '&minus;') . abs($d) . '</span>';
+        }
+        return $html . '</span>';
+    }
+
+    public static function tier_chip($tier, $size = '') {
+        return '<span class="rsl-tier rsl-tier-' . esc_attr($tier['key']) . ($size ? ' rsl-tier-' . esc_attr($size) : '') . '" style="--tier:' . esc_attr($tier['colour']) . '">'
+            . esc_html($tier['label']) . '</span>';
+    }
+
+    private static function form_pills($form) {
+        if (!$form) {
+            return '<span class="rsl-empty">&ndash;</span>';
+        }
+        $html = '<span class="rsl-form" aria-label="Last ' . count($form) . ' results, oldest first">';
+        foreach ($form as $f) {
+            $html .= '<span class="rsl-form-' . strtolower($f) . '">' . esc_html($f) . '</span>';
+        }
+        return $html . '</span>';
     }
 
     // ------------------------------------------------------------------
@@ -195,6 +254,7 @@ class RSL_Public_Fixtures {
         $season = RSL_Seasons::current();
         $mine = self::viewer_team_id($season);
         $after = self::latest_result_label($season);
+        $stats = RSL_Stats::season($season);
         ob_start();
         ?>
         <div class="rsl">
@@ -204,9 +264,9 @@ class RSL_Public_Fixtures {
                 <?php $rows = RSL_Ratings::ladder($season, $division); ?>
                 <?php if (empty($rows)) { continue; } ?>
                 <h3 class="rsl-division"><?php echo esc_html($label); ?></h3>
-                <?php echo $division === 'ranked' ? self::ranked_table($rows, $mine) : self::unranked_table($rows, $mine); ?>
+                <?php echo $division === 'ranked' ? self::ranked_table($rows, $mine, $stats) : self::unranked_table($rows, $mine, $stats); ?>
                 <?php if ($division === 'ranked'): ?>
-                    <p class="rsl-note">Ranked teams are ordered by rating, worked out from every set played this season — so a win over a strong team counts for more than a win over a weaker one, and close losses count too. <strong>prov.</strong> = provisional: a new team's rating settles after its first few games. Forfeits count as a loss on the record but don't change ratings.</p>
+                    <p class="rsl-note">Ranked teams are ordered by rating, worked out from the points in every set this season plus a bonus for winning sets — so a win over a strong team counts for more than a win over a weaker one, close losses count, and a 1–1 game still counts by its points. Tiers go <?php echo implode(' → ', array_map(function ($t) { return esc_html($t[1]) . ' (' . intval($t[2]) . '+)'; }, array_reverse(array_slice(RSL_Stats::TIERS, 0, -1)))); ?>; below that is <?php echo esc_html(RSL_Stats::TIERS[count(RSL_Stats::TIERS) - 1][1]); ?>. A new team is <strong>in placements</strong> for its first couple of games, until its rating settles. Forfeits count as a loss on the record but don't change ratings.</p>
                 <?php endif; ?>
             <?php endforeach; ?>
             <p class="rsl-links"><a href="<?php echo esc_url(self::fixtures_url()); ?>">Fixtures &amp; results &rarr;</a></p>
@@ -215,23 +275,26 @@ class RSL_Public_Fixtures {
         return ob_get_clean() . RSL_Public::styles() . self::styles();
     }
 
-    private static function ranked_table($rows, $mine) {
+    private static function ranked_table($rows, $mine, $stats) {
         $draws = array_sum(array_map(function ($r) { return $r['drawn']; }, $rows)) > 0;
         ob_start();
         ?>
         <div class="rsl-table-wrap"><table class="rsl-ladder">
-            <thead><tr><th class="num">#</th><th>Team</th><th class="num">Rating</th><th class="num">P</th><th class="num">W</th><?php if ($draws): ?><th class="num">D</th><?php endif; ?><th class="num">L</th><th class="num">Sets</th><th class="num" title="Places moved since last week">&plusmn;</th></tr></thead>
+            <thead><tr><th class="num">#</th><th>Team</th><th>Tier</th><th class="num">Rating</th><th class="num">P</th><th class="num">W</th><?php if ($draws): ?><th class="num">D</th><?php endif; ?><th class="num">L</th><th class="num">Sets</th><th>Form</th><th class="num" title="Places moved since last week">&plusmn;</th></tr></thead>
             <tbody>
             <?php foreach ($rows as $r): ?>
-                <tr<?php echo $mine === intval($r['team']->id) ? ' class="is-mine"' : ''; ?>>
-                    <td class="num"><?php echo $r['position'] ? intval($r['position']) : '&ndash;'; ?></td>
+                <?php $t = intval($r['team']->id); $s = isset($stats['teams'][$t]) ? $stats['teams'][$t] : null; ?>
+                <tr<?php echo $mine === $t ? ' class="is-mine"' : ''; ?>>
+                    <td class="num rsl-place"><?php echo $r['position'] ? intval($r['position']) : '&ndash;'; ?></td>
                     <td><?php echo self::team_cell($r['team']); ?></td>
-                    <td class="num rsl-rating"><?php if ($r['new']): ?><span class="rsl-chip">New</span><?php else: ?><?php echo intval($r['rating']); ?><?php if ($r['provisional']): ?> <abbr class="rsl-prov" title="Provisional — settles after a few games">prov.</abbr><?php endif; ?><?php endif; ?></td>
+                    <td><?php echo $r['new'] ? '<span class="rsl-chip">New</span>' : self::tier_chip(RSL_Stats::tier($r['rating'], $r['provisional'])); ?></td>
+                    <td class="num rsl-rating"><?php echo $r['new'] ? '&ndash;' : intval($r['rating']); ?></td>
                     <td class="num"><?php echo intval($r['played']); ?></td>
                     <td class="num"><?php echo intval($r['won']); ?></td>
                     <?php if ($draws): ?><td class="num"><?php echo intval($r['drawn']); ?></td><?php endif; ?>
                     <td class="num"><?php echo intval($r['lost']); ?></td>
                     <td class="num"><?php echo intval($r['sets_for']); ?>&ndash;<?php echo intval($r['sets_against']); ?></td>
+                    <td><?php echo self::form_pills($s ? $s['form'] : array()); ?></td>
                     <td class="num"><?php echo self::move($r['move']); ?></td>
                 </tr>
             <?php endforeach; ?>
@@ -241,22 +304,24 @@ class RSL_Public_Fixtures {
         return ob_get_clean();
     }
 
-    private static function unranked_table($rows, $mine) {
+    private static function unranked_table($rows, $mine, $stats) {
         $draws = array_sum(array_map(function ($r) { return $r['drawn']; }, $rows)) > 0;
         ob_start();
         ?>
         <div class="rsl-table-wrap"><table class="rsl-ladder">
-            <thead><tr><th class="num">#</th><th>Team</th><th class="num">P</th><th class="num">W</th><?php if ($draws): ?><th class="num">D</th><?php endif; ?><th class="num">L</th><th class="num">Sets</th></tr></thead>
+            <thead><tr><th class="num">#</th><th>Team</th><th class="num">P</th><th class="num">W</th><?php if ($draws): ?><th class="num">D</th><?php endif; ?><th class="num">L</th><th class="num">Sets</th><th>Form</th></tr></thead>
             <tbody>
             <?php foreach ($rows as $r): ?>
-                <tr<?php echo $mine === intval($r['team']->id) ? ' class="is-mine"' : ''; ?>>
-                    <td class="num"><?php echo intval($r['position']); ?></td>
+                <?php $t = intval($r['team']->id); $s = isset($stats['teams'][$t]) ? $stats['teams'][$t] : null; ?>
+                <tr<?php echo $mine === $t ? ' class="is-mine"' : ''; ?>>
+                    <td class="num rsl-place"><?php echo intval($r['position']); ?></td>
                     <td><?php echo self::team_cell($r['team']); ?></td>
                     <td class="num"><?php echo intval($r['played']); ?></td>
                     <td class="num"><?php echo intval($r['won']); ?></td>
                     <?php if ($draws): ?><td class="num"><?php echo intval($r['drawn']); ?></td><?php endif; ?>
                     <td class="num"><?php echo intval($r['lost']); ?></td>
                     <td class="num"><?php echo intval($r['sets_for']); ?>&ndash;<?php echo intval($r['sets_against']); ?></td>
+                    <td><?php echo self::form_pills($s ? $s['form'] : array()); ?></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
@@ -316,10 +381,53 @@ class RSL_Public_Fixtures {
                 $standing = self::ordinal($r['position']) . ' on the ladder · ' . $record;
             }
         }
+        $stats = RSL_Stats::season($team->season);
         ob_start();
         ?>
         <?php if ($standing): ?><p class="rsl-standing"><?php echo esc_html($standing); ?> &middot; <a href="<?php echo esc_url(self::ladder_url()); ?>">Ladder</a></p><?php endif; ?>
         <h3 class="rsl-division">Fixtures &amp; results</h3>
+        <?php echo self::team_games_table($team, $games, $labels, $today, $stats); ?>
+        <?php
+        return ob_get_clean() . self::styles();
+    }
+
+    /** The game-style card under a team's name: tier, form, streak, journey, achievements. */
+    public static function team_profile($team) {
+        $stats = RSL_Stats::season($team->season);
+        $s = isset($stats['teams'][intval($team->id)]) ? $stats['teams'][intval($team->id)] : null;
+        ob_start();
+        ?>
+        <?php if ($s && ($s['form'] || $team->division === 'ranked')): ?>
+            <div class="rsl-profile">
+                <?php if ($team->division === 'ranked' && $s['now']): ?>
+                    <div class="rsl-profile-tier"><?php echo self::tier_chip($s['now']['tier'], 'large'); ?>
+                        <?php if ($s['peak'] && $s['peak']['key'] !== $s['now']['tier']['key']): ?><small>Peak: <?php echo esc_html($s['peak']['label']); ?></small><?php endif; ?>
+                    </div>
+                <?php endif; ?>
+                <dl class="rsl-profile-facts">
+                    <?php if ($s['form']): ?><div><dt>Form</dt><dd><?php echo self::form_pills($s['form']); ?></dd></div><?php endif; ?>
+                    <?php if ($s['streak'] && intval(substr($s['streak'], 1)) >= 2): ?>
+                        <div><dt>Streak</dt><dd><span class="rsl-streak is-<?php echo esc_attr(strtolower($s['streak'][0])); ?>"><?php echo esc_html(intval(substr($s['streak'], 1)) . ' ' . array('W' => 'wins', 'L' => 'losses', 'D' => 'draws')[$s['streak'][0]] . ' in a row'); ?></span></dd></div>
+                    <?php endif; ?>
+                    <?php $journey = self::journey($s['history'], $team->season); ?>
+                    <?php if ($journey): ?><div><dt>Journey</dt><dd class="rsl-journey"><?php echo $journey; ?></dd></div><?php endif; ?>
+                </dl>
+                <?php if ($s['achievements']): ?>
+                    <div class="rsl-achievements">
+                        <?php foreach ($s['achievements'] as $key => $ach): ?>
+                            <span class="rsl-ach rsl-ach-<?php echo esc_attr($key); ?>" title="<?php echo esc_attr($ach['why']); ?>"><strong><?php echo esc_html($ach['label']); ?></strong><small><?php echo esc_html($ach['why']); ?></small></span>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
+        <?php
+        return ob_get_clean() . RSL_Public::styles() . self::styles();
+    }
+
+    private static function team_games_table($team, $games, $labels, $today, $stats) {
+        ob_start();
+        ?>
         <?php if (empty($games)): ?>
             <p class="rsl-empty">No fixtures out yet — they're released each Monday for the coming Sunday.</p>
         <?php else: ?>
@@ -337,14 +445,46 @@ class RSL_Public_Fixtures {
                         <td><a href="<?php echo esc_url(self::fixtures_url((object) array('night_date' => $g->night_date))); ?>"><?php echo esc_html(self::short_label($labels[$g->night_id])); ?></a><br><small><?php echo esc_html(date_i18n('j M', strtotime($g->night_date))); ?></small></td>
                         <td><?php echo esc_html(RSL_Courts::pretty_time(RSL_Courts::hm($g->start_time))); ?><br><small><?php echo esc_html($g->court_name . ', ' . $g->venue_name); ?></small></td>
                         <td><a class="rsl-team-cell" href="<?php echo esc_url(RSL_Public::team_url($opp)); ?>"><?php echo RSL_Public::badge($opp, 'small'); ?><span><?php echo esc_html($opp->name); ?></span></a></td>
-                        <td class="rsl-result"><?php echo self::result_label($r, $g, $today); ?></td>
+                        <td class="rsl-result"><?php echo self::result_label($r, $g, $today); ?><?php
+                            $gi = isset($stats['games'][intval($g->id)]) ? $stats['games'][intval($g->id)] : null;
+                            if ($gi && intval($gi['upset_team']) === intval($team->id)) {
+                                echo ' <span class="rsl-upset">Upset win!</span>';
+                            }
+                            if ($gi && isset($gi['delta'][intval($team->id)]) && $gi['delta'][intval($team->id)] !== null) {
+                                $d = intval($gi['delta'][intval($team->id)]);
+                                echo ' <span class="rsl-delta ' . ($d >= 0 ? 'is-up' : 'is-down') . '" title="Rating change that night">' . ($d >= 0 ? '+' : '&minus;') . abs($d) . '</span>';
+                            }
+                        ?></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
             </table></div>
         <?php endif; ?>
         <?php
-        return ob_get_clean() . self::styles();
+        return ob_get_clean();
+    }
+
+    /** "In placements → Silver (R2) → Gold (R4)": each tier change after a round. */
+    private static function journey($history, $season) {
+        if (!$history) {
+            return '';
+        }
+        $labels = array();
+        foreach (RSL_Courts::nights($season) as $n) {
+            $labels[$n->night_date] = $n->id;
+        }
+        $round_labels = RSL_Fixtures::round_labels($season);
+        $steps = array();
+        $last = null;
+        foreach ($history as $date => $h) {
+            if ($h['tier']['key'] === $last) {
+                continue;
+            }
+            $round = isset($labels[$date]) ? self::short_label($round_labels[$labels[$date]]) : '';
+            $steps[] = self::tier_chip($h['tier'], 'small') . ($last !== null && $round ? ' <small>' . esc_html($round) . '</small>' : '');
+            $last = $h['tier']['key'];
+        }
+        return count($steps) > 1 || $last !== 'placement' ? implode(' <span class="rsl-arrow">&rarr;</span> ', $steps) : '';
     }
 
     private static function result_label($r, $g, $today) {
@@ -447,6 +587,50 @@ class RSL_Public_Fixtures {
             .rsl-res-win { color: #2e7d32; }
             .rsl-res-loss { color: #b32d2e; }
             .rsl-res-draw { color: var(--rsl-muted); }
+            .rsl-game-body { flex: 1 1 auto; min-width: 0; }
+            .rsl-side-text { display: flex; flex-direction: column; min-width: 0; }
+            .rsl-side-home .rsl-side-text { align-items: flex-end; }
+            .rsl-side-meta { display: inline-flex; align-items: center; gap: 5px; margin-top: 2px; font-size: 11px; font-weight: 400; }
+            .rsl-pos { color: var(--rsl-muted); font-weight: 700; }
+            .rsl-tier { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 10px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; color: #fff; background: var(--tier); line-height: 1.6; white-space: nowrap; }
+            .rsl-tier-placement { background: transparent; color: var(--tier); border: 1px dashed var(--tier); }
+            .rsl-tier-small { font-size: 9px; padding: 0 5px; }
+            .rsl-tier-large { font-size: 14px; padding: 4px 12px; border-radius: 6px; box-shadow: 0 2px 0 rgba(0,0,0,.15); }
+            .rsl-tier-diamond { background: linear-gradient(135deg, #6d7cf0, #4f5fd6 55%, #8a5ce0); }
+            .rsl-tier-platinum { background: linear-gradient(135deg, #2bb3ac, #16928c); }
+            .rsl-tier-gold { background: linear-gradient(135deg, #d9a90f, #b98a00); }
+            .rsl-delta { font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums; }
+            .rsl-delta.is-up { color: #2e7d32; }
+            .rsl-delta.is-down { color: #b32d2e; }
+            .rsl-upset { display: inline-block; margin-bottom: 2px; padding: 0 6px; border-radius: 4px; font-size: 10px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; background: #ffd400; color: #3a2e00; transform: rotate(-3deg); }
+            .rsl-game.is-upset { border-color: #e6c200; }
+            .rsl-odds { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; }
+            .rsl-odds-num { font-weight: 800; font-variant-numeric: tabular-nums; color: var(--rsl-muted); }
+            .rsl-odds-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--rsl-border); }
+            .rsl-odds-bar span { display: block; height: 100%; opacity: .85; }
+            .rsl-odds-label { grid-column: 1 / -1; text-align: center; color: var(--rsl-muted); font-size: 11px; }
+            .rsl-form { display: inline-flex; gap: 3px; }
+            .rsl-form span { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 4px; font-size: 10px; font-weight: 800; color: #fff; }
+            .rsl-form-w { background: #2e7d32; }
+            .rsl-form-l { background: #b32d2e; }
+            .rsl-form-d { background: #8a8f98; }
+            .rsl-place { font-weight: 800; }
+            .rsl-profile { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px 24px; margin: 16px 0 4px; padding: 14px 16px; border: 1px solid var(--rsl-border); border-radius: 10px; background: linear-gradient(180deg, #f7f9fc, #fff); }
+            .rsl-profile-tier { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+            .rsl-profile-tier small { color: var(--rsl-muted); font-size: 12px; }
+            .rsl-profile-facts { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 0; }
+            .rsl-profile-facts dt { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--rsl-muted); font-weight: 700; }
+            .rsl-profile-facts dd { margin: 2px 0 0; }
+            .rsl-streak { font-weight: 700; }
+            .rsl-streak.is-w { color: #2e7d32; }
+            .rsl-streak.is-l { color: #b32d2e; }
+            .rsl-journey { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+            .rsl-journey small { color: var(--rsl-muted); font-size: 11px; }
+            .rsl-arrow { color: var(--rsl-muted); }
+            .rsl-achievements { display: flex; flex-wrap: wrap; gap: 8px; flex-basis: 100%; }
+            .rsl-ach { display: inline-flex; flex-direction: column; padding: 6px 10px; border-radius: 8px; background: #fff7d6; border: 1px solid #f0d77a; line-height: 1.25; }
+            .rsl-ach strong { font-size: 13px; }
+            .rsl-ach small { font-size: 11px; color: #6b5a1a; }
             @media (max-width: 600px) {
                 .rsl-game { flex-direction: column; align-items: stretch; gap: 6px; }
                 .rsl-game-court { flex: none; }

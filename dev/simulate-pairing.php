@@ -42,6 +42,16 @@ if (in_array('sweep', (array) $args, true)) {
     }
 }
 
+if (in_array('measures', (array) $args, true)) {
+    // Same rematch rules, different ways of measuring "close".
+    $variants = array(
+        'Rating gap (points, via win chance)' => array('measure' => 'expected'),
+        'Rating gap (points, straight)' => array('measure' => 'points'),
+        'Ladder places apart' => array('measure' => 'places'),
+        'Std devs apart (league spread)' => array('measure' => 'z'),
+    );
+}
+
 $levels = array(1200, 1350, 1500, 1650, 1800);
 $rows = array();
 foreach ($variants as $name => $v) {
@@ -54,6 +64,10 @@ foreach ($variants as $name => $v) {
             // Roughly normal true strengths around 1500.
             $z = (mt_rand() / mt_getrandmax() + mt_rand() / mt_getrandmax() + mt_rand() / mt_getrandmax() - 1.5) * 2;
             $true[$t] = 1500 + 180 * $z;
+            if (in_array('lumpy', (array) $args, true)) {
+                // A few ex-VVL teams well clear, a bunched middle, a couple of beginners.
+                $true[$t] = $t <= 3 ? 1900 + 60 * $z : ($t > $opt['teams'] - 2 ? 1150 + 60 * $z : 1500 + 60 * $z);
+            }
             $guess = $true[$t] + mt_rand(-150, 150);
             $best = $levels[0];
             foreach ($levels as $l) { if (abs($l - $guess) < abs($best - $guess)) { $best = $l; } }
@@ -69,7 +83,27 @@ foreach ($variants as $name => $v) {
             $now = array();
             foreach ($meetings as $k => $mt) { $now[$k] = array('count' => $mt['count'], 'last' => $round - $mt['round']); }
 
-            if (!empty($v['places'])) {
+            if (!empty($v['measure'])) {
+                // Each measure scaled so "cost 1" means about the same gap in a typical league:
+                // 120 rating points ≈ 3 ladder places ≈ 0.5 league standard deviations.
+                $order = array_keys($ratings);
+                usort($order, function ($x, $y) use ($ratings) { return $ratings[$y]['rating'] <=> $ratings[$x]['rating']; });
+                $place = array_flip($order);
+                $vals = array_map(function ($r) { return $r['rating']; }, $ratings);
+                $mean = array_sum($vals) / count($vals);
+                $spread = sqrt(array_sum(array_map(function ($x) use ($mean) { return ($x - $mean) * ($x - $mean); }, $vals)) / count($vals)) ?: 1;
+                $measure = $v['measure'];
+                $m = RSL_Pairing::match($order, function ($a, $b) use ($measure, $ratings, $place, $spread, $now, $default) {
+                    if ($a === 0 || $b === 0) { return 4; }
+                    $c = RSL_Pairing::pair_cost($a, $b, $measure === 'expected' ? $ratings : null, $now, $default);
+                    $gap = abs($ratings[$a]['rating'] - $ratings[$b]['rating']);
+                    if ($measure === 'points') { $c['cost'] += pow($gap / 120, 2); }
+                    if ($measure === 'places') { $c['cost'] += pow(abs($place[$a] - $place[$b]) / 3, 2); }
+                    if ($measure === 'z') { $c['cost'] += pow($gap / $spread / 0.5, 2); }
+                    return $c['cost'];
+                });
+                $pairs = $m['pairs'];
+            } elseif (!empty($v['places'])) {
                 $order = array_keys($ratings);
                 usort($order, function ($x, $y) use ($ratings) { return $ratings[$y]['rating'] <=> $ratings[$x]['rating']; });
                 $place = array_flip($order);

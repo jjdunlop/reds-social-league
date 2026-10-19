@@ -170,20 +170,11 @@ $true = array();
 foreach ($team_ids as $id) {
     $true[$id] = RSL_Teams::level_seed_rating($teams[$id]->est_level) + mt_rand(-150, 150);
 }
+// Timed games played rally by rally: best of three, third set to 15 or 25,
+// an hour on the clock (the score stands when time's up).
+require_once __DIR__ . '/lib-sim.php';
 $sim_sets = function ($home, $away) use ($true) {
-    $p = 1 / (1 + pow(10, ($true[$away] - $true[$home]) / 400));
-    $gap = abs($p - 0.5);
-    $sets = array();
-    for ($s = 0; $s < 3; $s++) {
-        $loser = max(9, 23 - mt_rand(0, (int) round(3 + $gap * 26)));
-        $winner = 25;
-        if ($gap < 0.15 && mt_rand(0, 7) === 0) {
-            $loser = 24 + mt_rand(0, 3);
-            $winner = $loser + 2;
-        }
-        $sets[] = (mt_rand() / mt_getrandmax()) < $p ? array($winner, $loser) : array($loser, $winner);
-    }
-    return $sets;
+    return rsl_dev_play_game($true[$home] - $true[$away], array('rallies' => mt_rand(95, 125)));
 };
 $games_made = 0;
 $results_in = 0;

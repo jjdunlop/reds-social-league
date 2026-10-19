@@ -135,6 +135,7 @@ class RSL_Public {
                 <p class="rsl-meta"><?php echo esc_html(RSL_Teams::DIVISIONS[$team->division]); ?> &middot; <?php echo esc_html(RSL_Seasons::label($season)); ?> &middot; <?php echo count($members); ?> player<?php echo count($members) === 1 ? '' : 's'; ?></p>
             </div>
         </div>
+        <?php echo RSL_Public_Fixtures::team_profile($team); ?>
         <?php if ($can_see_roster): ?>
             <h3 class="rsl-division">Roster</h3>
             <ul class="rsl-roster">

@@ -2,8 +2,10 @@
 /**
  * Ranked ratings and the ladders.
  *
- * Ratings are a Bradley-Terry model on SET results (a 25-23 loss says more
- * than a bare "L"), refitted from the whole season every time they're
+ * Ratings are a Bradley-Terry model on the POINTS of every set plus a small
+ * bonus for winning sets (games are timed, so sets can be cut short, third
+ * sets can go to 15, and a game can end 1–1 — points count all of that
+ * fairly; see fit()). Refitted from the whole season every time they're
  * read, so beating a team that later proves strong counts for more after
  * the fact. On an Elo-style scale: 400 points apart = 10:1 odds per set.
  *
@@ -31,7 +33,15 @@ class RSL_Ratings {
     const SCALE = 400;            // rating points for 10:1 odds in a set
     const PRIOR_SD = 200;         // how far results can comfortably move a team from its seed
     const HALF_LIFE_WEEKS = 8;    // a set this many weeks old counts half
-    const PROVISIONAL_SD = 110;   // provisional until the uncertainty drops below this (about 3 games)
+    const PROVISIONAL_SD = 83;    // provisional until the uncertainty drops below this (about the first two games)
+    const FULL_SET_POINTS = 40;   // a set with this many points (e.g. 25–15) counts as a whole set won
+    const RALLY_SCALE = 6;        // a team's edge in a rally is about 1/6 of its edge in a set (race to 25)
+    // Chosen by dev/simulate-ratings.php (timed games played rally by rally):
+    // points find the true order faster than sets alone; a small set bonus
+    // keeps "we won" mattering for little cost in accuracy.
+    const SET_WEIGHT = 0.25;      // evidence from who won each set
+    const POINT_WEIGHT = 0.3;     // evidence from each rally, discounted (rallies aren't independent)
+    const SD_CALIBRATION = 0.6;   // the model's raw uncertainty is ~1.7x too cautious in simulation; this makes it honest
 
     private static $memo = array();
 
@@ -75,8 +85,21 @@ class RSL_Ratings {
      * The model itself, no database: $seeds = team_id => starting rating;
      * $games = list of array(home_id, away_id, sets (array of [home, away]),
      * weeks_ago). Returns team_id => array(rating, sd, provisional, games).
+     *
+     * Two kinds of evidence from every set, because games are timed (a set
+     * can end when the hour does, a third set may go to 15, a game can end 1–1):
+     *  - who won the set, counted in proportion to how complete it was
+     *    (points played / FULL_SET_POINTS, at most 1) — a 14–11 set cut off
+     *    by the clock counts for less than a 25–23 one;
+     *  - the points themselves: each rally is a small contest between the
+     *    teams, worth POINT_WEIGHT of a full rally's evidence (rallies aren't
+     *    independent — momentum — so they mustn't be over-trusted). A 1–1
+     *    draw where one team won far more points still moves the ratings.
+     * $opts may override set_weight / point_weight (the simulator compares them).
      */
-    public static function fit($seeds, $games) {
+    public static function fit($seeds, $games, $opts = array()) {
+        $set_weight = isset($opts['set_weight']) ? $opts['set_weight'] : self::SET_WEIGHT;
+        $point_weight = isset($opts['point_weight']) ? $opts['point_weight'] : self::POINT_WEIGHT;
         $k = log(10) / self::SCALE;
         $theta = array();
         $mu = array();
@@ -97,24 +120,41 @@ class RSL_Ratings {
             $count[$h]++;
             $count[$a]++;
             foreach ($sets as $s) {
-                $home_won = $s[0] > $s[1] ? 1 : 0;
-                $links[$h][] = array($a, $home_won, $w);
-                $links[$a][] = array($h, 1 - $home_won, $w);
+                $points = $s[0] + $s[1];
+                if ($set_weight > 0 && $s[0] !== $s[1]) {
+                    $sw = $w * $set_weight * min(1, $points / self::FULL_SET_POINTS);
+                    $home_won = $s[0] > $s[1] ? 1 : 0;
+                    $links[$h][] = array($a, 's', $home_won, $sw);
+                    $links[$a][] = array($h, 's', 1 - $home_won, $sw);
+                }
+                if ($point_weight > 0 && $points > 0) {
+                    $pw = $w * $point_weight;
+                    $links[$h][] = array($a, 'p', $s[0], $pw, $points);
+                    $links[$a][] = array($h, 'p', $s[1], $pw, $points);
+                }
             }
         }
         $games = $count;
 
         $prior = 1 / pow(self::PRIOR_SD * $k, 2);
         $hess = array();
-        for ($iter = 0; $iter < 200; $iter++) {
+        $rs = self::RALLY_SCALE;
+        for ($iter = 0; $iter < 300; $iter++) {
             $moved = 0;
             foreach ($theta as $i => $ti) {
                 $g = -($ti - $mu[$i]) * $prior;
                 $h = $prior;
                 foreach ($links[$i] as $l) {
-                    $p = 1 / (1 + exp($theta[$l[0]] - $ti));
-                    $g += $l[2] * ($l[1] - $p);
-                    $h += $l[2] * $p * (1 - $p);
+                    if ($l[1] === 's') {
+                        $p = 1 / (1 + exp($theta[$l[0]] - $ti));
+                        $g += $l[3] * ($l[2] - $p);
+                        $h += $l[3] * $p * (1 - $p);
+                    } else {
+                        // Chance of winning a rally: the set-scale gap shrunk by RALLY_SCALE.
+                        $q = 1 / (1 + exp(($theta[$l[0]] - $ti) / $rs));
+                        $g += $l[3] / $rs * ($l[2] - $l[4] * $q);
+                        $h += $l[3] / ($rs * $rs) * $l[4] * $q * (1 - $q);
+                    }
                 }
                 $step = $g / $h;
                 $theta[$i] = $ti + $step;
@@ -128,7 +168,7 @@ class RSL_Ratings {
 
         $out = array();
         foreach ($theta as $i => $ti) {
-            $sd = 1 / sqrt($hess[$i]) / $k;
+            $sd = self::SD_CALIBRATION / sqrt($hess[$i]) / $k;
             $out[$i] = array(
                 'rating' => $ti / $k,
                 'sd' => $sd,

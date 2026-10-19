@@ -4,20 +4,21 @@
  *
  * Every possible pairing gets a COST, and the engine picks the set of
  * pairings with the lowest total for the night (so it never gets stuck
- * with a bad last pair). Costs are in one currency — "expected one-sided
- * sets" — so closeness and variety trade off openly:
+ * with a bad last pair). Costs share one unit — "a 2-to-1 matchup" — so
+ * closeness and variety trade off openly:
  *
- *   closeness   (expected set margin)²: from the two teams' ratings, the
- *               expected sets won in a 3-set game; 1.5–1.5 costs 0, an
- *               expected 2–1 costs 1, an expected 2.5–0.5 costs 4. Squared,
- *               so slightly uneven is cheap and lopsided is expensive.
+ *   closeness   from the two ratings, each team's chance of winning a set
+ *               (independent of how many sets fit in the hour). 50/50
+ *               costs 0, 67/33 (a 2-to-1 favourite) costs 1, 75/25 costs
+ *               2.25, 80/20 costs 3.2, 90/10 costs 5.8 — squared, so
+ *               slightly uneven is cheap and lopsided is expensive.
  *               Uncertain (new) ratings are pulled towards 50/50, so the
  *               engine doesn't over-trust a guess.
- *   rematch     a second meeting costs as much as an expected 2–1 game;
+ *   rematch     a second meeting costs as much as a 67/33 game;
  *               a third costs far more than any lopsided game — so twice
  *               a season is the cap unless there's truly no alternative.
  *   recency     last week's opponent: never (unless nothing else works);
- *               two weeks ago: costs another expected-2–1.
+ *               two weeks ago: costs another 1.
  *   bye         odd numbers: someone sits out (or fills a double-header),
  *               dearer each time the same team has sat out.
  *
@@ -41,19 +42,19 @@ if (!defined('ABSPATH')) {
 
 class RSL_Pairing {
 
-    const SETS_PER_GAME = 3;
+    const EDGE_UNIT = 1 / 3;  // a 67/33 set-win chance: the favourite's edge (0.67 − 0.33) that costs 1
     const EXACT_LIMIT = 18;   // up to this many teams the matching is exact; above, a strong local search
 
-    /** The trade-offs, in "expected-2–1 games" (1.0 = as bad as an expected 2–1). */
+    /** The trade-offs, in "2-to-1 matchups" (1.0 = as bad as a 67/33 game). */
     public static function weights() {
         return apply_filters('rsl_pairing_weights', array(
-            'closeness' => 1.0,       // × (expected set margin)²
+            'closeness' => 1.0,       // × (edge ÷ EDGE_UNIT)², edge = |chance A − chance B| of winning a set
             'rematch' => 1.0,         // a second meeting
             'extra_meeting' => 25.0,  // each meeting after the second (simulated: removes third meetings at almost no cost in closeness)
             'two_weeks' => 1.0,       // met two rounds ago
             'last_week' => 1000.0,    // met last round
             'bye' => 4.0,             // sitting out, × (times sat out + 1)
-            'double_max' => 2.25,     // a spare-slot double-header only if its closeness cost is at most this (expected 2.25–0.75)
+            'double_max' => 2.25,     // a spare-slot double-header only if its closeness cost is at most this (75/25)
         ));
     }
 
@@ -80,16 +81,16 @@ class RSL_Pairing {
      * What pairing two teams would cost, and why.
      * $ratings: id => array(rating, sd), or null (Unranked: no closeness).
      * $meetings: meeting_key => array(count, last) where last = rounds ago.
-     * Returns array(cost, p (A wins a set), margin, closeness, repeat, recent, count, last).
+     * Returns array(cost, p (A wins a set), edge, closeness, repeat, recent, count, last).
      */
     public static function pair_cost($a, $b, $ratings, $meetings, $w, $salt = '') {
-        $out = array('cost' => 0.0, 'p' => null, 'margin' => null, 'closeness' => 0.0, 'repeat' => 0.0, 'recent' => 0.0, 'count' => 0, 'last' => null);
+        $out = array('cost' => 0.0, 'p' => null, 'edge' => null, 'closeness' => 0.0, 'repeat' => 0.0, 'recent' => 0.0, 'count' => 0, 'last' => null);
         if ($ratings !== null && isset($ratings[$a]) && isset($ratings[$b])) {
             $p = self::set_win_probability($ratings[$a]['rating'], $ratings[$a]['sd'], $ratings[$b]['rating'], $ratings[$b]['sd']);
-            $margin = self::SETS_PER_GAME * abs(2 * $p - 1);
+            $edge = abs(2 * $p - 1);
             $out['p'] = $p;
-            $out['margin'] = $margin;
-            $out['closeness'] = $w['closeness'] * $margin * $margin;
+            $out['edge'] = $edge;
+            $out['closeness'] = $w['closeness'] * pow($edge / self::EDGE_UNIT, 2);
         }
         $key = self::meeting_key($a, $b);
         if (isset($meetings[$key])) {
@@ -670,7 +671,7 @@ class RSL_Pairing {
 
     /**
      * Why a saved game looks the way it does (for the admin fixture board):
-     * array(p, margin, count (earlier meetings), last (rounds ago), doubles, time_ok per team).
+     * array(p (home wins a set), edge, count (earlier meetings), last (rounds ago), doubles, time_ok per team).
      */
     public static function explain_night($night_id) {
         $night = RSL_Courts::get_night($night_id);
@@ -701,7 +702,7 @@ class RSL_Pairing {
                 $pref = isset($ctx['teams'][$t]) ? $ctx['teams'][$t]->pref_time : 'any';
                 $time_ok[$t] = $pref === 'any' ? null : (($pref === 'early' && $r <= 0.5) || ($pref === 'late' && $r >= 0.5));
             }
-            $out[intval($g->id)] = array('p' => $c['p'], 'margin' => $c['margin'], 'count' => $c['count'], 'last' => $c['last'],
+            $out[intval($g->id)] = array('p' => $c['p'], 'edge' => $c['edge'], 'count' => $c['count'], 'last' => $c['last'],
                 'double' => array($h => $count[$h] > 1, $a => $count[$a] > 1), 'time_ok' => $time_ok);
         }
         $playing = array_keys($count);

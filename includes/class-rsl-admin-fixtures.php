@@ -2,7 +2,7 @@
 /**
  * Admin: Social League → Fixtures. One game night at a time:
  *  - Make fixtures automatically (RSL_Pairing), or add/remove games by hand.
- *  - See why each game is there: expected score, earlier meetings,
+ *  - See why each game is there: each team's chance of winning a set, earlier meetings,
  *    double-headers, time preferences met or missed, who isn't playing.
  *  - Publish the night (fixtures go public), then enter results / forfeits.
  * Every change posts to admin-post.php (nonce + manage_options) and
@@ -249,7 +249,7 @@ class RSL_Admin_Fixtures {
             <p class="description">No games yet. <strong>Make fixtures automatically</strong> pairs every team (Ranked by rating, Unranked by who's played whom least), puts the games on the night's courts with preferences in mind, then waits for you to check and publish.</p>
         <?php else: ?>
             <table class="widefat striped rsl-fx-games">
-                <thead><tr><th>Time</th><th>Court</th><th>Home</th><th>Away</th><th>Expected</th><th>Why</th><th>Result</th></tr></thead>
+                <thead><tr><th>Time</th><th>Court</th><th>Home</th><th>Away</th><th title="Each team's chance of winning any one set, from the ratings">Set chance</th><th>Why</th><th>Result</th></tr></thead>
                 <tbody>
                 <?php $division = null; ?>
                 <?php foreach ($games as $g): ?>
@@ -262,7 +262,7 @@ class RSL_Admin_Fixtures {
                         <td><?php echo esc_html($g->court_name); ?></td>
                         <td><?php echo esc_html($g->home_name); ?></td>
                         <td><?php echo esc_html($g->away_name); ?></td>
-                        <td><?php echo $w && $w['p'] !== null ? esc_html(number_format(3 * $w['p'], 1) . '–' . number_format(3 * (1 - $w['p']), 1)) : '<span class="description">—</span>'; ?></td>
+                        <td><?php echo $w && $w['p'] !== null ? self::chance_bar($w['p']) : '<span class="description">—</span>'; ?></td>
                         <td class="rsl-fx-why"><?php echo $w ? self::why_chips($w, $g, $teams) : ''; ?></td>
                         <td class="rsl-fx-result">
                             <form method="post" action="<?php echo esc_url($post); ?>">
@@ -296,17 +296,26 @@ class RSL_Admin_Fixtures {
 
         <details class="rsl-fx-help">
             <summary>How automatic fixtures are made</summary>
-            <p>Every possible pairing gets a cost, measured in "expected one-sided sets", and the engine picks the set of games with the lowest total for the night.</p>
+            <p>Every possible pairing gets a cost and the engine picks the set of games with the lowest total for the night, so it never gets stuck with a bad last pair. The unit is "a 2-to-1 matchup": a game where one team has a 67% chance of winning each set costs 1.</p>
             <ul>
-                <li><strong>Close games (Ranked):</strong> from the two ratings, the expected sets each team wins in a 3-set game. An even game costs nothing; an expected 2–1 costs 1; an expected 2.5–0.5 costs 4. New teams' ratings are treated as uncertain.</li>
-                <li><strong>Variety:</strong> a second meeting costs the same as an expected 2–1, so a rematch happens only when it's clearly the closest option. A third meeting costs far more than any lopsided game, so teams meet at most twice a season unless there's no alternative. Last week's opponent is never repeated; two weeks ago costs extra.</li>
+                <li><strong>Close games (Ranked):</strong> from the two ratings, each team's chance of winning a set — shown in the <em>Set chance</em> column. It doesn't depend on how many sets fit in the hour. 50/50 costs nothing, 67/33 costs 1, 75/25 costs 2.25, 80/20 costs 3.2, 90/10 costs 5.8 — slightly uneven is cheap, lopsided is expensive. New teams' ratings are uncertain, so their chances are pulled towards 50/50.</li>
+                <li><strong>Variety:</strong> a second meeting costs the same as a 67/33 game, so a rematch happens only when it's clearly the closest option. A third meeting costs far more than any lopsided game, so teams meet at most twice a season unless there's no alternative. Last week's opponent is never repeated; two weeks ago costs a little extra.</li>
                 <li><strong>Unranked:</strong> no ratings, so it's purely who's played whom least and longest ago.</li>
                 <li><strong>Odd numbers:</strong> the spare team gets a game against a team happy to double-header, or sits out (sharing that around).</li>
                 <li><strong>Slots:</strong> earlier/later preferences are honoured where possible (teams that missed out get priority next time), the last slot is shared around, and spare slots become double-headers for teams that opted in — back-to-back or with a break, as they asked.</li>
             </ul>
-            <p class="description">Simulated over many 10-round seasons, this gives games about as close as pairing by ladder position, with no team meeting another more than twice.</p>
+            <p><strong>Ratings</strong> come from the points in every set (each rally is a small contest between the teams) plus a small bonus for winning sets — so a timed game that ends 1–1, a third set to 15, or a set cut off by the hour all count fairly. Forfeits never count.</p>
+            <p class="description">Simulated over many 10-round seasons of timed games, this gives games about as close as pairing by ladder position, with no team meeting another more than twice.</p>
         </details>
         <?php
+    }
+
+    /** "62% · 38%" with a small bar: home's chance of winning a set, then away's. */
+    private static function chance_bar($p) {
+        $home = (int) round(100 * $p);
+        return '<span class="rsl-fx-chance" title="Chance of winning any one set">'
+            . '<span class="rsl-fx-bar"><span style="width:' . $home . '%"></span></span>'
+            . $home . '% · ' . (100 - $home) . '%</span>';
     }
 
     private static function why_chips($w, $g, $teams) {
@@ -397,6 +406,9 @@ class RSL_Admin_Fixtures {
             .rsl-fx-actions form { margin: 0; }
             .rsl-fx-games td { vertical-align: middle; }
             .rsl-fx-division td { background: #f0f0f1 !important; font-weight: 600; }
+            .rsl-fx-chance { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+            .rsl-fx-bar { display: inline-block; width: 46px; height: 6px; border-radius: 3px; background: #dcdcde; overflow: hidden; }
+            .rsl-fx-bar span { display: block; height: 100%; background: #2271b1; }
             .rsl-fx-chip { display: inline-block; margin: 1px 0; padding: 1px 7px; border-radius: 9px; font-size: 11px; background: #f0f0f1; color: #3c434a; white-space: nowrap; }
             .rsl-fx-chip.is-good { background: #edfaef; color: #00762a; }
             .rsl-fx-chip.is-warn { background: #fcf0e8; color: #8a4600; }

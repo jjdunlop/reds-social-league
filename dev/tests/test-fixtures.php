@@ -113,6 +113,17 @@ $check('a forfeit doesn\'t change any rating', abs($before[$D->id]['rating'] - $
 $fr = RSL_Fixtures::result_for(RSL_Fixtures::get($f->id), $B->id);
 $check('a forfeit is a win for the other team', $fr['outcome'] === 'forfeit_win');
 
+// Timed games: points count, so draws and short sets are fair.
+$even = array(1 => 1500, 2 => 1500);
+$draw = RSL_Ratings::fit($even, array(array(1, 2, array(array(25, 10), array(23, 25)), 0)));
+$check('a 1–1 draw: the team that won far more points rates higher', $draw[1]['rating'] > $draw[2]['rating'] + 5);
+$cut = RSL_Ratings::fit($even, array(array(1, 2, array(array(8, 5)), 0)));
+$full = RSL_Ratings::fit($even, array(array(1, 2, array(array(25, 15)), 0)));
+$check('a set cut off by the hour counts, but for less than a full set', $cut[1]['rating'] > 1500 && $cut[1]['rating'] - 1500 < $full[1]['rating'] - 1500);
+$short3 = RSL_Fixtures::parse_sets('25-20, 18-25, 15-11');
+$check('a third set to 15 is a normal result', !is_wp_error($short3) && count($short3) === 3);
+$check('a set ended by time (score as it stands) is accepted', !is_wp_error(RSL_Fixtures::parse_sets('25-21, 22-25, 9-7')));
+
 // More sets played = more certain.
 $check('uncertainty shrinks with sets played', $after[$A->id]['sd'] < $after[$E->id]['sd'] && $after[$E->id]['sd'] > RSL_Ratings::PROVISIONAL_SD);
 $sd_before = $after[$B->id]['sd'];
@@ -169,6 +180,35 @@ $check('ladder page lists rated teams with ratings, and the new team as New', st
 $check('ladder never shows the hidden seed of an unplayed team', strpos($html, '>' . RSL_Teams::level_seed_rating('strong') . '<') === false);
 $section = RSL_Public_Fixtures::team_section(RSL_Teams::get($A->id));
 $check('team page lists results and standing', strpos($section, 'W 2&ndash;1') !== false && strpos($section, '1st on the ladder') !== false && strpos($section, $B->name) !== false);
+
+// --- Game-style touches: tiers, upsets, achievements, match-ups ------------------------------
+$check('tiers by rating', RSL_Stats::tier(1850)['key'] === 'diamond' && RSL_Stats::tier(1700)['key'] === 'platinum' && RSL_Stats::tier(1550)['key'] === 'gold'
+    && RSL_Stats::tier(1400)['key'] === 'silver' && RSL_Stats::tier(1100)['key'] === 'bronze');
+$check('a provisional team is in placements (no tier yet)', RSL_Stats::tier(1700, true)['key'] === 'placement' && RSL_Stats::tier(null)['key'] === 'placement');
+$upset = RSL_Fixtures::add_game($n3->id, array('home' => $D->id, 'away' => $A->id, 'court_id' => $cxid, 'start' => '20:00'));
+RSL_Fixtures::record_result($upset->id, '25-20, 25-22');
+RSL_Ratings::flush();
+RSL_Stats::flush();
+$stats = RSL_Stats::season($season);
+$check('the underdog winning is an upset', intval($stats['games'][intval($upset->id)]['upset_team']) === intval($D->id) && $stats['games'][intval($upset->id)]['p_home'] < RSL_Stats::UPSET_CHANCE);
+$check('...and earns Giant killer', isset($stats['teams'][intval($D->id)]['achievements']['giant_killer']));
+$check('form is the latest results, newest last', end($stats['teams'][intval($D->id)]['form']) === 'W' && $stats['teams'][intval($D->id)]['streak'] === 'W1');
+$check('a normal win isn\'t an upset', $stats['games'][intval($g3->id)]['upset_team'] === null);
+$d = $stats['games'][intval($upset->id)]['delta'];
+$check('rating changes are whole numbers, or hidden during placements', ($d[intval($D->id)] === null || is_int($d[intval($D->id)])) && ($d[intval($A->id)] === null || is_int($d[intval($A->id)])));
+$_GET = array('week' => $n3->night_date);
+$html = $pages->render_fixtures();
+$check('fixtures page flags the upset and shows tiers', strpos($html, 'Upset!') !== false && strpos($html, 'rsl-tier') !== false);
+RSL_Fixtures::publish_night($nights[3]->id);
+$_GET = array('week' => $nights[3]->night_date);
+$html = $pages->render_fixtures();
+$check('a coming Ranked game shows each team\'s set chance', strpos($html, 'rsl-odds') !== false && preg_match('/\d+%/', $html) === 1);
+$_GET = array();
+$html = $pages->render_ladder();
+$check('ladder shows tiers and form', strpos($html, '<th>Tier</th>') !== false && strpos($html, 'rsl-form-w') !== false);
+$profile = RSL_Public_Fixtures::team_profile(RSL_Teams::get($D->id));
+$check('team profile shows achievements and form', strpos($profile, 'Giant killer') !== false && strpos($profile, 'rsl-form') !== false);
+$check('profiles never show people', strpos($profile, "Hidden Person $suffix") === false && strpos(RSL_Public_Fixtures::team_profile(RSL_Teams::get($A->id)), "Hidden Person $suffix") === false);
 
 // A night removed from the season takes its games with it.
 RSL_Courts::save_settings($season, array('start' => $nights[0]->night_date, 'end' => $nights[2]->night_date, 'weekday' => 0, 'minutes' => array('ranked' => 60, 'unranked' => 60)));
