@@ -80,10 +80,12 @@ for ($i = 1; $i <= 150; $i++) {
 $team_ids = array();
 $p = 0;
 foreach ($names as $n => $name) {
+    $levels = array_keys(RSL_Teams::levels());
     $team = RSL_Teams::create($season, array(
         'name' => $name,
         'division' => $n < 14 ? 'ranked' : 'unranked',
         'colour' => $colours[$n % count($colours)],
+        'level' => $n < 14 ? $levels[1 + ($n % 4)] : $levels[$n % 2],
     ));
     if (is_wp_error($team)) {
         echo "Skipped $name: " . $team->get_error_message() . "\n";

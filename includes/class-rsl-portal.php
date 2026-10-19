@@ -263,6 +263,7 @@ class RSL_Portal {
                     'name' => isset($post['name']) ? wp_unslash($post['name']) : '',
                     'division' => isset($post['division']) ? sanitize_key($post['division']) : 'ranked',
                     'colour' => isset($post['colour']) ? wp_unslash($post['colour']) : '',
+                    'level' => isset($post['level']) ? sanitize_key($post['level']) : '',
                 ));
                 self::flash(is_wp_error($team) ? 'error' : 'success', is_wp_error($team) ? $team->get_error_message() : 'Application sent for ' . $team->name . '. We\'ll email you when it\'s approved.');
                 return $back;
@@ -307,6 +308,15 @@ class RSL_Portal {
             case 'new_code':
                 RSL_Teams::regenerate_code($team->id);
                 self::flash('success', 'New invite link made — the old one no longer works.');
+                return $back;
+            case 'save_prefs':
+                $result = RSL_Teams::set_preferences($team->id, $user_id, array(
+                    'time' => isset($post['pref_time']) ? sanitize_key($post['pref_time']) : 'any',
+                    'double' => !empty($post['pref_double']),
+                    'shape' => isset($post['pref_double_shape']) ? sanitize_key($post['pref_double_shape']) : 'back',
+                    'standby' => !empty($post['pref_standby']),
+                ));
+                self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : 'Team preferences saved — fixtures use them from the next run.');
                 return $back;
         }
 
@@ -500,6 +510,13 @@ class RSL_Portal {
                     <label class="rsl-field">Division
                         <select name="division"><?php foreach (RSL_Teams::DIVISIONS as $key => $label): ?><option value="<?php echo esc_attr($key); ?>"><?php echo esc_html($label); ?></option><?php endforeach; ?></select>
                     </label>
+                    <label class="rsl-field">Roughly what level does your team play at?
+                        <select name="level" required>
+                            <option value="">Choose…</option>
+                            <?php foreach (RSL_Teams::levels() as $key => $label): ?><option value="<?php echo esc_attr($key); ?>"><?php echo esc_html($label); ?></option><?php endforeach; ?>
+                        </select>
+                    </label>
+                    <p class="rsl-hint">Just a starting guess so your first games are even — it isn't shown anywhere, and your results take over after a couple of weeks.</p>
                     <label class="rsl-field">Team colour <input type="color" name="colour" value="#1d3d6e"></label>
                     <p class="rsl-hint">You'll be the captain. Once the league approves it you'll get an invite link for your players.</p>
                     <button type="submit" class="rsl-btn">Send application</button>
@@ -564,6 +581,21 @@ class RSL_Portal {
                 <p class="rsl-hint">Or invite someone who has already registered, by their email — they'll join once they accept:</p>
                 <form method="post" class="rsl-row"><?php echo self::fields('invite', array('team_id' => $team->id)); ?><input type="email" name="email" placeholder="Their email" required><button type="submit" class="rsl-btn">Invite</button></form>
                 <p class="rsl-hint">Everyone needs to be cleared (social rego or full/life membership) before their first game.</p>
+
+                <h4>Team preferences</h4>
+                <p class="rsl-hint">Used when the weekly fixtures are made. Even games come first, so preferences decide between otherwise equal options.</p>
+                <form method="post" class="rsl-form rsl-prefs">
+                    <?php echo self::fields('save_prefs', array('team_id' => $team->id)); ?>
+                    <label class="rsl-field">Game time
+                        <select name="pref_time"><?php foreach (RSL_Teams::time_preferences() as $k => $l): ?><option value="<?php echo esc_attr($k); ?>" <?php selected($team->pref_time, $k); ?>><?php echo esc_html($l); ?></option><?php endforeach; ?></select>
+                    </label>
+                    <label class="rsl-check"><input type="checkbox" name="pref_double" value="1" <?php checked((int) $team->pref_double, 1); ?> onchange="this.form.querySelector('.rsl-shape').hidden = !this.checked;"> Happy to play two games in a night (double-header)</label>
+                    <label class="rsl-field rsl-shape" <?php echo (int) $team->pref_double ? '' : 'hidden'; ?>>If you play twice
+                        <select name="pref_double_shape"><?php foreach (RSL_Teams::double_shapes() as $k => $l): ?><option value="<?php echo esc_attr($k); ?>" <?php selected($team->pref_double_shape, $k); ?>><?php echo esc_html($l); ?></option><?php endforeach; ?></select>
+                    </label>
+                    <label class="rsl-check"><input type="checkbox" name="pref_standby" value="1" <?php checked((int) $team->pref_standby, 1); ?>> We can be on standby to fill in if another team pulls out late</label>
+                    <button type="submit" class="rsl-btn">Save preferences</button>
+                </form>
             <?php endif; ?>
         </div>
         <?php

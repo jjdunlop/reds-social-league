@@ -14,6 +14,82 @@ class RSL_Teams {
     const DIVISIONS = array('ranked' => 'Ranked', 'unranked' => 'Unranked');
     const ROLES = array('captain' => 'Captain', 'player' => 'Player');
 
+    /**
+     * The captain's rough level at sign-up, described by how the team plays
+     * (not the old A/B/C grades, which mean nothing to new players).
+     * Admin-only after that (never public), and the seed for a Ranked team's
+     * first-week matchmaking until results take over. Each maps to a
+     * starting rating on the ~1500-average scale.
+     */
+    public static function levels() {
+        return array(
+            'new' => 'New to volleyball — here for fun',
+            'social' => 'Social — we can keep a rally going',
+            'solid' => 'Solid — we are able to set up an attack on most points',
+            'strong' => 'Strong — VVL State League and friends',
+            'advanced' => 'Advanced — VVL Premier League players',
+        );
+    }
+
+    public static function level_seed_rating($level) {
+        $seeds = array('new' => 1200, 'social' => 1350, 'solid' => 1500, 'strong' => 1650, 'advanced' => 1800);
+        return isset($seeds[$level]) ? $seeds[$level] : 1500;
+    }
+
+    public static function time_preferences() {
+        return array('any' => 'No preference', 'early' => 'Earlier games', 'late' => 'Later games');
+    }
+
+    public static function double_shapes() {
+        return array('back' => 'Back-to-back', 'break' => 'With a break between');
+    }
+
+    /** The captain (or an admin) sets the team's fixturing preferences. */
+    public static function set_preferences($team_id, $user_id, $prefs) {
+        global $wpdb;
+        $team = self::get($team_id);
+        if (!$team) {
+            return new WP_Error('rsl_team', 'That team no longer exists.');
+        }
+        if (!self::is_captain($team->id, $user_id) && !user_can($user_id, 'manage_options')) {
+            return new WP_Error('rsl_not_captain', 'Only the captain can change the team\'s preferences.');
+        }
+        $time = isset($prefs['time']) && isset(self::time_preferences()[$prefs['time']]) ? $prefs['time'] : 'any';
+        $double = !empty($prefs['double']) ? 1 : 0;
+        $shape = isset($prefs['shape']) && isset(self::double_shapes()[$prefs['shape']]) ? $prefs['shape'] : 'back';
+        $wpdb->update(self::table_teams(), array(
+            'pref_time' => $time,
+            'pref_double' => $double,
+            'pref_double_shape' => $shape,
+            'pref_standby' => !empty($prefs['standby']) ? 1 : 0,
+        ), array('id' => $team->id));
+        return self::get($team->id);
+    }
+
+    /** Admin sets (or corrects) a team's estimated level. */
+    public static function set_level($team_id, $level) {
+        global $wpdb;
+        if (!isset(self::levels()[$level]) || !self::get($team_id)) {
+            return new WP_Error('rsl_level', 'Pick a level.');
+        }
+        $wpdb->update(self::table_teams(), array('est_level' => $level), array('id' => $team_id));
+        return self::get($team_id);
+    }
+
+    /** One line summarising a team's preferences (admin views). */
+    public static function preferences_summary($team) {
+        $parts = array(self::time_preferences()[isset(self::time_preferences()[$team->pref_time]) ? $team->pref_time : 'any']);
+        $parts[] = $team->pref_double ? 'Happy to double-header (' . strtolower(self::double_shapes()[isset(self::double_shapes()[$team->pref_double_shape]) ? $team->pref_double_shape : 'back']) . ')' : 'One game a night';
+        if ($team->pref_standby) {
+            $parts[] = 'On standby for late games';
+        }
+        return implode(' · ', $parts);
+    }
+
+    private static function table_teams() {
+        return RSL_Database::table('teams');
+    }
+
     // ------------------------------------------------------------------
     // Teams
     // ------------------------------------------------------------------
@@ -47,6 +123,7 @@ class RSL_Teams {
             'colour' => $colour,
             'status' => isset($args['status']) && in_array($args['status'], array('active', 'pending'), true) ? $args['status'] : 'active',
             'invite_code' => self::new_invite_code(),
+            'est_level' => isset($args['level']) && isset(self::levels()[$args['level']]) ? $args['level'] : '',
             'applied_by' => isset($args['applied_by']) ? intval($args['applied_by']) : null,
             'applied_at' => isset($args['applied_by']) ? current_time('mysql') : null,
         ));
@@ -68,6 +145,9 @@ class RSL_Teams {
         }
         if ($blocked = self::why_cant_join($user_id, $season)) {
             return $blocked;
+        }
+        if (!isset($args['level']) || !isset(self::levels()[$args['level']])) {
+            return new WP_Error('rsl_level', 'Pick roughly what level your team plays at — it helps us give you even games from week one.');
         }
         $args['status'] = 'pending';
         $args['applied_by'] = $user_id;

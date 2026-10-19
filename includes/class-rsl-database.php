@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 class RSL_Database {
 
     /** Bump when the schema changes; maybe_upgrade() re-runs install(). */
-    const SCHEMA_VERSION = '3';
+    const SCHEMA_VERSION = '4';
     const SCHEMA_OPTION = 'rsl_schema_version';
 
     public static function table($name) {
@@ -29,6 +29,9 @@ class RSL_Database {
         // its public URL, unique within the season. Status: active, or for
         // a captain's application pending / declined / withdrawn. The
         // invite code is what the captain shares so players can join.
+        // est_level: the captain's rough level at sign-up — admin-only, the
+        // seed for first-week Ranked matchmaking (never public). pref_*: the
+        // captain's fixturing preferences.
         dbDelta("CREATE TABLE " . self::table('teams') . " (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             season varchar(20) NOT NULL,
@@ -43,6 +46,11 @@ class RSL_Database {
             decided_by bigint(20) unsigned DEFAULT NULL,
             decided_at datetime DEFAULT NULL,
             decision_note varchar(255) NOT NULL DEFAULT '',
+            est_level varchar(20) NOT NULL DEFAULT '',
+            pref_time varchar(10) NOT NULL DEFAULT 'any',
+            pref_double tinyint(1) NOT NULL DEFAULT 0,
+            pref_double_shape varchar(10) NOT NULL DEFAULT 'back',
+            pref_standby tinyint(1) NOT NULL DEFAULT 0,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY  (id),
             UNIQUE KEY season_slug (season, slug),

@@ -69,6 +69,7 @@ class RSL_Admin {
                     'name' => isset($post['name']) ? wp_unslash($post['name']) : '',
                     'division' => isset($post['division']) ? sanitize_key($post['division']) : 'ranked',
                     'colour' => isset($post['colour']) ? wp_unslash($post['colour']) : '',
+                    'level' => isset($post['level']) ? sanitize_key($post['level']) : '',
                 ));
                 if (is_wp_error($team)) {
                     self::notice('error', $team->get_error_message());
@@ -83,6 +84,9 @@ class RSL_Admin {
                     'division' => isset($post['division']) ? sanitize_key($post['division']) : '',
                     'colour' => isset($post['colour']) ? wp_unslash($post['colour']) : '',
                 ));
+                if (!is_wp_error($team) && !empty($post['level'])) {
+                    RSL_Teams::set_level($team_id, sanitize_key($post['level']));
+                }
                 self::notice(is_wp_error($team) ? 'error' : 'success', is_wp_error($team) ? $team->get_error_message() : 'Team saved.');
                 return $team_back;
 
@@ -217,7 +221,7 @@ class RSL_Admin {
         <?php if ($applications): ?>
             <h2>Team applications (<?php echo count($applications); ?>)</h2>
             <table class="widefat striped" style="max-width: 1100px;">
-                <thead><tr><th style="width: 52px;"></th><th>Team</th><th>Season</th><th>Division</th><th>Captain</th><th>Applied</th><th>Decision</th></tr></thead>
+                <thead><tr><th style="width: 52px;"></th><th>Team</th><th>Season</th><th>Division</th><th>Level (their guess)</th><th>Captain</th><th>Applied</th><th>Decision</th></tr></thead>
                 <tbody>
                     <?php foreach ($applications as $app): ?>
                         <tr>
@@ -225,6 +229,7 @@ class RSL_Admin {
                             <td><strong><?php echo esc_html($app->name); ?></strong></td>
                             <td><?php echo esc_html(RSL_Seasons::label($app->season)); ?></td>
                             <td><?php echo esc_html(RSL_Teams::DIVISIONS[$app->division]); ?></td>
+                            <td><?php echo esc_html(isset(RSL_Teams::levels()[$app->est_level]) ? RSL_Teams::levels()[$app->est_level] : '—'); ?></td>
                             <td><?php echo esc_html($app->captain_name); ?><br><span class="description"><?php echo esc_html($app->captain_email); ?></span></td>
                             <td><?php echo esc_html(date('j M Y', strtotime($app->applied_at))); ?></td>
                             <td>
@@ -253,6 +258,10 @@ class RSL_Admin {
                     <option value="<?php echo esc_attr($key); ?>"><?php echo esc_html($label); ?></option>
                 <?php endforeach; ?>
             </select>
+            <select name="level">
+                <option value="">Level (estimate)…</option>
+                <?php foreach (RSL_Teams::levels() as $key => $label): ?><option value="<?php echo esc_attr($key); ?>"><?php echo esc_html($label); ?></option><?php endforeach; ?>
+            </select>
             <label>Colour <input type="color" name="colour" value="#1d3d6e"></label>
             <button type="submit" class="button button-primary">Add team</button>
         </form>
@@ -262,7 +271,7 @@ class RSL_Admin {
             <p class="description">No teams in this season yet.</p>
         <?php else: ?>
             <table class="widefat striped" style="max-width: 900px;">
-                <thead><tr><th style="width: 52px;"></th><th>Team</th><th>Division</th><th>Players</th><th>Captain</th></tr></thead>
+                <thead><tr><th style="width: 52px;"></th><th>Team</th><th>Division</th><th>Level (estimate)</th><th>Players</th><th>Captain</th></tr></thead>
                 <tbody>
                     <?php foreach ($teams as $team): ?>
                         <?php $captain = RSL_Teams::captain($team->id); ?>
@@ -271,6 +280,7 @@ class RSL_Admin {
                             <td><a href="<?php echo esc_url(admin_url('admin.php?page=' . self::PAGE . '&season=' . rawurlencode($season) . '&team=' . intval($team->id))); ?>"><strong><?php echo esc_html($team->name); ?></strong></a>
                                 <div class="row-actions"><a href="<?php echo esc_url(RSL_Public::team_url($team)); ?>" target="_blank">View public page</a></div></td>
                             <td><?php echo esc_html(RSL_Teams::DIVISIONS[$team->division]); ?></td>
+                            <td><?php echo isset(RSL_Teams::levels()[$team->est_level]) ? esc_html(strtok(RSL_Teams::levels()[$team->est_level], '—')) : '<span class="description">Not set</span>'; ?></td>
                             <td><?php echo intval($team->member_count); ?></td>
                             <td><?php echo $captain ? esc_html($captain->display_name) : '<span class="description">None yet</span>'; ?></td>
                         </tr>
@@ -306,8 +316,16 @@ class RSL_Admin {
                 <?php endforeach; ?>
             </select>
             <label>Colour <input type="color" name="colour" value="<?php echo esc_attr($team->colour); ?>"></label>
+            <label>Level (estimate)
+                <select name="level">
+                    <option value="">Not set</option>
+                    <?php foreach (RSL_Teams::levels() as $key => $label): ?><option value="<?php echo esc_attr($key); ?>" <?php selected($team->est_level, $key); ?>><?php echo esc_html($label); ?></option><?php endforeach; ?>
+                </select>
+            </label>
             <button type="submit" class="button">Save</button>
         </form>
+        <p class="description">The level is the captain's starting guess (or yours) — admin-only, never public. It seeds a Ranked team's first-week matchmaking (<?php echo intval(RSL_Teams::level_seed_rating($team->est_level ?: 'solid')); ?> on the rating scale) until results take over.</p>
+        <p><strong>Fixturing preferences:</strong> <?php echo esc_html(RSL_Teams::preferences_summary($team)); ?> <span class="description">(set by the captain on the league page)</span></p>
 
         <h2>Roster (<?php echo count($members); ?>)</h2>
         <?php if (empty($members)): ?>

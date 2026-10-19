@@ -99,16 +99,18 @@ $check('running the scan again adds nothing', RSL_Rego::scan_orders() === 0);
 $check('pay link goes to checkout with the rego', strpos(RSL_Rego::pay_url(), 'add-to-cart=' . $product_id) !== false);
 
 // --- Captain applications ---------------------------------------------------------------
-$check('unregistered people can\'t apply', is_wp_error(RSL_Teams::apply($season, $out, array('name' => "X $suffix"))));
-$app = RSL_Teams::apply($season, $cap, array('name' => "Spikes $suffix", 'division' => 'ranked', 'colour' => '#8c2361'));
+$check('unregistered people can\'t apply', is_wp_error(RSL_Teams::apply($season, $out, array('name' => "X $suffix", 'level' => 'social'))));
+$check('applying needs a level', ($e = RSL_Teams::apply($season, $cap, array('name' => "No Level $suffix"))) && is_wp_error($e) && $e->get_error_code() === 'rsl_level');
+$app = RSL_Teams::apply($season, $cap, array('name' => "Spikes $suffix", 'division' => 'ranked', 'colour' => '#8c2361', 'level' => 'strong'));
 $check('captain applies: team pending, captain on it', !is_wp_error($app) && $app->status === 'pending' && RSL_Teams::is_captain($app->id, $cap));
 $check('pending team isn\'t public', !in_array("Spikes $suffix", wp_list_pluck(RSL_Teams::list_for_season($season), 'name'), true));
 $check('no invites before approval', is_wp_error(RSL_Teams::invite_by_email($app->id, $cap, "rslr-p1-$suffix@example.test")));
 $check('nobody can join a pending team with its code', RSL_Teams::get_by_code($app->invite_code) === null);
 $check('a pending captain can\'t join another team', ($e = RSL_Teams::why_cant_join($cap, $season)) && $e->get_error_code() === 'rsl_pending');
-$check('one application at a time', is_wp_error(RSL_Teams::apply($season, $cap, array('name' => "Second $suffix"))));
+$check('the level is stored with the application', $app->est_level === 'strong');
+$check('one application at a time', is_wp_error(RSL_Teams::apply($season, $cap, array('name' => "Second $suffix", 'level' => 'social'))));
 $check('withdraw frees the captain', RSL_Teams::withdraw($app->id, $cap) === true && RSL_Teams::why_cant_join($cap, $season) === null && !RSL_Teams::is_member($app->id, $cap));
-$app = RSL_Teams::apply($season, $cap, array('name' => "Spikes Again $suffix", 'division' => 'ranked'));
+$app = RSL_Teams::apply($season, $cap, array('name' => "Spikes Again $suffix", 'division' => 'ranked', 'level' => 'solid'));
 wp_set_current_user($admin);
 $sent = array();
 RSL_Admin::process(array('rsl_nonce' => wp_create_nonce('rsl_team_action'), 'season' => $season, 'do' => 'approve', 'team_id' => $app->id));
@@ -116,7 +118,7 @@ $team = RSL_Teams::get($app->id);
 $check('admin approves: team active', $team->status === 'active');
 $check('captain emailed the invite link', count($sent) === 1 && $sent[0]['to'] === "rslr-cap-$suffix@example.test" && strpos($sent[0]['message'], 'join=' . $team->invite_code) !== false);
 $declined_by = $mk('dec'); $reg($declined_by);
-$app2 = RSL_Teams::apply($season, $declined_by, array('name' => "Nope $suffix"));
+$app2 = RSL_Teams::apply($season, $declined_by, array('name' => "Nope $suffix", 'level' => 'new'));
 $sent = array();
 RSL_Admin::process(array('rsl_nonce' => wp_create_nonce('rsl_team_action'), 'season' => $season, 'do' => 'decline', 'team_id' => $app2->id, 'note' => wp_slash("Name's already taken")));
 $check('admin declines with a reason, captain emailed it', RSL_Teams::get($app2->id)->status === 'declined' && strpos($sent[0]['message'], "Name's already taken") !== false);
@@ -193,7 +195,7 @@ $check('free agent list', (int) RSL_Players::get($free)->looking === 1);
 
 // --- Admin ---------------------------------------------------------------------------------------
 wp_set_current_user($admin);
-RSL_Teams::apply($season, $declined_by, array('name' => "Pending One $suffix"));
+RSL_Teams::apply($season, $declined_by, array('name' => "Pending One $suffix", 'level' => 'social'));
 $_GET = array('page' => 'rsl-teams', 'season' => $season);
 ob_start(); (new RSL_Admin())->render(); $admin_html = ob_get_clean();
 $check('admin sees pending applications to decide', strpos($admin_html, 'Team applications') !== false && strpos($admin_html, "Pending One $suffix") !== false && strpos($admin_html, 'value="approve"') !== false);

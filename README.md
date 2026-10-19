@@ -4,6 +4,22 @@ WordPress plugin for MURVC's social volleyball league: teams and rosters
 now; registration, payments, fixtures, results, ladders and ratings to
 come, in three phases (see `CLAUDE.md`).
 
+## Team level and captain preferences (0.4.0)
+
+- **Approximate level** — a captain applying for a team picks roughly
+  how the team plays: New, Social, Solid, Strong (VVL State League and
+  friends) or Advanced (VVL Premier League). It's an admin-only estimate,
+  never shown on public pages or to players, and admins can correct it on
+  the team page. Later it seeds each team's first Ranked rating
+  (`RSL_Teams::level_seed_rating()`: 1200–1800, average 1500) so week-one
+  games are even; real results take over from there.
+- **Fixturing preferences** — on the Social League page the captain sets,
+  for the season: earlier / later / no preference, happy to double-header
+  (and if so back-to-back or with a break), and standby for late games
+  when another team pulls out. Admins see a one-line summary on the team
+  page. Automatic fixturing will read these each week; they're wishes,
+  not guarantees.
+
 ## Courts and game nights (0.3.0)
 
 Social League → **Courts & Nights** — what fixtures will be made from.
