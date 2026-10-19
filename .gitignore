@@ -1,0 +1,15 @@
+# Never commit member data, dumps or exports — this repo will be public.
+*.sql
+*.sql.gz
+*.csv
+*.xlsx
+*.zip
+/exports/
+/backups/
+
+# Local / editor clutter
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+node_modules/
