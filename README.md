@@ -5,6 +5,32 @@ rego, teams and invites, courts and game nights, fixtures, results,
 ratings and ladders so far; admin fixture tools, refs, team balances,
 automatic pairing and finals to come (see `CLAUDE.md`).
 
+## Fair progression: earned tiers, Season Points, hype not odds (0.8.0)
+
+The **rating stays honest** (it orders the Ranked ladder and makes the
+fixtures, and it can go down). What a team **earns** is designed to feel
+fair, the way ranked modes in games work:
+
+- **Earned tiers (middle ground):** promotion is instant; demotion only
+  after **2 rounds in a row more than 50 points below** the tier's floor
+  (the first such round shows "At risk"), and one tier at a time; a team
+  that reaches **Silver keeps at least Silver** all season (and never
+  shows at risk there). Team pages show a progress bar to the next tier.
+  Rules in `RSL_Stats::step_tier()`; numbers are constants.
+- **Season Points and levels (both divisions — Unranked teams get
+  progression too):** +10 per game played, +5 win, +3 draw, +3 close game
+  (third set, 1–1, or within 6 points overall) win or lose, +5 upset win,
+  +10 per achievement. Only ever go up; every 40 points is a level. Level
+  on the ladder, level + progress bar on the team page.
+- **Close one** tag on close results; **Promoted** achievement.
+- **Season leaders** on the ladder: Most improved, Giant killers, top
+  Season Points per division.
+- **Hype, not odds, on coming games:** Top-of-table clash, Even match,
+  Rematch (with last time's result), First meeting, win streak on the
+  line. No public "30% chance" before a game; **Upset!** still celebrates
+  it afterwards. Set chances stay on the admin page
+  (`RSL_Public_Fixtures::SHOW_SET_CHANCES` turns them back on publicly).
+
 ## Timed-game ratings, set chances and game-style pages (0.7.0)
 
 **Ratings for timed games.** Games are best of three inside an hour: a set

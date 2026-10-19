@@ -202,11 +202,40 @@ $check('fixtures page flags the upset and shows tiers', strpos($html, 'Upset!') 
 RSL_Fixtures::publish_night($nights[3]->id);
 $_GET = array('week' => $nights[3]->night_date);
 $html = $pages->render_fixtures();
-$check('a coming Ranked game shows each team\'s set chance', strpos($html, 'rsl-odds') !== false && preg_match('/\d+%/', $html) === 1);
+$check('a coming game shows hype, not odds', strpos($html, 'rsl-hype') !== false && strpos($html, 'rsl-odds') === false
+    && (strpos($html, 'Rematch') !== false || strpos($html, 'First meeting') !== false));
 $_GET = array();
 $html = $pages->render_ladder();
-$check('ladder shows tiers and form', strpos($html, '<th>Tier</th>') !== false && strpos($html, 'rsl-form-w') !== false);
+$check('ladder shows tiers, form, levels and season leaders', strpos($html, '<th>Tier</th>') !== false && strpos($html, 'rsl-form-w') !== false
+    && strpos($html, 'rsl-level') !== false && strpos($html, 'Giant killers') !== false);
+
+// Earned tiers: honest rating underneath, fair badge on top.
+$tk = function ($k) { return RSL_Stats::tier_by_key($k); };
+$s1 = RSL_Stats::step_tier($tk('silver'), 0, $tk('silver'), 1510);
+$check('promotion is instant', $s1['earned']['key'] === 'gold' && $s1['promoted']);
+$s1 = RSL_Stats::step_tier($tk('gold'), 0, $tk('gold'), 1470);
+$check('a little below the floor holds the tier', $s1['earned']['key'] === 'gold' && $s1['below'] === 0);
+$s1 = RSL_Stats::step_tier($tk('gold'), 0, $tk('gold'), 1400);
+$check('well below once: still the tier, but at risk', $s1['earned']['key'] === 'gold' && $s1['below'] === 1);
+$s2 = RSL_Stats::step_tier($s1['earned'], $s1['below'], $tk('gold'), 1400);
+$check('well below twice in a row: down one tier', $s2['earned']['key'] === 'silver' && $s2['below'] === 0);
+$s2 = RSL_Stats::step_tier($tk('gold'), 1, $tk('gold'), 1490);
+$check('bouncing back clears the risk', $s2['earned']['key'] === 'gold' && $s2['below'] === 0);
+$s1 = RSL_Stats::step_tier($tk('platinum'), 1, $tk('platinum'), 1100);
+$check('a collapse still drops only one tier at a time', $s1['earned']['key'] === 'gold');
+$s1 = RSL_Stats::step_tier($tk('silver'), 1, $tk('silver'), 1100);
+$check('Silver, once reached, is kept all season (and never shows at risk)', $s1['earned']['key'] === 'silver' && $s1['below'] === 0);
+$s1 = RSL_Stats::step_tier(null, 0, null, 1700);
+$check('placements end in the tier the rating has earned', $s1['earned']['key'] === 'platinum' && !$s1['promoted']);
+
+// Season Points: only ever up.
+$check('levels every ' . RSL_Stats::LEVEL_POINTS . ' points', RSL_Stats::level(0)['level'] === 1 && RSL_Stats::level(RSL_Stats::LEVEL_POINTS * 2 + 5)['level'] === 3
+    && RSL_Stats::level(RSL_Stats::LEVEL_POINTS * 2 + 5)['into'] === 5);
+$dp = $stats['teams'][intval($D->id)]['points'];
+$check('Season Points reward turning up, even when losing', $dp >= RSL_Stats::POINTS['played'] * 2 && $stats['teams'][intval($B->id)]['points'] > 0);
+$check('a three-set game is a close one', $stats['games'][intval($g1->id)]['close'] === true);
 $profile = RSL_Public_Fixtures::team_profile(RSL_Teams::get($D->id));
+$check('team profile shows the level', strpos($profile, 'Season Points') !== false && strpos($profile, 'Lvl ') !== false);
 $check('team profile shows achievements and form', strpos($profile, 'Giant killer') !== false && strpos($profile, 'rsl-form') !== false);
 $check('profiles never show people', strpos($profile, "Hidden Person $suffix") === false && strpos(RSL_Public_Fixtures::team_profile(RSL_Teams::get($A->id)), "Hidden Person $suffix") === false);
 

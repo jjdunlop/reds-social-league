@@ -1,16 +1,27 @@
 <?php
 /**
- * The season's story, for the game-style touches on public pages: tiers,
- * rating changes per night, form, upsets and achievements. Teams only.
+ * The season's story, for the game-style touches on public pages. Teams only.
  *
- * - Tiers (Ranked): Bronze → Silver → Gold → Platinum → Diamond by rating.
- *   A team still provisional is "In placements" (like ranked modes in
- *   games) — no tier and no rating change shown, which also keeps the
- *   hidden starting estimate from being worked out.
- * - Upset: the winner had less than UPSET_CHANCE to win a set going in.
- * - Only published nights count.
+ * Two kinds of progress, kept apart on purpose:
+ *  - The RATING stays honest (it orders the Ranked ladder and makes the
+ *    fixtures). It can go down.
+ *  - What a team EARNS is designed to feel fair and mostly go up:
+ *    - Tier badge (Ranked): Bronze → Silver → Gold → Platinum → Diamond.
+ *      Promotion is instant when the rating crosses into a tier. Demotion
+ *      only after DEMOTE_ROUNDS rounds in a row more than DEMOTE_BUFFER
+ *      below the tier's floor (the first such round shows "at risk"), and
+ *      a team that has reached PROTECTED_TIER never drops below it that
+ *      season. While provisional, a team is "In placements" — no tier and
+ *      no rating change shown (which also keeps the hidden starting
+ *      estimate hidden).
+ *    - Season Points (both divisions): points for turning up, winning,
+ *      close games, upsets and achievements. Only ever go up; every
+ *      LEVEL_POINTS is a new level.
  *
- * Built from RSL_Ratings snapshots after each round (memoised per request).
+ * Also: per-night rating changes, form, streaks, upsets (winner had under
+ * UPSET_CHANCE to win a set), close games, achievements, season leaders.
+ * Only published nights count. Built from RSL_Ratings snapshots after
+ * each round (memoised per request).
  */
 
 if (!defined('ABSPATH')) {
@@ -27,23 +38,62 @@ class RSL_Stats {
         array('silver', 'Silver', 1350, '#6f7a8a'),
         array('bronze', 'Bronze', 0, '#9a5b27'),
     );
+    const DEMOTE_BUFFER = 50;       // rating points below a tier's floor before a round counts against it
+    const DEMOTE_ROUNDS = 2;        // rounds in a row below that before dropping a tier
+    const PROTECTED_TIER = 'silver'; // once reached, never lost that season
     const UPSET_CHANCE = 0.35;
+    const CLOSE_POINTS = 6;         // a game within this many points overall is a close one
+    const POINTS = array('played' => 10, 'win' => 5, 'draw' => 3, 'close' => 3, 'upset' => 5, 'achievement' => 10);
+    const LEVEL_POINTS = 40;
 
     private static $memo = array();
 
-    /** array(key, label, colour) for a rating; "In placements" while provisional. */
+    /** array(key, label, colour, floor, rank) for a rating; "In placements" while provisional. */
     public static function tier($rating, $provisional = false) {
         if ($rating === null || $provisional) {
-            return array('key' => 'placement', 'label' => 'In placements', 'colour' => '#6b7280');
+            return self::placement();
         }
         foreach (self::TIERS as $t) {
             if ($rating >= $t[2]) {
-                return array('key' => $t[0], 'label' => $t[1], 'colour' => $t[3]);
+                return self::tier_by_key($t[0]);
             }
         }
         $tiers = self::TIERS;
         $last = end($tiers);
-        return array('key' => $last[0], 'label' => $last[1], 'colour' => $last[3]);
+        return self::tier_by_key($last[0]);
+    }
+
+    public static function tier_by_key($key) {
+        $count = count(self::TIERS);
+        foreach (self::TIERS as $i => $t) {
+            if ($t[0] === $key) {
+                return array('key' => $t[0], 'label' => $t[1], 'colour' => $t[3], 'floor' => $t[2], 'rank' => $count - 1 - $i);
+            }
+        }
+        return self::placement();
+    }
+
+    private static function tier_by_rank($rank) {
+        $tiers = array_reverse(self::TIERS);
+        $rank = max(0, min(count($tiers) - 1, $rank));
+        return self::tier_by_key($tiers[$rank][0]);
+    }
+
+    private static function placement() {
+        return array('key' => 'placement', 'label' => 'In placements', 'colour' => '#6b7280', 'floor' => null, 'rank' => -1);
+    }
+
+    /** The tier above (or null at the top). */
+    public static function next_tier($tier) {
+        if ($tier['rank'] < 0 || $tier['rank'] >= count(self::TIERS) - 1) {
+            return null;
+        }
+        return self::tier_by_rank($tier['rank'] + 1);
+    }
+
+    /** Season Points -> array(level, into (points into this level), need (per level)). */
+    public static function level($points) {
+        return array('level' => intdiv(max(0, $points), self::LEVEL_POINTS) + 1, 'into' => max(0, $points) % self::LEVEL_POINTS, 'need' => self::LEVEL_POINTS);
     }
 
     public static function flush() {
@@ -52,9 +102,10 @@ class RSL_Stats {
 
     /**
      * array(
-     *   games => game_id => array(p_home (set chance going in, Ranked), upset_team, delta => team_id => change|null),
-     *   teams => team_id => array(form (list, newest last: W/L/D), streak (e.g. 'W3'), now (rating, sd, provisional,
-     *            position, tier), history (date => array(position, tier)), achievements (key => label/why/date), peak)
+     *   games => game_id => array(p_home, upset_team, close, delta => team_id => change|null),
+     *   teams => team_id => array(form, streak, history, achievements, peak, upsets, points, now => array(rating,
+     *            provisional, position, tier (earned), at_risk, progress (0–1 to next tier), next)),
+     *   leaders => array(improved, giant_killer, points => division => row)
      * )
      */
     public static function season($season) {
@@ -69,17 +120,14 @@ class RSL_Stats {
         sort($dates);
         $teams = array();
         foreach (RSL_Teams::list_for_season($season) as $t) {
-            $teams[intval($t->id)] = array('team' => $t, 'form' => array(), 'streak' => '', 'history' => array(), 'achievements' => array(), 'peak' => null, 'now' => null);
+            $teams[intval($t->id)] = array('team' => $t, 'form' => array(), 'streak' => '', 'history' => array(), 'achievements' => array(),
+                'peak' => null, 'now' => null, 'upsets' => 0, 'points' => 0, 'earned' => null, 'below' => 0, 'first_rating' => null);
         }
-        $out = array('games' => array(), 'teams' => array(), 'dates' => $dates);
+        $out = array('games' => array(), 'teams' => array(), 'dates' => $dates, 'leaders' => array());
 
         $before = $dates ? RSL_Ratings::compute($season, date('Y-m-d', strtotime($dates[0] . ' -1 day'))) : array();
-        $tier_rank = array();
-        foreach (array_reverse(self::TIERS) as $i => $t) {
-            $tier_rank[$t[0]] = $i;
-        }
         $wins_in_row = array();
-        foreach ($dates as $di => $date) {
+        foreach ($dates as $date) {
             $after = RSL_Ratings::compute($season, $date);
             $positions = self::positions($after);
             $tonight = array_filter($done, function ($g) use ($date) { return $g->night_date === $date; });
@@ -87,7 +135,17 @@ class RSL_Stats {
             foreach ($tonight as $g) {
                 $h = intval($g->home_team_id);
                 $a = intval($g->away_team_id);
-                $info = array('p_home' => null, 'upset_team' => null, 'delta' => array());
+                $info = array('p_home' => null, 'upset_team' => null, 'close' => false, 'delta' => array());
+                if ($g->status === 'played') {
+                    $sets = RSL_Fixtures::parse_sets($g->sets);
+                    $sets = is_wp_error($sets) ? array() : $sets;
+                    $pts = array(0, 0);
+                    foreach ($sets as $s) {
+                        $pts[0] += $s[0];
+                        $pts[1] += $s[1];
+                    }
+                    $info['close'] = count($sets) >= 3 || intval($g->home_sets) === intval($g->away_sets) || abs($pts[0] - $pts[1]) <= self::CLOSE_POINTS;
+                }
                 if ($g->division === 'ranked' && isset($before[$h]) && isset($before[$a])) {
                     $info['p_home'] = RSL_Pairing::set_win_probability($before[$h]['rating'], $before[$h]['sd'], $before[$a]['rating'], $before[$a]['sd']);
                     foreach (array($h, $a) as $t) {
@@ -107,10 +165,24 @@ class RSL_Stats {
                     if ($letter === 'W') {
                         $night_wins[$t] = (isset($night_wins[$t]) ? $night_wins[$t] : 0) + 1;
                     }
+                    // Season Points: turning up counts most.
+                    if ($r['outcome'] !== 'forfeit_loss') {
+                        $teams[$t]['points'] += self::POINTS['played'];
+                    }
+                    if ($r['outcome'] === 'win') {
+                        $teams[$t]['points'] += self::POINTS['win'];
+                    } elseif ($r['outcome'] === 'draw') {
+                        $teams[$t]['points'] += self::POINTS['draw'];
+                    }
+                    if ($info['close']) {
+                        $teams[$t]['points'] += self::POINTS['close'];
+                    }
                     if ($r['outcome'] === 'win') {
                         $chance = $info['p_home'] === null ? null : ($t === $h ? $info['p_home'] : 1 - $info['p_home']);
                         if ($chance !== null && $chance < self::UPSET_CHANCE) {
                             $info['upset_team'] = $t;
+                            $teams[$t]['upsets']++;
+                            $teams[$t]['points'] += self::POINTS['upset'];
                             self::earn($teams[$t], 'giant_killer', 'Giant killer', 'Beat a team they had a ' . round(100 * $chance) . '% set chance against', $date);
                         }
                         if ($r['sets'] && $r['sets'][0][0] < $r['sets'][0][1]) {
@@ -135,18 +207,36 @@ class RSL_Stats {
                     self::earn($teams[$t], 'double_trouble', 'Double trouble', 'Won both games of a double-header', $date);
                 }
             }
+
+            // Earned tiers: instant promotion, slow and protected demotion.
             foreach ($positions as $t => $pos) {
                 if (!isset($teams[$t])) {
                     continue;
                 }
-                $tier = self::tier($after[$t]['rating'], $after[$t]['provisional']);
-                $teams[$t]['history'][$date] = array('position' => $pos, 'tier' => $tier);
+                $row = &$teams[$t];
+                $rating = $after[$t]['rating'];
+                if ($after[$t]['provisional']) {
+                    $tier = self::placement();
+                } else {
+                    if ($row['first_rating'] === null) {
+                        $row['first_rating'] = $rating;
+                    }
+                    $step = self::step_tier($row['earned'], $row['below'], $row['peak'], $rating);
+                    if ($step['promoted']) {
+                        self::earn($row, 'promoted', 'Promoted', 'Moved up a tier', $date);
+                    }
+                    $row['earned'] = $step['earned'];
+                    $row['below'] = $step['below'];
+                    $tier = $row['earned'];
+                    if ($row['peak'] === null || $tier['rank'] > $row['peak']['rank']) {
+                        $row['peak'] = $tier;
+                    }
+                }
+                $row['history'][$date] = array('position' => $pos, 'tier' => $tier);
                 if ($pos === 1 && !$after[$t]['provisional']) {
-                    self::earn($teams[$t], 'top_spot', 'Top spot', 'Top of the Ranked ladder', $date);
+                    self::earn($row, 'top_spot', 'Top spot', 'Top of the Ranked ladder', $date);
                 }
-                if ($tier['key'] !== 'placement' && ($teams[$t]['peak'] === null || $tier_rank[$tier['key']] > $tier_rank[$teams[$t]['peak']['key']])) {
-                    $teams[$t]['peak'] = $tier;
-                }
+                unset($row);
             }
             $before = $after;
         }
@@ -154,7 +244,7 @@ class RSL_Stats {
         $now = RSL_Ratings::compute($season);
         $positions = self::positions($now);
         foreach ($teams as $t => &$row) {
-            if (isset($wins_in_row[$t]) || $row['form']) {
+            if ($row['form']) {
                 $last = end($row['form']);
                 $n = 0;
                 for ($i = count($row['form']) - 1; $i >= 0 && $row['form'][$i] === $last; $i--) {
@@ -163,16 +253,73 @@ class RSL_Stats {
                 $row['streak'] = $last . $n;
             }
             $row['form'] = array_slice($row['form'], -5);
-            if ($row['team']->division === 'ranked' && isset($now[$t]) && $now[$t]['games'] > 0) {
-                $row['now'] = array('rating' => (int) round($now[$t]['rating']), 'provisional' => $now[$t]['provisional'],
-                    'position' => isset($positions[$t]) ? $positions[$t] : null, 'tier' => self::tier($now[$t]['rating'], $now[$t]['provisional']));
-            } elseif ($row['team']->division === 'ranked') {
-                $row['now'] = array('rating' => null, 'provisional' => true, 'position' => null, 'tier' => self::tier(null, true));
+            $row['points'] += self::POINTS['achievement'] * count($row['achievements']);
+            if ($row['team']->division !== 'ranked') {
+                continue;
+            }
+            if (isset($now[$t]) && $now[$t]['games'] > 0 && !$now[$t]['provisional'] && $row['earned']) {
+                $tier = $row['earned'];
+                $next = self::next_tier($tier);
+                $rating = $now[$t]['rating'];
+                $row['now'] = array('rating' => (int) round($rating), 'provisional' => false,
+                    'position' => isset($positions[$t]) ? $positions[$t] : null, 'tier' => $tier, 'next' => $next,
+                    'at_risk' => $row['below'] > 0,
+                    'progress' => $next ? max(0, min(1, ($rating - $tier['floor']) / ($next['floor'] - $tier['floor']))) : 1);
+            } else {
+                $row['now'] = array('rating' => isset($now[$t]) && $now[$t]['games'] > 0 ? (int) round($now[$t]['rating']) : null, 'provisional' => true,
+                    'position' => isset($positions[$t]) ? $positions[$t] : null, 'tier' => self::placement(), 'next' => null, 'at_risk' => false, 'progress' => 0);
             }
         }
         unset($row);
+
+        // Season leaders.
+        $leaders = array('improved' => null, 'giant_killer' => null, 'points' => array());
+        foreach ($teams as $t => $row) {
+            if ($row['team']->division === 'ranked' && $row['first_rating'] !== null && isset($now[$t]) && !$now[$t]['provisional']) {
+                $gain = (int) round($now[$t]['rating'] - $row['first_rating']);
+                if ($gain > 0 && ($leaders['improved'] === null || $gain > $leaders['improved']['value'])) {
+                    $leaders['improved'] = array('team' => $row['team'], 'value' => $gain);
+                }
+            }
+            if ($row['upsets'] > 0 && ($leaders['giant_killer'] === null || $row['upsets'] > $leaders['giant_killer']['value'])) {
+                $leaders['giant_killer'] = array('team' => $row['team'], 'value' => $row['upsets']);
+            }
+            $d = $row['team']->division;
+            if ($row['points'] > 0 && (!isset($leaders['points'][$d]) || $row['points'] > $leaders['points'][$d]['value'])) {
+                $leaders['points'][$d] = array('team' => $row['team'], 'value' => $row['points']);
+            }
+        }
+        $out['leaders'] = $leaders;
         $out['teams'] = $teams;
         return self::$memo[$season] = $out;
+    }
+
+    /**
+     * One round of the earned-tier rules (pure). $earned: the tier held
+     * (null before the first settled round); $below: rounds in a row it has
+     * been well below that tier; $peak: best tier this season.
+     * Returns array(earned, below, promoted).
+     */
+    public static function step_tier($earned, $below, $peak, $rating) {
+        $raw = self::tier($rating);
+        if ($earned === null || $earned['rank'] < 0) {
+            return array('earned' => $raw, 'below' => 0, 'promoted' => false);
+        }
+        if ($raw['rank'] > $earned['rank']) {
+            return array('earned' => $raw, 'below' => 0, 'promoted' => true);
+        }
+        $protected = self::tier_by_key(self::PROTECTED_TIER);
+        $best = $peak && $peak['rank'] > $earned['rank'] ? $peak : $earned;
+        $floor = $best['rank'] >= $protected['rank'] ? $protected['rank'] : 0;
+        // Holding the tier: not far below it, or it's as low as this team can go.
+        if ($rating >= $earned['floor'] - self::DEMOTE_BUFFER || $earned['rank'] <= $floor) {
+            return array('earned' => $earned, 'below' => 0, 'promoted' => false);
+        }
+        $below++;
+        if ($below < self::DEMOTE_ROUNDS) {
+            return array('earned' => $earned, 'below' => $below, 'promoted' => false);
+        }
+        return array('earned' => self::tier_by_rank(max($floor, $earned['rank'] - 1, $raw['rank'])), 'below' => 0, 'promoted' => false);
     }
 
     /** Set-win chance for a game not yet played (Ranked), from the latest ratings. */
@@ -182,6 +329,57 @@ class RSL_Stats {
             return null;
         }
         return RSL_Pairing::set_win_probability($now[$home_id]['rating'], $now[$home_id]['sd'], $now[$away_id]['rating'], $now[$away_id]['sd']);
+    }
+
+    /**
+     * Hype for a game still to come — no odds: Top-of-table clash, Even
+     * match, Rematch (with last time's result), First meeting, Win streak
+     * on the line. Returns a list of short labels.
+     */
+    public static function hype($g) {
+        $stats = self::season($g->season);
+        $h = intval($g->home_team_id);
+        $a = intval($g->away_team_id);
+        $tags = array();
+        $ph = isset($stats['teams'][$h]['now']['position']) ? $stats['teams'][$h]['now']['position'] : null;
+        $pa = isset($stats['teams'][$a]['now']['position']) ? $stats['teams'][$a]['now']['position'] : null;
+        if ($g->division === 'ranked' && $ph && $pa && $ph <= 3 && $pa <= 3) {
+            $tags[] = 'Top-of-table clash';
+        } elseif ($g->division === 'ranked') {
+            $p = self::chance_now($g->season, $h, $a);
+            if ($p !== null && abs($p - 0.5) <= 0.07) {
+                $tags[] = 'Even match';
+            }
+        }
+        $last = null;
+        foreach (RSL_Fixtures::games_for_season($g->season) as $x) {
+            if (intval($x->id) === intval($g->id) || $x->night_date >= $g->night_date || empty($x->published_at)) {
+                continue;
+            }
+            if (RSL_Pairing::meeting_key(intval($x->home_team_id), intval($x->away_team_id)) === RSL_Pairing::meeting_key($h, $a)
+                && ($x->status === 'played' || $x->status === 'forfeit')) {
+                $last = $x;
+            }
+        }
+        if ($last) {
+            if ($last->status === 'forfeit') {
+                $tags[] = 'Rematch';
+            } elseif (intval($last->home_sets) === intval($last->away_sets)) {
+                $tags[] = 'Rematch — last time it finished ' . intval($last->home_sets) . '–' . intval($last->away_sets);
+            } else {
+                $winner = intval($last->home_sets) > intval($last->away_sets) ? $last->home_name : $last->away_name;
+                $tags[] = 'Rematch — ' . $winner . ' won ' . max(intval($last->home_sets), intval($last->away_sets)) . '–' . min(intval($last->home_sets), intval($last->away_sets)) . ' last time';
+            }
+        } else {
+            $tags[] = 'First meeting';
+        }
+        foreach (array($h => $g->home_name, $a => $g->away_name) as $t => $name) {
+            $streak = isset($stats['teams'][$t]['streak']) ? $stats['teams'][$t]['streak'] : '';
+            if ($streak !== '' && $streak[0] === 'W' && intval(substr($streak, 1)) >= 3) {
+                $tags[] = $name . ' on a ' . intval(substr($streak, 1)) . '-game win streak';
+            }
+        }
+        return $tags;
     }
 
     /** Ladder places among teams that have played (team_id => 1, 2, ...). */
