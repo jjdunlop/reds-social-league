@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 class RSL_Database {
 
     /** Bump when the schema changes; maybe_upgrade() re-runs install(). */
-    const SCHEMA_VERSION = '2';
+    const SCHEMA_VERSION = '3';
     const SCHEMA_OPTION = 'rsl_schema_version';
 
     public static function table($name) {
@@ -112,6 +112,64 @@ class RSL_Database {
             PRIMARY KEY  (id),
             UNIQUE KEY team_user (team_id, user_id),
             KEY user_id (user_id)
+        ) $charset;");
+
+        // Venues and their courts. A venue's division is where it normally
+        // hosts (e.g. Ranked at one venue, Unranked at the other); a court's
+        // default hours are its usual game-night hours.
+        dbDelta("CREATE TABLE " . self::table('venues') . " (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            name varchar(100) NOT NULL,
+            division varchar(20) NOT NULL DEFAULT 'ranked',
+            sort int(11) NOT NULL DEFAULT 0,
+            active tinyint(1) NOT NULL DEFAULT 1,
+            PRIMARY KEY  (id)
+        ) $charset;");
+
+        dbDelta("CREATE TABLE " . self::table('courts') . " (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            venue_id bigint(20) unsigned NOT NULL,
+            name varchar(50) NOT NULL,
+            default_start time NOT NULL DEFAULT '19:00:00',
+            default_end time NOT NULL DEFAULT '23:00:00',
+            sort int(11) NOT NULL DEFAULT 0,
+            active tinyint(1) NOT NULL DEFAULT 1,
+            PRIMARY KEY  (id),
+            KEY venue_id (venue_id)
+        ) $charset;");
+
+        // Game nights of a season (normally Sundays): regular, finals or bye.
+        dbDelta("CREATE TABLE " . self::table('nights') . " (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            season varchar(20) NOT NULL,
+            night_date date NOT NULL,
+            type varchar(20) NOT NULL DEFAULT 'regular',
+            note varchar(255) NOT NULL DEFAULT '',
+            PRIMARY KEY  (id),
+            UNIQUE KEY season_date (season, night_date)
+        ) $charset;");
+
+        // Per-night exceptions only — no row means "the usual". A venue can
+        // host the other division for a night; a court can be off or run
+        // different hours.
+        dbDelta("CREATE TABLE " . self::table('night_venues') . " (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            night_id bigint(20) unsigned NOT NULL,
+            venue_id bigint(20) unsigned NOT NULL,
+            division varchar(20) NOT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY night_venue (night_id, venue_id)
+        ) $charset;");
+
+        dbDelta("CREATE TABLE " . self::table('night_courts') . " (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            night_id bigint(20) unsigned NOT NULL,
+            court_id bigint(20) unsigned NOT NULL,
+            available tinyint(1) NOT NULL DEFAULT 1,
+            start_time time DEFAULT NULL,
+            end_time time DEFAULT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY night_court (night_id, court_id)
         ) $charset;");
 
         update_option(self::SCHEMA_OPTION, self::SCHEMA_VERSION, false);

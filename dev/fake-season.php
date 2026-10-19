@@ -19,14 +19,24 @@ require_once ABSPATH . 'wp-admin/includes/user.php';
 global $wpdb;
 
 $fake_option = 'rsl_fake_team_ids';
+$fake_venues_option = 'rsl_fake_venue_ids';
 
-$reset = function () use ($wpdb, $fake_option) {
+$reset = function () use ($wpdb, $fake_option, $fake_venues_option) {
     $team_ids = array_map('intval', (array) get_option($fake_option, array()));
     foreach ($team_ids as $id) {
         $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $id), array('%d'));
         $wpdb->delete(RSL_Database::table('teams'), array('id' => $id), array('%d'));
     }
     delete_option($fake_option);
+    foreach (array_map('intval', (array) get_option($fake_venues_option, array())) as $vid) {
+        foreach (RSL_Courts::courts($vid, false) as $court) {
+            $wpdb->delete(RSL_Database::table('night_courts'), array('court_id' => $court->id));
+        }
+        $wpdb->delete(RSL_Database::table('courts'), array('venue_id' => $vid));
+        $wpdb->delete(RSL_Database::table('night_venues'), array('venue_id' => $vid));
+        $wpdb->delete(RSL_Database::table('venues'), array('id' => $vid));
+    }
+    delete_option($fake_venues_option);
     $users = get_users(array('meta_key' => 'rsl_fake', 'meta_value' => '1', 'fields' => 'ID'));
     foreach ($users as $uid) {
         $wpdb->delete(RSL_Database::table('team_members'), array('user_id' => $uid), array('%d'));
@@ -86,6 +96,27 @@ foreach ($names as $n => $name) {
     }
 }
 update_option($fake_option, $team_ids, false);
+
+// Two venues as the league runs: Ranked at one, Unranked at the other, with
+// one court finishing early to show a per-court difference.
+$bundha = RSL_Courts::create_venue('Bundha Sports Centre', 'ranked');
+foreach (array('Court 1', 'Court 2', 'Court 3') as $c) { RSL_Courts::create_court($bundha->id, $c, '19:00', '23:00'); }
+RSL_Courts::create_court($bundha->id, 'Court 4', '19:00', '21:00');
+$uni = RSL_Courts::create_venue('Melbourne Uni (Nona Lee)', 'unranked');
+foreach (array('Court A', 'Court B', 'Court C') as $c) { RSL_Courts::create_court($uni->id, $c, '18:00', '22:00'); }
+update_option($fake_venues_option, array(intval($bundha->id), intval($uni->id)), false);
+
+// A 12-week season of Sundays from the next Sunday: one bye, two finals weeks.
+$first = date('Y-m-d', strtotime('next sunday', strtotime(current_time('Y-m-d'))));
+RSL_Courts::save_settings($season, array('start' => $first, 'end' => date('Y-m-d', strtotime($first . ' +11 weeks')), 'weekday' => 0,
+    'minutes' => array('ranked' => 60, 'unranked' => 50)));
+RSL_Courts::generate_nights($season);
+$nights = RSL_Courts::nights($season);
+RSL_Courts::set_night_type($nights[5]->id, 'bye', 'Public holiday');
+RSL_Courts::set_night_type($nights[10]->id, 'finals');
+RSL_Courts::set_night_type($nights[11]->id, 'finals');
+$b_courts = RSL_Courts::courts($bundha->id);
+RSL_Courts::set_court_night($nights[2]->id, $b_courts[2]->id, false); // Court 3 unavailable one week
 
 echo sprintf("Created %d teams and %d players (%d on teams, %d free agents) in %s.\n",
     count($team_ids), count($players), $p, count($players) - $p, RSL_Seasons::label($season));

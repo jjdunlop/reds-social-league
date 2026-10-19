@@ -4,6 +4,30 @@ WordPress plugin for MURVC's social volleyball league: teams and rosters
 now; registration, payments, fixtures, results, ladders and ratings to
 come, in three phases (see `CLAUDE.md`).
 
+## Courts and game nights (0.3.0)
+
+Social League → **Courts & Nights** — what fixtures will be made from.
+
+- **Venues & courts** — each venue has a home division (e.g. Ranked at
+  one venue, Unranked at the other) and its courts, each with its usual
+  game-night hours (a court can finish earlier than the rest).
+- **Season calendar** — set the first and last game night, the weekday
+  (Sundays), and the **game length for Ranked and for Unranked**. Saving
+  lists every game night; re-saving keeps nights already set up and drops
+  any outside new dates.
+- **The grid** — one row per night, one column per venue: courts, hours,
+  how many games and for which division, with byes greyed, finals marked
+  and nights that differ from the usual flagged. Each night is Regular,
+  Finals or Bye, with an optional note (e.g. a public holiday).
+- **One night** — click it for a timeline: a bar per court across the
+  evening, divided into game slots. Turn a court off, change its hours, or
+  have a venue host the other division — for that night only — then
+  optionally copy the setup to every later night. Setting a court back to
+  its usual hours removes the exception.
+
+The game slots (court, start, end, division) are what fixtures will fill
+and refs will claim.
+
 ## Registration and team building (0.2.0)
 
 A **Social League** page is created automatically (`[rsl_my_league]`).
