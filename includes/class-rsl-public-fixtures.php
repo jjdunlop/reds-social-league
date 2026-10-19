@@ -637,7 +637,7 @@ class RSL_Public_Fixtures {
                         </tr>
                     <?php endforeach; ?>
                 <?php elseif ($published): ?>
-                    <tr class="rsl-sched-quiet"><td><?php echo $label; ?></td><td colspan="3"><?php echo $req && $req->type === 'off' ? 'Week off (requested)' : 'No game this week'; ?></td></tr>
+                    <tr class="rsl-sched-quiet"><td><?php echo $label; ?></td><td colspan="3"><?php echo $req && $req->type === 'off' ? 'Week off (requested)' : ($req && $req->type === 'unpaid' ? 'Not fixtured — the team balance was owing' : 'No game this week'); ?></td></tr>
                 <?php else: ?>
                     <tr class="rsl-sched-tba">
                         <td><?php echo $label; ?></td>

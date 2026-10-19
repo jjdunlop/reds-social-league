@@ -223,6 +223,7 @@ class RSL_Courts {
         global $wpdb;
         $wpdb->delete(RSL_Database::table('games'), array('night_id' => $night_id));
         $wpdb->delete(RSL_Database::table('jobs'), array('night_id' => $night_id));
+        $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('ledger') . " WHERE night_id = %d AND type = 'game'", $night_id));
         $wpdb->delete(RSL_Database::table('night_courts'), array('night_id' => $night_id));
         $wpdb->delete(RSL_Database::table('night_venues'), array('night_id' => $night_id));
         $wpdb->delete(RSL_Database::table('nights'), array('id' => $night_id));

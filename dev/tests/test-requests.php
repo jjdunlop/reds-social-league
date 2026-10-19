@@ -148,6 +148,7 @@ foreach ($teams as $t) {
     $wpdb->delete(RSL_Database::table('teams'), array('id' => $t->id));
 }
 $wpdb->delete(RSL_Database::table('games'), array('season' => $season));
+$wpdb->delete(RSL_Database::table('ledger'), array('season' => $season));
 foreach (RSL_Courts::nights($season) as $n) {
     $wpdb->delete(RSL_Database::table('night_courts'), array('night_id' => $n->id));
     $wpdb->delete(RSL_Database::table('night_venues'), array('night_id' => $n->id));

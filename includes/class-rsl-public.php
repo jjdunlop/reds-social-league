@@ -138,6 +138,7 @@ class RSL_Public {
             </div>
         </div>
         <?php echo RSL_Public_Fixtures::team_profile($team); ?>
+        <?php echo RSL_Payments::team_card($team); ?>
         <?php if ($can_see_roster): ?>
             <h3 class="rsl-division">Roster</h3>
             <ul class="rsl-roster">

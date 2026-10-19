@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 class RSL_Database {
 
     /** Bump when the schema changes; maybe_upgrade() re-runs install(). */
-    const SCHEMA_VERSION = '8';
+    const SCHEMA_VERSION = '9';
     const SCHEMA_OPTION = 'rsl_schema_version';
 
     public static function table($name) {
@@ -231,6 +231,7 @@ class RSL_Database {
             requested_at datetime DEFAULT CURRENT_TIMESTAMP,
             handled_by bigint(20) unsigned DEFAULT NULL,
             handled_at datetime DEFAULT NULL,
+            late tinyint(1) NOT NULL DEFAULT 0,
             PRIMARY KEY  (id),
             KEY team_night (team_id, night_id),
             KEY night_id (night_id)
@@ -265,6 +266,33 @@ class RSL_Database {
             PRIMARY KEY  (id),
             UNIQUE KEY job (night_id, type, game_id, venue_id),
             KEY user_id (user_id)
+        ) $charset;");
+
+        // Team money. amount > 0 is money in (top-ups, credits), < 0 is a
+        // charge; a team's balance is the sum. type: game (charged when a
+        // night is published — managed to match the published fixtures),
+        // late_fee (a late "can't make it"), topup (paid online — one row per
+        // order item, UNIQUE: an insert failure there is the dedupe working),
+        // adjust (an admin's credit or charge, with a note).
+        dbDelta("CREATE TABLE " . self::table('ledger') . " (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            team_id bigint(20) unsigned NOT NULL,
+            season varchar(20) NOT NULL,
+            type varchar(20) NOT NULL,
+            amount decimal(10,2) NOT NULL,
+            game_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            night_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            request_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            order_id bigint(20) unsigned DEFAULT NULL,
+            order_item_id bigint(20) unsigned DEFAULT NULL,
+            user_id bigint(20) unsigned DEFAULT NULL,
+            note varchar(255) NOT NULL DEFAULT '',
+            created_by bigint(20) unsigned DEFAULT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            UNIQUE KEY order_item_id (order_item_id),
+            KEY team_id (team_id),
+            KEY night_id (night_id)
         ) $charset;");
 
         update_option(self::SCHEMA_OPTION, self::SCHEMA_VERSION, false);

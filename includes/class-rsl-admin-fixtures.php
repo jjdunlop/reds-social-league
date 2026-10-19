@@ -274,7 +274,8 @@ class RSL_Admin_Fixtures {
         <?php if ($cant): ?>
             <div class="notice notice-warning inline rsl-fx-cant"><p><strong>Can't make it:</strong></p><ul>
                 <?php foreach ($cant as $r): ?>
-                    <li><?php echo esc_html($r->team_name); ?> told us <?php echo esc_html(human_time_diff(strtotime($r->requested_at), current_time('timestamp'))); ?> ago —
+                    <li><?php echo esc_html($r->team_name); ?> told us <?php echo esc_html(human_time_diff(strtotime($r->requested_at), current_time('timestamp'))); ?> ago
+                        <strong><?php echo $r->late ? '(after the cut-off: they pay both teams\' fees, ' . esc_html(RSL_Payments::money(2 * RSL_Payments::settings()['game_fee'])) . ')' : '(before the cut-off: no fee for either team)'; ?></strong> —
                         <?php if ($r->status === 'handled'): ?><em>handled</em>
                         <?php else: ?>sort it out with their opponent (swap in a standby team, or give the opponent the night off), then
                             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="rsl-fx-inline-form"><?php echo self::fields('handle_request', $season, $night->id, array('request_id' => $r->id)); ?><button class="button button-small">Mark handled</button></form>
@@ -355,8 +356,9 @@ class RSL_Admin_Fixtures {
                 </tbody>
             </table>
             <?php if (!empty($why['_resting'])): ?>
-                <p><strong>Not playing this night:</strong> <?php echo esc_html(implode(', ', array_map(function ($id) use ($teams, $off) {
-                    return $teams[$id]->name . (isset($off[$id]) ? ' (week off)' : ' (bye — odd numbers or no court)');
+                <?php $unpaid = RSL_Requests::for_night($night->id, 'unpaid', array('handled')); ?>
+                <p><strong>Not playing this night:</strong> <?php echo esc_html(implode(', ', array_map(function ($id) use ($teams, $off, $unpaid) {
+                    return $teams[$id]->name . (isset($off[$id]) ? ' (week off)' : (isset($unpaid[$id]) ? ' (owes money — not fixtured)' : ' (bye — odd numbers or no court)'));
                 }, $why['_resting']))); ?></p>
             <?php endif; ?>
         <?php endif; ?>

@@ -508,10 +508,16 @@ class RSL_Pairing {
 
         foreach (array_keys(RSL_Teams::DIVISIONS) as $division) {
             $all_ids = array_keys(array_filter($ctx['teams'], function ($t) use ($division) { return $t->division === $division; }));
-            $ids = array_values(array_filter($all_ids, function ($id) use ($off) { return !isset($off[$id]); }));
             $d = array('games' => array(), 'out' => array(), 'notes' => array());
-            foreach (array_diff($all_ids, $ids) as $id) {
-                $d['out'][$id] = 'Week off (requested)';
+            $ids = array();
+            foreach ($all_ids as $id) {
+                if (isset($off[$id])) {
+                    $d['out'][$id] = 'Week off (requested)';
+                } elseif (RSL_Payments::blocked($id)) {
+                    $d['out'][$id] = 'Owes ' . RSL_Payments::money(RSL_Payments::owing($id)) . ' — not fixtured until paid';
+                } else {
+                    $ids[] = $id;
+                }
             }
             if (!$ids) {
                 if ($d['out']) {
@@ -669,12 +675,20 @@ class RSL_Pairing {
                 return new WP_Error('rsl_results', 'Results are already in for this night, so its fixtures can\'t be remade.');
             }
         }
+        RSL_Requests::clear_unpaid($night->id);
         $plan = self::plan($night->id);
         if (is_wp_error($plan)) {
             return $plan;
         }
         foreach ($existing as $g) {
             RSL_Fixtures::delete_game($g->id);
+        }
+        foreach ($plan['divisions'] as $d) {
+            foreach ($d['out'] as $team_id => $why) {
+                if (strpos($why, 'Owes ') === 0) {
+                    RSL_Requests::record_unpaid($team_id, $night->id);
+                }
+            }
         }
         $created = 0;
         $out = array();

@@ -26,6 +26,7 @@ $reset = function () use ($wpdb, $fake_option, $fake_venues_option) {
     foreach ($team_ids as $id) {
         $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('games') . " WHERE home_team_id = %d OR away_team_id = %d", $id, $id));
         $wpdb->delete(RSL_Database::table('requests'), array('team_id' => $id), array('%d'));
+        $wpdb->delete(RSL_Database::table('ledger'), array('team_id' => $id), array('%d'));
         $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $id), array('%d'));
         $wpdb->delete(RSL_Database::table('teams'), array('id' => $id), array('%d'));
     }
@@ -179,10 +180,32 @@ require_once __DIR__ . '/lib-sim.php';
 $sim_sets = function ($home, $away) use ($true) {
     return rsl_dev_play_game($true[$home] - $true[$away], array('rallies' => mt_rand(95, 125)));
 };
+// Team payments: most teams pay for the season up front, every third team
+// pays week by week. One weekly team stops paying after round 2 (so it
+// owes more than $75 and drops out of the fixtures), another after round 4
+// (owes one game: a warning, still fixtured).
+$fee = RSL_Payments::settings()['game_fee'];
+$team_pos = array_flip($team_ids);
+$payer = function ($team_id, $k) {
+    $m = RSL_Teams::members($team_id);
+    return $m ? intval($m[$k % count($m)]->user_id) : 0;
+};
+foreach ($team_ids as $i => $tid) {
+    if ($i % 3 !== 1) {
+        RSL_Payments::record_payment($tid, 10 * $fee, $payer($tid, 0), 'Paid for the season');
+    }
+}
 $games_made = 0;
 $results_in = 0;
 for ($round = 0; $round < 5; $round++) {
     $night = $nights[$round];
+    foreach ($team_ids as $i => $tid) {
+        if ($i % 3 === 1 && !($i === 4 && $round >= 2) && !($i === 7 && $round >= 4)) {
+            // Weekly payers top up what they owe, just before the fixtures come out.
+            $owe = RSL_Payments::owing($tid);
+            RSL_Payments::record_payment($tid, max($fee, $owe + $fee), $payer($tid, $round + 1), 'Paid online');
+        }
+    }
     RSL_Ratings::flush();
     $made = RSL_Pairing::generate($night->id);
     if (is_wp_error($made)) {
@@ -262,3 +285,7 @@ echo sprintf("Created %d teams and %d players (%d on teams, %d free agents) in %
     count($team_ids), count($players), $p, count($players) - $p, RSL_Seasons::label($season));
 echo sprintf("Fixtured %d games over rounds 1–5 (published), %d results in.\n", $games_made, $results_in);
 echo sprintf("Officials: %d refs, 2 supervisors, %d jobs taken. Ref login to try: %s\n", count($ref_ids), $jobs_made, get_userdata($ref_ids[0])->user_login);
+$blocked = array_filter($team_ids, function ($tid) { return RSL_Payments::blocked($tid); });
+echo sprintf("Balances: %d teams owing, %d owing too much to be fixtured (%s).\n",
+    count(array_filter($team_ids, function ($tid) { return RSL_Payments::balance($tid) < 0; })), count($blocked),
+    implode(', ', array_map(function ($tid) { return RSL_Teams::get($tid)->name . ' owes $' . RSL_Payments::owing($tid); }, $blocked)));

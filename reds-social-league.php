@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Reds Social League
  * Description: MURVC's social volleyball league: player registration and social rego, captain team applications, invites and rosters, courts and game nights, fixtures, results, ratings and ladders.
- * Version: 0.10.0
+ * Version: 0.11.0
  * Author: MURVC
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('RSL_VERSION', '0.10.0');
+define('RSL_VERSION', '0.11.0');
 define('RSL_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('RSL_PLUGIN_URL', plugin_dir_url(__FILE__));
 
@@ -28,6 +28,7 @@ require_once RSL_PLUGIN_DIR . 'includes/class-rsl-courts.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-fixtures.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-requests.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-officials.php';
+require_once RSL_PLUGIN_DIR . 'includes/class-rsl-payments.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-ref-page.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-ratings.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-pairing.php';
@@ -37,6 +38,7 @@ require_once RSL_PLUGIN_DIR . 'includes/class-rsl-admin.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-admin-courts.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-admin-fixtures.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-admin-officials.php';
+require_once RSL_PLUGIN_DIR . 'includes/class-rsl-admin-payments.php';
 
 register_activation_hook(__FILE__, 'rsl_activate');
 
@@ -67,11 +69,13 @@ function rsl_init() {
     new RSL_Public_Fixtures();
     new RSL_Portal();
     new RSL_Ref_Page();
+    new RSL_Payments();
     new RSL_Rego();
     if (is_admin()) {
         new RSL_Admin();
         new RSL_Admin_Courts();
         new RSL_Admin_Fixtures();
         new RSL_Admin_Officials();
+        new RSL_Admin_Payments();
     }
 }

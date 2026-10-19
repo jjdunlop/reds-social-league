@@ -19,7 +19,8 @@ if (!defined('ABSPATH')) {
 
 class RSL_Requests {
 
-    const TYPES = array('off' => 'Week off', 'double' => 'Two games', 'cant_make' => "Can't make it");
+    // 'unpaid' is recorded by the fixtures (not asked for): left out for owing money.
+    const TYPES = array('off' => 'Week off', 'double' => 'Two games', 'cant_make' => "Can't make it", 'unpaid' => 'Not fixtured — balance owing');
 
     public static function request($team_id, $night_id, $type, $user_id) {
         global $wpdb;
@@ -28,7 +29,7 @@ class RSL_Requests {
         if (!$team || $team->status !== 'active' || !$night || $night->season !== $team->season) {
             return new WP_Error('rsl_request', 'That night isn\'t part of this team\'s season.');
         }
-        if (!isset(self::TYPES[$type])) {
+        if (!isset(self::TYPES[$type]) || $type === 'unpaid') {
             return new WP_Error('rsl_request', 'Unknown request.');
         }
         if (!RSL_Teams::is_captain($team->id, $user_id) && !user_can($user_id, 'manage_options')) {
@@ -54,12 +55,19 @@ class RSL_Requests {
             if (!$playing) {
                 return new WP_Error('rsl_request', 'Your team doesn\'t have a game that night.');
             }
+            $already = self::for_night($night->id, 'cant_make', array('active', 'handled'));
+            if (isset($already[intval($team->id)])) {
+                return new WP_Error('rsl_request', 'You\'ve already told the league your team can\'t make it.');
+            }
         }
         // One live request per team per night: a new one replaces the old.
         $wpdb->query($wpdb->prepare("UPDATE " . RSL_Database::table('requests') . " SET status = 'cancelled' WHERE team_id = %d AND night_id = %d AND status = 'active'", $team->id, $night->id));
-        $wpdb->insert(RSL_Database::table('requests'), array('team_id' => $team->id, 'night_id' => $night->id, 'type' => $type, 'requested_by' => $user_id));
+        $until = $type === 'cant_make' ? RSL_Payments::free_cancel_until($night) : null;
+        $late = $until !== null && current_time('timestamp') > $until ? 1 : 0;
+        $wpdb->insert(RSL_Database::table('requests'), array('team_id' => $team->id, 'night_id' => $night->id, 'type' => $type, 'requested_by' => $user_id, 'late' => $late));
         $req = self::get($wpdb->insert_id);
         if ($type === 'cant_make') {
+            RSL_Payments::on_cant_make($req);
             self::notify_admins($req, $team, $night);
         }
         return $req;
@@ -80,7 +88,22 @@ class RSL_Requests {
             return new WP_Error('rsl_published', 'This week\'s fixtures are already out, so the request can\'t be changed now.');
         }
         $wpdb->update(RSL_Database::table('requests'), array('status' => 'cancelled'), array('id' => $req->id));
+        if ($req->type === 'cant_make') {
+            RSL_Payments::on_cant_make_cancelled($req); // fees go back to normal
+        }
         return true;
+    }
+
+    /** The fixtures left this team out for owing money (counts like a week off: no bye points, no finals round). */
+    public static function record_unpaid($team_id, $night_id) {
+        global $wpdb;
+        $wpdb->insert(RSL_Database::table('requests'), array('team_id' => intval($team_id), 'night_id' => intval($night_id), 'type' => 'unpaid', 'status' => 'handled', 'requested_by' => 0));
+    }
+
+    /** Forget a night's "left out for owing" records (before the fixtures are remade). */
+    public static function clear_unpaid($night_id) {
+        global $wpdb;
+        $wpdb->delete(RSL_Database::table('requests'), array('night_id' => intval($night_id), 'type' => 'unpaid'));
     }
 
     /** An admin has dealt with a request. */
@@ -116,11 +139,11 @@ class RSL_Requests {
         return $out;
     }
 
-    /** Weeks off for a season: night_date => array(team_id => true). */
+    /** Weeks off (asked for, or left out for owing money) for a season: night_date => array(team_id => true). */
     public static function weeks_off($season) {
         global $wpdb;
         $out = array();
-        foreach ($wpdb->get_results($wpdb->prepare("SELECT r.team_id, n.night_date FROM " . RSL_Database::table('requests') . " r JOIN " . RSL_Database::table('nights') . " n ON n.id = r.night_id WHERE n.season = %s AND r.type = 'off' AND r.status IN ('active', 'handled')", $season)) as $r) {
+        foreach ($wpdb->get_results($wpdb->prepare("SELECT r.team_id, n.night_date FROM " . RSL_Database::table('requests') . " r JOIN " . RSL_Database::table('nights') . " n ON n.id = r.night_id WHERE n.season = %s AND r.type IN ('off', 'unpaid') AND r.status IN ('active', 'handled')", $season)) as $r) {
             $out[$r->night_date][intval($r->team_id)] = true;
         }
         return $out;

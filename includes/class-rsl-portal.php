@@ -601,6 +601,12 @@ class RSL_Portal {
                 <div><h3 class="rsl-title"><a href="<?php echo esc_url(RSL_Public::team_url($team)); ?>"><?php echo esc_html($team->name); ?></a></h3>
                     <p class="rsl-meta"><?php echo esc_html(RSL_Teams::DIVISIONS[$team->division]); ?> &middot; <?php echo $is_captain ? 'You\'re the captain' : 'You\'re on this team'; ?></p></div>
             </div>
+            <?php $bal = RSL_Payments::balance($team->id); ?>
+            <p class="rsl-balance-line <?php echo RSL_Payments::blocked($team->id) ? 'is-blocked' : ($bal < 0 ? 'is-owing' : ''); ?>">
+                <strong>Team balance: <?php echo $bal < 0 ? 'owes ' . esc_html(RSL_Payments::money(-$bal)) : esc_html(RSL_Payments::money($bal)) . ($bal > 0 ? ' credit' : ''); ?></strong>
+                <?php if (RSL_Payments::blocked($team->id)): ?> — not fixtured until it's paid down.<?php endif; ?>
+                <a href="<?php echo esc_url(RSL_Public::team_url($team)); ?>">Top up &rarr;</a>
+            </p>
 
             <h4>Players (<?php echo count($members); ?>)</h4>
             <ul class="rsl-roster">
@@ -674,6 +680,9 @@ class RSL_Portal {
             .rsl-portal { --rsl-navy: #1d3d6e; --rsl-muted: #6b7280; --rsl-border: #dcdcde; max-width: 720px; }
             .rsl-season { font-size: 0.55em; font-weight: 400; color: var(--rsl-muted); }
             .rsl-card { border: 1px solid var(--rsl-border); border-radius: 8px; padding: 14px 16px; margin: 14px 0; background: #fff; }
+            .rsl-balance-line { margin: 10px 0 0; padding: 8px 12px; border-radius: 6px; background: #f2f8f2; }
+            .rsl-balance-line.is-owing { background: #fff6e8; }
+            .rsl-balance-line.is-blocked { background: #fcf0f1; color: #8a1f1f; }
             .rsl-card > summary { cursor: pointer; }
             .rsl-card-accent { border-left: 4px solid var(--rsl-navy); background: #f5f8fc; }
             .rsl-card-good { border-left: 4px solid #2e8540; background: #f2f9f3; }

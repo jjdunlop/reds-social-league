@@ -5,6 +5,34 @@ rego, teams and invites, courts and game nights, fixtures, results,
 ratings and ladders so far; admin fixture tools, refs, team balances,
 automatic pairing and finals to come (see `CLAUDE.md`).
 
+## Team balances and payments (0.11.0)
+
+- **Each team has a balance** (`rsl_ledger`: money in positive, charges
+  negative). **Game fees ($75 incl. GST by default) are charged when a
+  week's fixtures are published** — per game, so a double-header is two.
+  The charges follow the published fixture: unpublish and they come off;
+  add or remove a game and they follow. Teams are encouraged to pay before
+  Monday.
+- **Not fixtured when owing more than $75** (setting): one forgotten week
+  is fine, two isn't. The fixtures engine leaves the team out ("Owes $150
+  — not fixtured until paid"), records it so it counts like a week off
+  (no bye points, no finals round), and the team page says so.
+- **"Can't make it"** after fixtures are out: before the cut-off (48 hours
+  before the night by default) neither team in that game pays; after it
+  the withdrawing team pays both fees ($150) and the opponent pays nothing.
+  "We can make it after all" undoes it. Admins see free/late on the night.
+- **Top-ups:** any player on the team pays any amount on the team page
+  (what's owing, next game, rest of the season, or other) through the
+  club's WooCommerce checkout — a placeholder product (Published, catalog
+  Hidden) whose price is set from the amount, **GST included** whatever the
+  shop's tax setting. Each paid order item is credited once (UNIQUE
+  `order_item_id`). The captain sees who has paid what.
+- **Admin, Social League → Team Balances:** every team's balance (owed /
+  credit totals), each team's history, credits and charges with a note
+  (cash, refunds, corrections), and the rules (fee, cut-off, owing limit,
+  top-up product).
+- Team balance is private to the team's players and admins.
+
 ## Referees, court supervisors and the live scoreboard (0.10.0)
 
 - **Who:** players tick *Happy to be a paid referee* when they register

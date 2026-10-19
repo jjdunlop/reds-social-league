@@ -90,13 +90,22 @@ class RSL_Fixtures {
             'away_team_id' => $away->id,
             'status' => 'scheduled',
         ));
-        return self::get($wpdb->insert_id);
+        $id = $wpdb->insert_id;
+        if (self::is_published($night)) {
+            RSL_Payments::sync_night($night->id);
+        }
+        return self::get($id);
     }
 
     public static function delete_game($game_id) {
         global $wpdb;
+        $game = self::get($game_id);
         $wpdb->delete(RSL_Database::table('jobs'), array('type' => 'ref', 'game_id' => $game_id));
-        return (bool) $wpdb->delete(RSL_Database::table('games'), array('id' => $game_id));
+        $deleted = (bool) $wpdb->delete(RSL_Database::table('games'), array('id' => $game_id));
+        if ($game) {
+            RSL_Payments::sync_night($game->night_id); // its fees come off
+        }
+        return $deleted;
     }
 
     public static function get($game_id) {
@@ -333,6 +342,7 @@ class RSL_Fixtures {
             return new WP_Error('rsl_night', 'That night no longer exists.');
         }
         $wpdb->update(RSL_Database::table('nights'), array('published_at' => $publish ? current_time('mysql') : null), array('id' => intval($night_id)));
+        RSL_Payments::sync_night($night_id); // game fees are charged when fixtures are published
         return RSL_Courts::get_night($night_id);
     }
 
