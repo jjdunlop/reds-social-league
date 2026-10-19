@@ -324,15 +324,18 @@ class RSL_Public_Fixtures {
                 <?php if (empty($rows)) { continue; } ?>
                 <h3 class="rsl-division"><?php echo esc_html($label); ?></h3>
                 <?php echo $division === 'ranked' ? self::ranked_table($rows, $mine, $stats) : self::unranked_table($rows, $mine, $stats); ?>
-                <?php if ($division === 'ranked'): ?>
-                    <p class="rsl-note">Ranked teams are ordered by rating, worked out from the points in every set this season plus a bonus for winning sets — so a win over a strong team counts for more than a win over a weaker one, close losses count, and a 1–1 game still counts by its points. Tiers go <?php echo implode(' → ', array_map(function ($t) { return esc_html($t[1]) . ' (' . intval($t[2]) . '+)'; }, array_reverse(array_slice(RSL_Stats::TIERS, 0, -1)))); ?>; below that is <?php echo esc_html(RSL_Stats::TIERS[count(RSL_Stats::TIERS) - 1][1]); ?>. A new team is <strong>in placements</strong> for its first <?php echo intval(RSL_Ratings::PLACEMENT_GAMES); ?> games — it's listed under the ladder and takes its place (and tier) after that. <strong>Finals</strong>: a team needs <?php echo intval(RSL_Stats::finals_min_rounds()); ?> regular-season rounds played (a week the fixtures left it out counts; a forfeit doesn't). Moving up a tier happens as soon as a team's rating gets there; dropping a tier takes two weeks in a row well below it, and a team that reaches <?php echo esc_html(RSL_Stats::tier_by_key(RSL_Stats::PROTECTED_TIER)['label']); ?> keeps at least that all season. Forfeits count as a loss on the record but don't change ratings.</p>
-                <?php endif; ?>
             <?php endforeach; ?>
-            <p class="rsl-note"><strong>Level</strong> (Unranked, and on every team's page) comes from Season Points, which only ever go up: <?php
-                $pts = RSL_Stats::POINTS;
-                echo esc_html('+' . $pts['played'] . ' for every night played (or left out by the fixtures), +' . $pts['win'] . ' for a win (+' . $pts['draw'] . ' for a draw), +' . $pts['close'] . ' for a close game win or lose, +'
-                    . $pts['upset'] . ' for an upset win and +' . $pts['achievement'] . ' for each achievement. Every ' . RSL_Stats::LEVEL_POINTS . ' points is a new level.');
-            ?></p>
+            <?php $pts = RSL_Stats::POINTS; ?>
+            <details class="rsl-how">
+                <summary>How the ladder works</summary>
+                <ul>
+                    <li><strong>Ranked</strong> is ordered by rating, from the points in every set plus a bonus for winning sets — beating a strong team counts for more.</li>
+                    <li><strong>Tiers:</strong> <?php echo esc_html(implode(' · ', array_map(function ($t) { return $t[1] . ($t[2] > 0 ? ' ' . $t[2] . '+' : ''); }, array_reverse(RSL_Stats::TIERS)))); ?>. Up straight away; down only after two weeks well below.</li>
+                    <li><strong>In placements:</strong> a team's first <?php echo intval(RSL_Ratings::PLACEMENT_GAMES); ?> games.</li>
+                    <li><strong>Finals:</strong> <?php echo intval(RSL_Stats::finals_min_rounds()); ?> regular-season rounds played.</li>
+                    <li><strong>Level:</strong> Season Points — <?php echo esc_html('+' . $pts['played'] . ' a night, +' . $pts['win'] . ' a win, +' . $pts['close'] . ' a close game, +' . $pts['upset'] . ' an upset, +' . $pts['achievement'] . ' an achievement'); ?>.</li>
+                </ul>
+            </details>
             <p class="rsl-links"><a href="<?php echo esc_url(self::fixtures_url()); ?>">Fixtures &amp; results &rarr;</a></p>
         </div>
         <?php
@@ -536,7 +539,7 @@ class RSL_Public_Fixtures {
         };
         ob_start();
         ?>
-        <?php if ($captain): ?><p class="rsl-hint">Captain: need a week off, or fancy two games one night? Ask before that week's fixtures come out (Mondays) — it's free. Once they're out, use "Can't make it" and the league will sort it out.</p><?php endif; ?>
+        <?php if ($captain): ?><p class="rsl-hint">Captain: ask for a week off or two games before that week's fixtures come out (Mondays).</p><?php endif; ?>
         <div class="rsl-table-wrap"><table class="rsl-team-games rsl-schedule">
             <tbody>
             <?php foreach ($nights as $n): ?>
@@ -734,6 +737,10 @@ class RSL_Public_Fixtures {
             .rsl-move.is-up { color: #2e7d32; }
             .rsl-move.is-down { color: #b32d2e; }
             .rsl-note { font-size: 13px; color: var(--rsl-muted); margin-top: 8px; }
+            .rsl-how { margin-top: 18px; font-size: 13px; color: var(--rsl-muted); }
+            .rsl-how summary { cursor: pointer; font-weight: 700; color: var(--rsl-navy); }
+            .rsl-how ul { margin: 8px 0 0 18px; padding: 0; }
+            .rsl-how li { margin: 3px 0; }
             .rsl-standing { margin: 12px 0 0; font-weight: 600; }
             .rsl-team-games tr.is-next td { background: #eef2f8; }
             .rsl-result { text-align: right; white-space: nowrap; }
