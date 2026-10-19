@@ -323,13 +323,11 @@ class RSL_Placement {
         $members = array();
         foreach ((array) $get('members', array()) as $m) {
             $m = (array) $m;
-            // An under-18 is never counted as (or picked as) a captain.
             $members[] = array(
                 'user_id' => intval(isset($m['user_id']) ? $m['user_id'] : 0),
                 'band' => isset($m['band']) ? max(1.0, min(5.0, (float) $m['band'])) : $band,
-                'captain_ok' => !empty($m['captain_ok']) && empty($m['minor']),
+                'captain_ok' => !empty($m['captain_ok']),
                 'veteran' => !empty($m['veteran']),
-                'minor' => !empty($m['minor']),
             );
         }
         if (!$members) {
@@ -353,13 +351,9 @@ class RSL_Placement {
                 $ids[] = $m['user_id'];
             }
         }
-        // With members given, a unit volunteers only through an adult member who does.
-        $captain_ok = !empty($u['captain_ok']) && !array_filter($members, function ($m) { return !empty($m['minor']); });
+        $captain_ok = !empty($u['captain_ok']);
         foreach ($members as $m) {
             $captain_ok = $captain_ok || $m['captain_ok'];
-            if ($captain && $m['user_id'] === $captain && !empty($m['minor'])) {
-                $captain = 0;
-            }
         }
         $locked = (string) $get('locked', '');
         if ($locked !== 'none' && !preg_match('/^(t:\d+|n:[UR]\d+)$/', $locked)) {
@@ -1333,9 +1327,9 @@ class RSL_Placement {
             }
             return $best;
         };
-        $volunteer = $pick(function ($m) { return $m['captain_ok'] && empty($m['minor']); });
-        $captain = $volunteer ? $volunteer : $pick(function ($m) { return $m['veteran'] && empty($m['minor']); });
-        $captain = $captain ? $captain : $pick(function ($m) { return empty($m['minor']); });
+        $volunteer = $pick(function ($m) { return $m['captain_ok']; });
+        $captain = $volunteer ? $volunteer : $pick(function ($m) { return $m['veteran']; });
+        $captain = $captain ? $captain : $pick(function ($m) { return true; });
         $flags = array();
         if (!$volunteer) {
             $flags[] = 'needs_captain';
@@ -1655,7 +1649,7 @@ class RSL_Placement {
                 $band = (float) RSL_Free_Agents::band($r, $r);
                 $ids[] = $uid;
                 $band_sum += $band;
-                $members[] = array('user_id' => $uid, 'band' => $band, 'captain_ok' => intval($r->captain_ok) && !intval($r->under18), 'veteran' => $r->years === 'gt3', 'minor' => (bool) intval($r->under18));
+                $members[] = array('user_id' => $uid, 'band' => $band, 'captain_ok' => (bool) intval($r->captain_ok), 'veteran' => $r->years === 'gt3');
                 if (isset($times[$r->time_pref])) {
                     $times[$r->time_pref]++;
                 }
@@ -2261,16 +2255,10 @@ class RSL_Placement {
         }
     }
 
-    /**
-     * The volunteer with the highest band; else the most experienced, highest
-     * band (ties: earliest sign-up). Never an under-18 (0 if there's only them).
-     */
+    /** The volunteer with the highest band; else the most experienced, highest band (ties: earliest sign-up). */
     private static function best_captain($rows) {
         $best = null;
         foreach ($rows as $r) {
-            if (!empty($r->under18)) {
-                continue;
-            }
             $key = array(intval($r->captain_ok) ? 0 : 1, $r->years === 'gt3' ? 0 : 1, -RSL_Free_Agents::band($r, $r), strtotime((string) $r->created_at), intval($r->user_id));
             if ($best === null || self::lex_less($key, $best[0])) {
                 $best = array($key, intval($r->user_id));
@@ -2513,8 +2501,6 @@ class RSL_Placement {
                 }
                 if (!$captain) {
                     $add('blocker', $dest, 'Pick a captain for ' . $name_of($dest) . '.');
-                } elseif (intval($captain->under18)) {
-                    $add('warning', $dest, $name_of($dest) . '\'s captain, ' . $who(array($captain)) . ', is under 18 — only confirm if the club\'s rules allow it.');
                 } elseif (!intval($captain->captain_ok)) {
                     $add('warning', $dest, $name_of($dest) . ' has no volunteer captain — ' . $who(array($captain)) . ' is picked; check they\'re happy to.');
                 }
@@ -2781,14 +2767,7 @@ class RSL_Placement {
             }
         }
         if ($placed && !RSL_Teams::captain($team->id)) {
-            $fallback = $placed[0];
-            foreach ($free as $r) {
-                if (in_array(intval($r->user_id), $placed, true) && empty($r->under18)) {
-                    $fallback = intval($r->user_id);
-                    break;
-                }
-            }
-            RSL_Teams::set_captain($team->id, in_array($captain_uid, $placed, true) ? $captain_uid : $fallback);
+            RSL_Teams::set_captain($team->id, in_array($captain_uid, $placed, true) ? $captain_uid : $placed[0]);
         }
         $captain = RSL_Teams::captain($team->id);
         $volunteer = false;

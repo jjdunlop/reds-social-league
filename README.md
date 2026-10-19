@@ -38,8 +38,7 @@ finals (see `CLAUDE.md`).
   the deadline it fills short teams first (under 7), tops up teams that
   asked (to 8), then forms new teams of about 8 from the rest — grouped by
   level and game time, friend groups never split, a volunteer captain in
-  each (never an under-18 — the admin is warned if they pick one by hand),
-  Unranked-only players never in Ranked, nobody over 10. The admin
+  each, Unranked-only players never in Ranked, nobody over 10. The admin
   reviews it on **Social League → Free Agents → Placement**, moves anyone
   (whole groups move together; a stale tab is refused), names new teams,
   and confirms (safe to run twice). Anyone not placed is told why, charged

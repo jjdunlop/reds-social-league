@@ -42,7 +42,7 @@ $unit = function ($band, $o = array()) use (&$seq) {
     $members = array();
     for ($i = 0; $i < $size; $i++) {
         $ids[] = $seq * 10 + $i;
-        $members[] = array('user_id' => $seq * 10 + $i, 'band' => isset($o['bands'][$i]) ? $o['bands'][$i] : $band, 'captain_ok' => $i === 0 && !empty($o['captain']), 'veteran' => $i === 0 && !empty($o['veteran']), 'minor' => $i === 0 && !empty($o['minor']));
+        $members[] = array('user_id' => $seq * 10 + $i, 'band' => isset($o['bands'][$i]) ? $o['bands'][$i] : $band, 'captain_ok' => $i === 0 && !empty($o['captain']), 'veteran' => $i === 0 && !empty($o['veteran']));
     }
     $base = array(
         'ref' => 'u' . $seq, 'user_ids' => $ids, 'lead_user_id' => $ids[0], 'size' => $size, 'band' => $band, 'members' => $members,
@@ -50,7 +50,7 @@ $unit = function ($band, $o = array()) use (&$seq) {
         'captain_ok' => !empty($o['captain']), 'captain_user_id' => !empty($o['captain']) ? $ids[0] : 0,
         'requested' => array(), 'declined' => array(), 'created_at' => gmdate('Y-m-d H:i:s', 3660000000 + $seq * 60), 'locked' => '',
     );
-    return array_merge($base, array_diff_key($o, array('size' => 1, 'captain' => 1, 'veteran' => 1, 'bands' => 1, 'minor' => 1)));
+    return array_merge($base, array_diff_key($o, array('size' => 1, 'captain' => 1, 'veteran' => 1, 'bands' => 1)));
 };
 $team = function ($id, $division, $n, $band, $o = array()) {
     return array_merge(array('id' => $id, 'name' => "Team $id", 'division' => $division, 'n' => $n, 'band' => $band, 'pref_time' => 'any', 'lacks' => array(), 'spots_open' => 0), $o);
@@ -208,10 +208,6 @@ $vet = $unit(2.0, array('veteran' => true)); $strong = $unit(3.0);
 $res = $run(array_merge($singles(6, 2.0), array($strong, $vet)), array());
 $d = isset($res['new_teams']['U1']) ? $res['new_teams']['U1'] : null;
 $check('no volunteer: flagged, and the most experienced player is suggested', $d && !$d['volunteer'] && in_array('needs_captain', $d['flags'], true) && $d['captain_user_id'] === $vet['user_ids'][0]);
-$teen = $unit(4.0, array('captain' => true, 'veteran' => true, 'minor' => true)); $adult = $unit(2.0, array('veteran' => true));
-$res = $run(array_merge(array($teen, $adult), $singles(5, 2.5)), array());
-$d = isset($res['new_teams']['U1']) ? $res['new_teams']['U1'] : null;
-$check('an under-18 is never picked as captain, even a strong volunteer', $d && $d['captain_user_id'] !== $teen['user_ids'][0] && $d['captain_user_id'] === $adult['user_ids'][0] && !$d['volunteer'] && in_array('needs_captain', $d['flags'], true));
 $s1 = $unit(2.0, array('positions' => array('setter'))); $s2 = $unit(2.0, array('positions' => array('setter')));
 $res = $run(array_merge(array($s1, $s2), $singles(14, 2.0, array('positions' => array('outside')))), array());
 $sets = array();
