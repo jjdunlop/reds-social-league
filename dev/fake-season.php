@@ -280,6 +280,14 @@ for ($round = 0; $round < 5; $round++) {
         }
     }
 }
+// The refs saved those results on their scoreboards (so the results are
+// theirs to correct, not locked as the league's).
+$wpdb->query($wpdb->prepare("
+    UPDATE " . RSL_Database::table('games') . " g
+    JOIN " . RSL_Database::table('jobs') . " j ON j.game_id = g.id AND j.type = 'ref'
+    SET g.result_by = j.user_id
+    WHERE g.season = %s AND g.status = 'played'
+", $season));
 
 echo sprintf("Created %d teams and %d players (%d on teams, %d free agents) in %s.\n",
     count($team_ids), count($players), $p, count($players) - $p, RSL_Seasons::label($season));

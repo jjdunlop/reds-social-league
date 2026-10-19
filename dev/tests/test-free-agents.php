@@ -171,6 +171,7 @@ $check('a Ranked-only player is offered Ranked teams only', count($looking_r) ==
 $check('a beginner is never offered a Ranked team', !array_filter(RSL_Free_Agents::teams_looking($season, $beg), function ($i) use ($tr) { return intval($i['team']->id) === intval($tr->id); }));
 $req = RSL_Free_Agents::request_join($tr->id, $rk);
 $check('ask to join', is_int($req) && $req > 0);
+$check('while they wait, that team answers the request instead of seeing them in the list', !in_array('Fark', array_map(function ($c) { return $c['first_name']; }, RSL_Free_Agents::browse_for_captain($tr->id, $cap_r)), true));
 $check('asking twice is refused', is_wp_error(RSL_Free_Agents::request_join($tr->id, $rk)));
 $check('the requester can\'t accept their own request', is_wp_error(RSL_Free_Agents::respond_request($req, $rk, true)));
 $check('another team\'s captain can\'t answer it', is_wp_error(RSL_Free_Agents::respond_request($req, $cap_u, true)));

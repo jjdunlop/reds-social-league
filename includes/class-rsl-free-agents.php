@@ -704,13 +704,21 @@ class RSL_Free_Agents {
         foreach ($wpdb->get_col($wpdb->prepare("SELECT user_id FROM " . RSL_Database::table('invites') . " WHERE team_id = %d AND status = 'pending' AND (expires_at IS NULL OR expires_at > %s)", $team->id, current_time('mysql'))) as $uid) {
             $invited[intval($uid)] = true;
         }
+        // Someone who has already asked this team is answered under "Requests to join", not invited again.
+        $asked_codes = array();
+        foreach ($wpdb->get_results($wpdb->prepare("SELECT user_id, group_code FROM " . RSL_Database::table('join_requests') . " WHERE team_id = %d AND status = 'pending' AND expires_at > %s", $team->id, current_time('mysql'))) as $req) {
+            $invited[intval($req->user_id)] = true;
+            if ($req->group_code !== '') {
+                $asked_codes[$req->group_code] = true;
+            }
+        }
         $position = isset($filters['position']) ? (string) $filters['position'] : '';
         $level = isset($filters['level']) ? (string) $filters['level'] : '';
         $out = array();
         foreach (self::open_units($team->season) as $unit) {
             $ok = count($unit) <= $room && in_array($team->division, self::group_divisions($unit), true) && !self::unit_declined($declined, $team->id, $unit);
             foreach ($unit as $r) {
-                if (!$r->browsable || ($r->under18 && !$settings['under18_in_pool']) || isset($invited[intval($r->user_id)])) {
+                if (!$r->browsable || ($r->under18 && !$settings['under18_in_pool']) || isset($invited[intval($r->user_id)]) || ($r->group_code !== '' && isset($asked_codes[$r->group_code]))) {
                     $ok = false;
                 }
             }
