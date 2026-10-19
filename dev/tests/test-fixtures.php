@@ -234,6 +234,27 @@ $check('levels every ' . RSL_Stats::LEVEL_POINTS . ' points', RSL_Stats::level(0
 $dp = $stats['teams'][intval($D->id)]['points'];
 $check('Season Points reward turning up, even when losing', $dp >= RSL_Stats::POINTS['played'] * 2 && $stats['teams'][intval($B->id)]['points'] > 0);
 $check('a three-set game is a close one', $stats['games'][intval($g1->id)]['close'] === true);
+// Fair however many games: turn-up points and finals rounds are per night.
+$sa = $stats['teams'][intval($A->id)];
+$check('a double-header night counts as one round (Aces: 4 games over 3 nights)', $sa['rounds'] === 3);
+$check('finals: needs ' . RSL_Stats::finals_min_rounds() . ' rounds — shows how many to go, and when it can\'t get there',
+    $sa['finals']['need'] === RSL_Stats::finals_min_rounds() - 3 && !$sa['finals']['eligible'] && $sa['finals']['possible'] === false);
+$check('a forfeit loss isn\'t a round played', $stats['teams'][intval($D->id)]['rounds'] === 3); // D forfeited one game but played the other that night
+$ladder = RSL_Ratings::ladder($season, 'ranked');
+$order_ok = true;
+$seen_unnumbered = false;
+foreach ($ladder as $row) {
+    if ($row['placement'] || $row['new']) {
+        $order_ok = $order_ok && $row['position'] === null;
+        $seen_unnumbered = true;
+    } elseif ($seen_unnumbered) {
+        $order_ok = false; // a numbered team listed after an unnumbered one
+    }
+}
+$check('teams in placements aren\'t numbered and sit under the settled teams', $order_ok);
+$html = $pages->render_ladder();
+$check('Ranked ladder has Finals, not Lvl; Unranked keeps Level', strpos($html, '>Finals</th>') !== false && strpos($html, '>Lvl</th>') === false && strpos($html, '>Level</th>') !== false);
+
 $profile = RSL_Public_Fixtures::team_profile(RSL_Teams::get($D->id));
 $check('team profile shows the level', strpos($profile, 'Season Points') !== false && strpos($profile, 'Lvl ') !== false);
 $check('team profile shows achievements and form', strpos($profile, 'Giant killer') !== false && strpos($profile, 'rsl-form') !== false);

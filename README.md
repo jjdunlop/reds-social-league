@@ -5,6 +5,26 @@ rego, teams and invites, courts and game nights, fixtures, results,
 ratings and ladders so far; admin fixture tools, refs, team balances,
 automatic pairing and finals to come (see `CLAUDE.md`).
 
+## Fair however many games: placements, finals eligibility (0.8.1)
+
+- **Ratings don't depend on how many teams there are** — they come only
+  from games played (checked: a strong team joining changes no one's
+  rating; beating two teams moves those two and others by at most a few
+  points). **Ladder places do**, so teams **in placements aren't
+  numbered**: they're listed under the settled teams and take their
+  place after 3 games, instead of pushing everyone down after one night.
+  Their rating number isn't shown either.
+- **Season Points: +10 for turning up is once per night** (double-headers
+  don't double it); a week the fixtures leave a team out (odd numbers)
+  still earns it. Wins, close games and upsets still count per game.
+- **Finals eligibility (Ranked):** a team needs 5 regular-season
+  **rounds** (nights, not games — double-headers don't fast-track),
+  counting weeks the fixtures left it out but not forfeits. Ladder
+  column: ✓, "2 to go", or blank once it can't get there. Setting:
+  option `rsl_finals_min_rounds` (filter of the same name).
+- The Ranked ladder no longer has a Level column (rating and tier tell
+  that story); Unranked keeps **Level**; every team page shows it.
+
 ## Fair progression: earned tiers, Season Points, hype not odds (0.8.0)
 
 The **rating stays honest** (it orders the Ranked ladder and makes the
@@ -44,7 +64,11 @@ still moves the ratings. `dev/simulate-ratings.php` plays timed seasons
 rally by rally: points + set bonus finds the true order faster than sets
 alone (after 2 rounds about as well as sets alone after 4) and is closer
 at season's end (48 vs 53 rating points off). Uncertainty is calibrated
-from the same simulations; a team is provisional for about its first two games.
+from the same simulations. A team is in placements (provisional) for its
+first 3 games — a clear rule rather than a hidden uncertainty threshold
+(which left 9 of 14 teams in placements after round 2 for reasons
+players couldn't see); the uncertainty only keeps a team in placements
+after that if its rating is unusually unsettled.
 
 **Set chance, not expected score.** Closeness is each team's chance of
 winning any one set (independent of how many sets fit in the hour). The

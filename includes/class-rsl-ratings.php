@@ -33,7 +33,8 @@ class RSL_Ratings {
     const SCALE = 400;            // rating points for 10:1 odds in a set
     const PRIOR_SD = 200;         // how far results can comfortably move a team from its seed
     const HALF_LIFE_WEEKS = 8;    // a set this many weeks old counts half
-    const PROVISIONAL_SD = 83;    // provisional until the uncertainty drops below this (about the first two games)
+    const PLACEMENT_GAMES = 3;    // a team is in placements (provisional) for its first games — a clear rule players can follow
+    const PROVISIONAL_SD = 95;    // ...and stays provisional after that only if its rating is still unusually uncertain
     const FULL_SET_POINTS = 40;   // a set with this many points (e.g. 25–15) counts as a whole set won
     const RALLY_SCALE = 6;        // a team's edge in a rally is about 1/6 of its edge in a set (race to 25)
     // Chosen by dev/simulate-ratings.php (timed games played rally by rally):
@@ -172,7 +173,7 @@ class RSL_Ratings {
             $out[$i] = array(
                 'rating' => $ti / $k,
                 'sd' => $sd,
-                'provisional' => $games[$i] === 0 || $sd > self::PROVISIONAL_SD,
+                'provisional' => $games[$i] < self::PLACEMENT_GAMES || $sd > self::PROVISIONAL_SD,
                 'games' => $games[$i],
             );
         }
@@ -187,10 +188,11 @@ class RSL_Ratings {
     /**
      * The ladder for one division: ordered rows of
      * array(team, position, played, won, drawn, lost, forfeits, sets_for,
-     * sets_against, rating|null, provisional, move|null, new).
+     * sets_against, rating|null, provisional, move|null, new, placement).
      *
-     * Ranked: by rating (teams without a played game last, by name; their
-     * position is null). move = places gained since the previous round.
+     * Ranked: settled teams by rating; then teams in placements (by name,
+     * no position yet); then teams without a played game (position null).
+     * move = places gained since the previous round.
      * Unranked: by wins, then set difference, then sets won.
      */
     public static function ladder($season, $division) {
@@ -198,7 +200,7 @@ class RSL_Ratings {
         $rows = array();
         foreach ($teams as $t) {
             $rows[intval($t->id)] = array('team' => $t, 'position' => null, 'played' => 0, 'won' => 0, 'drawn' => 0, 'lost' => 0, 'forfeits' => 0,
-                'sets_for' => 0, 'sets_against' => 0, 'rating' => null, 'provisional' => false, 'move' => null, 'new' => false);
+                'sets_for' => 0, 'sets_against' => 0, 'rating' => null, 'provisional' => false, 'move' => null, 'new' => false, 'placement' => false);
         }
         $nights_played = array();
         foreach (RSL_Fixtures::games_for_season($season, $division) as $g) {
@@ -225,13 +227,23 @@ class RSL_Ratings {
 
         if ($division === 'ranked') {
             $now = self::compute($season);
+            // Settled teams are numbered by rating. Teams in placements are
+            // listed (by name) but not numbered until their rating settles,
+            // so a newcomer can't push everyone down after a game or two.
+            // Teams that haven't played come last.
             $rated = array();
+            $placements = array();
             $unrated = array();
             foreach ($rows as $id => $row) {
                 if (isset($now[$id]) && $now[$id]['games'] > 0) {
                     $row['rating'] = (int) round($now[$id]['rating']);
                     $row['provisional'] = $now[$id]['provisional'];
-                    $rated[$id] = $row;
+                    if ($row['provisional']) {
+                        $row['placement'] = true;
+                        $placements[$id] = $row;
+                    } else {
+                        $rated[$id] = $row;
+                    }
                 } else {
                     $row['new'] = true;
                     $unrated[$id] = $row;
@@ -240,13 +252,14 @@ class RSL_Ratings {
             uasort($rated, function ($x, $y) use ($now) {
                 return $now[intval($y['team']->id)]['rating'] <=> $now[intval($x['team']->id)]['rating'];
             });
+            uasort($placements, function ($x, $y) { return strcasecmp($x['team']->name, $y['team']->name); });
             // Places moved since the round before the latest one.
             $dates = array_keys($nights_played);
             sort($dates);
             $before = array();
             if (count($dates) > 1) {
                 $prev = self::compute($season, $dates[count($dates) - 2]);
-                $prev = array_filter($prev, function ($p) { return $p['games'] > 0; });
+                $prev = array_filter($prev, function ($p) { return $p['games'] > 0 && !$p['provisional']; });
                 uasort($prev, function ($x, $y) { return $y['rating'] <=> $x['rating']; });
                 $before = array_flip(array_keys($prev));
             }
@@ -258,7 +271,7 @@ class RSL_Ratings {
                 }
             }
             unset($row);
-            return array_merge(array_values($rated), array_values($unrated));
+            return array_merge(array_values($rated), array_values($placements), array_values($unrated));
         }
 
         uasort($rows, function ($x, $y) {

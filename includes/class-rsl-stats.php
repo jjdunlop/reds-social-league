@@ -43,8 +43,17 @@ class RSL_Stats {
     const PROTECTED_TIER = 'silver'; // once reached, never lost that season
     const UPSET_CHANCE = 0.35;
     const CLOSE_POINTS = 6;         // a game within this many points overall is a close one
+    // 'played' is once per night (a double-header doesn't double it; a bye
+    // the fixtures gave a team still counts); the rest are per game.
     const POINTS = array('played' => 10, 'win' => 5, 'draw' => 3, 'close' => 3, 'upset' => 5, 'achievement' => 10);
     const LEVEL_POINTS = 40;
+    const FINALS_MIN_ROUNDS = 5;    // default; option rsl_finals_min_rounds / filter rsl_finals_min_rounds
+
+    /** Regular-season rounds a Ranked team must have played to make finals. */
+    public static function finals_min_rounds() {
+        $n = intval(get_option('rsl_finals_min_rounds', self::FINALS_MIN_ROUNDS));
+        return (int) apply_filters('rsl_finals_min_rounds', $n > 0 ? $n : self::FINALS_MIN_ROUNDS);
+    }
 
     private static $memo = array();
 
@@ -121,7 +130,8 @@ class RSL_Stats {
         $teams = array();
         foreach (RSL_Teams::list_for_season($season) as $t) {
             $teams[intval($t->id)] = array('team' => $t, 'form' => array(), 'streak' => '', 'history' => array(), 'achievements' => array(),
-                'peak' => null, 'now' => null, 'upsets' => 0, 'points' => 0, 'earned' => null, 'below' => 0, 'first_rating' => null);
+                'peak' => null, 'now' => null, 'upsets' => 0, 'points' => 0, 'earned' => null, 'below' => 0, 'first_rating' => null,
+                'rounds' => 0, 'finals' => null);
         }
         $out = array('games' => array(), 'teams' => array(), 'dates' => $dates, 'leaders' => array());
 
@@ -132,9 +142,15 @@ class RSL_Stats {
             $positions = self::positions($after);
             $tonight = array_filter($done, function ($g) use ($date) { return $g->night_date === $date; });
             $night_wins = array();
+            $turned_up = array();   // team => true once it has a game (not a forfeit loss) tonight
+            $had_game = array();    // team => true if it had any game tonight
+            $divisions_tonight = array();
+            $regular = true;
             foreach ($tonight as $g) {
                 $h = intval($g->home_team_id);
                 $a = intval($g->away_team_id);
+                $divisions_tonight[$g->division] = true;
+                $regular = $regular && $g->night_type !== 'finals';
                 $info = array('p_home' => null, 'upset_team' => null, 'close' => false, 'delta' => array());
                 if ($g->status === 'played') {
                     $sets = RSL_Fixtures::parse_sets($g->sets);
@@ -165,8 +181,10 @@ class RSL_Stats {
                     if ($letter === 'W') {
                         $night_wins[$t] = (isset($night_wins[$t]) ? $night_wins[$t] : 0) + 1;
                     }
-                    // Season Points: turning up counts most.
-                    if ($r['outcome'] !== 'forfeit_loss') {
+                    // Season Points: turning up counts most — once a night.
+                    $had_game[$t] = true;
+                    if ($r['outcome'] !== 'forfeit_loss' && empty($turned_up[$t])) {
+                        $turned_up[$t] = true;
                         $teams[$t]['points'] += self::POINTS['played'];
                     }
                     if ($r['outcome'] === 'win') {
@@ -207,6 +225,27 @@ class RSL_Stats {
                     self::earn($teams[$t], 'double_trouble', 'Double trouble', 'Won both games of a double-header', $date);
                 }
             }
+            // A team the fixtures left out (odd numbers) isn't penalised: it
+            // gets the turn-up points and the round counts towards finals.
+            // A forfeit loss is neither. (Weeks off a team asks for, when
+            // they exist, won't count.)
+            foreach ($teams as $t => &$row) {
+                if (empty($divisions_tonight[$row['team']->division])) {
+                    continue;
+                }
+                $bye = empty($had_game[$t]);
+                $joined = substr((string) $row['team']->created_at, 0, 10);
+                if ($bye && $joined !== '' && $joined > $date) {
+                    continue; // not in the league yet that night
+                }
+                if ($bye) {
+                    $row['points'] += self::POINTS['played'];
+                }
+                if ($regular && ($bye || !empty($turned_up[$t]))) {
+                    $row['rounds']++;
+                }
+            }
+            unset($row);
 
             // Earned tiers: instant promotion, slow and protected demotion.
             foreach ($positions as $t => $pos) {
@@ -243,7 +282,14 @@ class RSL_Stats {
 
         $now = RSL_Ratings::compute($season);
         $positions = self::positions($now);
+        $min_rounds = self::finals_min_rounds();
+        $last_date = $dates ? end($dates) : '';
+        $rounds_left = count(array_filter(RSL_Courts::nights($season), function ($n) use ($last_date) {
+            return $n->type === 'regular' && $n->night_date > $last_date;
+        }));
         foreach ($teams as $t => &$row) {
+            $row['finals'] = array('rounds' => $row['rounds'], 'need' => max(0, $min_rounds - $row['rounds']),
+                'eligible' => $row['rounds'] >= $min_rounds, 'possible' => $row['rounds'] + $rounds_left >= $min_rounds);
             if ($row['form']) {
                 $last = end($row['form']);
                 $n = 0;
@@ -382,9 +428,13 @@ class RSL_Stats {
         return $tags;
     }
 
-    /** Ladder places among teams that have played (team_id => 1, 2, ...). */
+    /**
+     * Ladder places among teams out of placements (team_id => 1, 2, ...).
+     * A team still in placements has no place yet, so a newcomer can't
+     * push everyone down after one or two games.
+     */
     private static function positions($ratings) {
-        $rated = array_filter($ratings, function ($r) { return $r['games'] > 0; });
+        $rated = array_filter($ratings, function ($r) { return $r['games'] > 0 && !$r['provisional']; });
         uasort($rated, function ($x, $y) { return $y['rating'] <=> $x['rating']; });
         $pos = array();
         $i = 0;
