@@ -27,7 +27,7 @@ class RSL_Teams {
             'social' => 'Social — we can keep a rally going',
             'solid' => 'Solid — we are able to set up an attack on most points',
             'strong' => 'Strong — VVL State League and friends',
-            'advanced' => 'Advanced — VVL Premier League players',
+            'advanced' => 'Advanced — VVL Premier League players and friends',
         );
     }
 

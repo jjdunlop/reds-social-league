@@ -40,6 +40,8 @@ $reset = function () use ($wpdb, $fake_option, $fake_venues_option) {
     $users = get_users(array('meta_key' => 'rsl_fake', 'meta_value' => '1', 'fields' => 'ID'));
     foreach ($users as $uid) {
         $wpdb->delete(RSL_Database::table('team_members'), array('user_id' => $uid), array('%d'));
+        $wpdb->delete(RSL_Database::table('players'), array('user_id' => $uid), array('%d'));
+        $wpdb->delete(RSL_Database::table('regos'), array('user_id' => $uid), array('%d'));
         wp_delete_user($uid);
     }
     return array(count($team_ids), count($users));
@@ -73,7 +75,25 @@ for ($i = 1; $i <= 150; $i++) {
     ));
     if (!is_wp_error($uid)) {
         update_user_meta($uid, 'rsl_fake', '1');
+        update_user_meta($uid, 'profile_confirmed_year', current_time('Y')); // past the site's yearly profile check
         $players[] = $uid;
+    }
+}
+
+// Everyone registered for the league; the last 10 are free agents looking
+// for a team. About 1 in 8 still needs to pay rego so ✓/✗ both show.
+$player_levels = array_keys(RSL_Players::levels());
+$player_years = array_keys(RSL_Players::years());
+$player_positions = array_keys(RSL_Players::positions());
+foreach ($players as $i => $uid) {
+    RSL_Players::register($uid, array(
+        'level' => $player_levels[mt_rand(0, count($player_levels) - 1)],
+        'years' => $player_years[mt_rand(0, count($player_years) - 1)],
+        'positions' => array($player_positions[mt_rand(0, count($player_positions) - 1)]),
+        'looking' => $i >= count($players) - 10,
+    ));
+    if ($i % 8 !== 3) {
+        RSL_Rego::grant($uid, array('source' => 'manual', 'note' => 'Fake season'));
     }
 }
 
@@ -93,9 +113,18 @@ foreach ($names as $n => $name) {
     }
     $team_ids[] = intval($team->id);
     $size = 6 + mt_rand(0, 3);
+    $captain = $players[$p];
     for ($k = 0; $k < $size && $p < count($players) - 10; $k++) { // keep 10 as free agents
         RSL_Teams::add_member($team->id, $players[$p++], $k === 0 ? 'captain' : 'player');
     }
+    $times = array_keys(RSL_Teams::time_preferences());
+    $shapes = array_keys(RSL_Teams::double_shapes());
+    RSL_Teams::set_preferences($team->id, $captain, array(
+        'time' => $times[$n % count($times)],
+        'double' => $n % 3 === 0,
+        'shape' => $shapes[$n % 2],
+        'standby' => $n % 4 === 1,
+    ));
 }
 update_option($fake_option, $team_ids, false);
 
