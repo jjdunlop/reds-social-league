@@ -43,12 +43,21 @@ team names, badges, divisions and results — never player names. Rosters
 and anything personal are for the people involved (the team's members,
 captains, admins). Under-18s play in the league.
 
+Two more privacy rules from registration: **a captain sees teammates'
+names and ✓ cleared / ✗ needs rego only — never why** (membership vs paid
+rego); and **joining by email needs the player to accept** (until then the
+captain sees only the email they typed). Being on a team never needs
+payment; being cleared is what's needed before a first game.
+
 ## File map
 
 - `reds-social-league.php` — bootstrap: constants, requires, activation (tables, pages, rewrites).
 - `includes/class-rsl-database.php` — table creation (`dbDelta`) + `maybe_upgrade()`; bump `SCHEMA_VERSION` when the schema changes.
 - `includes/class-rsl-seasons.php` — league seasons: four a year, keys like `2027-pre`, `2027-mid1`, `2027-mid2`, `2027-post`; the current season.
-- `includes/class-rsl-teams.php` — teams and rosters data layer (no output). Returns results or `WP_Error` with a readable message.
+- `includes/class-rsl-teams.php` — teams, rosters, captain applications (pending → approved/declined/withdrawn), invite codes, email invites. Data layer (no output); returns results or `WP_Error` with a readable message.
+- `includes/class-rsl-players.php` — league registration profile (free; separate from paying).
+- `includes/class-rsl-rego.php` — who's cleared to play: full/life membership via `TeamOversight_Memberships::covered_until()` (Club Manager, checked with `method_exists`), else a 12-month social rego (`rsl_regos`, one per paid order item — UNIQUE, the dedupe). WooCommerce hooks, past-order scan, pay link.
+- `includes/class-rsl-portal.php` — `[rsl_my_league]` on the auto-created Social League page: register, clearance + pay, join by code, invites, apply as captain, captain tools. Post/Redirect/Get on `template_redirect`.
 - `includes/class-rsl-public.php` — `[rsl_teams]`, the auto-created League Teams page, team pages at `/league-teams/{slug}/`.
 - `includes/class-rsl-admin.php` — Social League → Teams admin (admin-post handlers, Post/Redirect/Get).
 - `dev/fake-season.php` — DEV ONLY: fills the current season with a pretend league (`reset` removes it). WP-CLI only.
