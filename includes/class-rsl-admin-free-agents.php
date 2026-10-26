@@ -621,7 +621,7 @@ class RSL_Admin_Free_Agents {
         $h .= self::stats($season, $by, $ctx);
 
         $h .= '<h2 id="rsl-fa-pool">Looking for a team <span class="count">(' . count($by['looking']) . ')</span></h2>';
-        $h .= '<p class="description">Admin-only: the band (1 never played … 5 State League; blank = worked out from their answers), under 18, weeks away and notes are never shown to captains. '
+        $h .= '<p class="description">Admin-only: the band (1 never played … 5 State League; blank = worked out from their answers), age, weeks away and notes are never shown to captains. Under 18 comes from the date of birth on their club profile (no date of birth counts as under 18); tick <em>Treat as under 18</em> when an account\'s date of birth is wrong. '
             . '"Place now" puts them (with their friend group) straight onto a team — into a division they haven\'t agreed to, it sends them an invite to accept instead.</p>';
         $h .= self::pool_table($by['looking'], $season, $teams, $ctx, 'Nobody is waiting on the list.');
 
@@ -676,6 +676,7 @@ class RSL_Admin_Free_Agents {
         $volunteers = 0;
         $under18 = 0;
         $late = 0;
+        $is_under18 = RSL_Free_Agents::under18_for($open, $season);
         foreach ($open as $r) {
             if (isset($division[$r->division_pref])) {
                 $division[$r->division_pref]++;
@@ -683,7 +684,7 @@ class RSL_Admin_Free_Agents {
             $b = RSL_Free_Agents::band($r, $r);
             $bands[$b < 2 ? '1–1.5' : ($b < 3 ? '2–2.5' : ($b < 4 ? '3–3.5' : '4–5'))]++;
             $volunteers += $r->captain_ok ? 1 : 0;
-            $under18 += $r->under18 ? 1 : 0;
+            $under18 += !empty($is_under18[intval($r->user_id)]) ? 1 : 0;
             $late += self::is_late($r, $ctx['dates']) ? 1 : 0;
         }
         $groups = 0;
@@ -716,6 +717,12 @@ class RSL_Admin_Free_Agents {
         $h = '<div class="rsl-fa-scroll"><table class="widefat striped rsl-fa-table"><thead><tr>'
             . '<th>Player</th><th>Level</th><th>Band</th><th>Division</th><th>Time</th><th>Weeks away</th><th>Friend group</th><th>Captain?</th><th>Under 18</th><th>Requests</th><th>Admin note</th><th>Place now</th>'
             . '</tr></thead><tbody>';
+        $ids = array();
+        foreach ($rows as $r) {
+            $ids[] = intval($r->user_id);
+        }
+        $ctx['dob_under18'] = RSL_Players::under18_map($ids, $season);
+        $ctx['birth_dates'] = RSL_Players::birth_dates($ids);
         foreach ($rows as $r) {
             $h .= self::pool_row($r, $season, $teams, $ctx);
         }
@@ -723,7 +730,7 @@ class RSL_Admin_Free_Agents {
     }
 
     /**
-     * One person on the list. The band, under-18 box and note belong to the
+     * One person on the list. The band, "treat as under 18" box and note belong to the
      * Save form in the note cell (HTML form="" ties them to it across cells);
      * Place now is its own form.
      */
@@ -753,7 +760,14 @@ class RSL_Admin_Free_Agents {
         $h .= '<td>' . ($r->group_code === '' ? '<span class="rsl-fa-sub">—</span>'
             : ($mates ? 'With ' . esc_html(implode(', ', $mates)) : '<span class="rsl-fa-sub">Nobody has joined yet</span>') . '<br><code>' . esc_html($r->group_code) . '</code>') . '</td>';
         $h .= '<td>' . ($r->captain_ok ? '<span class="rsl-fa-star">&#9733;</span> Yes' : '<span class="rsl-fa-sub">—</span>') . '</td>';
-        $h .= '<td><label title="Hidden from captains browsing the list"><input type="checkbox" form="' . esc_attr($save) . '" name="under18" value="1"' . checked((int) $r->under18, 1, false) . '> Under 18</label></td>';
+        $dob = isset($ctx['birth_dates'][intval($r->user_id)]) ? $ctx['birth_dates'][intval($r->user_id)] : '';
+        if ($dob === '') {
+            $age = '<span class="rsl-fa-pill warn" title="Counts as under 18 until their profile has a date of birth">No date of birth</span>';
+        } else {
+            $age = (!empty($ctx['dob_under18'][intval($r->user_id)]) ? '<span class="rsl-fa-pill info">Under 18</span><br>' : '')
+                . '<span class="rsl-fa-sub">age ' . intval(RSL_Players::age_on($dob, current_time('Y-m-d'))) . '</span>';
+        }
+        $h .= '<td>' . $age . '<br><label class="rsl-fa-sub" title="For an account whose date of birth is wrong: hidden from captains browsing the list, like any under-18"><input type="checkbox" form="' . esc_attr($save) . '" name="under18" value="1"' . checked((int) $r->under18, 1, false) . '> Treat as under 18</label></td>';
         $h .= '<td>' . (intval($r->requests_waiting) ? intval($r->requests_waiting) . ' waiting' : '<span class="rsl-fa-sub">—</span>') . '</td>';
         $h .= '<td><form id="' . esc_attr($save) . '" method="post" action="' . esc_url($post) . '" class="rsl-fa-inline">' . self::fields('save_agent', $season, 'overview', array('fa_id' => $id))
             . '<input type="text" name="admin_note" maxlength="255" value="' . esc_attr($r->admin_note) . '" class="rsl-fa-note" placeholder="Only admins see this"> <button class="button button-small">Save</button></form></td>';
@@ -1167,6 +1181,7 @@ class RSL_Admin_Free_Agents {
     private static function draft_table($rows, $season, $version, $ctx, $captain_form = '', $captain_id = 0) {
         $h = '<div class="rsl-fa-scroll"><table class="widefat striped rsl-fa-draft"><thead><tr>' . ($captain_form !== '' ? '<th>Captain</th>' : '')
             . '<th>Player</th><th>Level</th><th>Wants</th><th>Weeks away</th><th>Why here</th><th>Move to</th></tr></thead><tbody>';
+        $under18 = RSL_Free_Agents::under18_for($rows, $season);
         foreach ($rows as $r) {
             $uid = intval($r->user_id);
             $unit = self::unit_of($r, $ctx);
@@ -1182,7 +1197,7 @@ class RSL_Admin_Free_Agents {
             if ($captain_form === '' && !empty($r->captain_ok)) {
                 $tags .= ' <span class="rsl-fa-star" title="Happy to captain">&#9733;</span>';
             }
-            if (!empty($r->under18)) {
+            if (!empty($under18[$uid])) {
                 $tags .= ' <span class="rsl-fa-pill info">Under 18</span>';
             }
             if (self::is_late($r, $ctx['dates'])) {

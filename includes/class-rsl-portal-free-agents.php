@@ -12,9 +12,9 @@
  * browse_for_captain() and requests_for_team() — first name, level,
  * positions and "+N friends". Nothing a player types is shown to anyone
  * (the captain's 100-character note is the only free text, and it's the
- * captain's own). Emails, surnames, the under-18 box, weeks away, bands and
- * notes never reach a captain's screen, and under-18s are left out of
- * browsing (unless an admin allows it) — though an under-18 can still ask a
+ * captain's own). Emails, surnames, ages, weeks away, bands and notes never
+ * reach a captain's screen, and under-18s (from the account's date of birth)
+ * are left out of browsing (unless an admin allows it) — though an under-18 can still ask a
  * team themselves, and that captain then sees their request card. Contact
  * details are swapped by email only, when someone joins through the league.
  * Errors a captain sees go through for_captain() (no names, no other teams).
@@ -281,7 +281,7 @@ class RSL_Portal_FA {
     /**
      * The free agent's choices: division (Ranked and Either are consent to
      * Ranked), game time, weeks away (once the season's nights exist),
-     * happy to captain, under 18, let captains find me — plus a friend code
+     * happy to captain, let captains find me — plus a friend code
      * when joining, what it costs, and the contact-details consent line.
      * Used at registration, on the "Find me a team" card and to edit.
      */
@@ -330,8 +330,6 @@ class RSL_Portal_FA {
             <?php endif; ?>
             <label class="rsl-check"><input type="checkbox" name="captain_ok" value="1" <?php checked($row && $row->captain_ok); ?>> Happy to captain if we form a new team</label>
             <p class="rsl-hint rsl-fa-sub">Captains start the team chat, make sure everyone's cleared to play and keep the team balance topped up.</p>
-            <label class="rsl-check"><input type="checkbox" name="under18" value="1" <?php checked($row && $row->under18); ?>> I'm under 18</label>
-            <p class="rsl-hint rsl-fa-sub">So we can place you thoughtfully — it's never shown to captains.</p>
             <label class="rsl-check"><input type="checkbox" name="browsable" value="1" <?php checked(!$row || $row->browsable); ?>> Let captains find me</label>
             <p class="rsl-hint rsl-fa-sub">Captains with open spots see only your first name, level and positions, and can invite you. You choose whether to accept.</p>
             <?php if (!RSL_Free_Agents::is_open($row) && $s['group_max'] > 1): ?>
@@ -945,7 +943,6 @@ class RSL_Portal_FA {
             'time_pref' => self::post_key($post, 'time_pref'),
             'away_dates' => $away,
             'captain_ok' => !empty($post['captain_ok']),
-            'under18' => !empty($post['under18']),
             'browsable' => !empty($post['browsable']),
         );
     }

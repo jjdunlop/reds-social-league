@@ -133,7 +133,9 @@ class RSL_Database {
         // either are the player's consent to a Ranked team. away_dates: CSV
         // of night dates (Y-m-d) they'll miss. group_code: a friend group
         // (up to a few people placed together). under18, band_override and
-        // admin_note are admin-only. proposed_*: the admin's placement draft
+        // admin_note are admin-only; under18 is an admin's "treat as under
+        // 18" mark (0.13.0: ages come from the account's date of birth, see
+        // RSL_Free_Agents::under18_for()). proposed_*: the admin's placement draft
         // (dest 't:<team id>' | 'n:<new team ref>' | 'none').
         dbDelta("CREATE TABLE " . self::table('free_agents') . " (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,

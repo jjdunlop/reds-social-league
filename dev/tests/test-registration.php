@@ -14,6 +14,7 @@ if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production'
     exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
+require_once dirname(__DIR__) . '/lib-profile.php';
 global $wpdb;
 
 $season = '2091-pre';
@@ -39,6 +40,7 @@ $mk = function ($tag, $role = 'subscriber') use ($suffix, &$users) {
     $u = wp_insert_user(array('user_login' => "rslr-$tag-$suffix", 'user_email' => "rslr-$tag-$suffix@example.test", 'user_pass' => wp_generate_password(),
         'display_name' => "RSLR $tag $suffix", 'role' => $role));
     $users[] = $u;
+    rsl_dev_profile($u);
     return $u;
 };
 $reg = function ($u) { return RSL_Players::register($u, array('level' => 'social', 'years' => '1to3', 'positions' => array('setter', 'bogus'))); };
@@ -53,6 +55,40 @@ $check('unknown positions dropped', RSL_Players::get($cap)->positions === 'sette
 $check('re-registering updates, never duplicates', RSL_Players::register($cap, array('level' => 'vvl', 'years' => 'gt3')) === true
     && RSL_Players::get($cap)->level === 'vvl' && (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . RSL_Database::table('players') . " WHERE user_id = %d", $cap)) === 1);
 foreach (array($p1, $p2, $p3) as $u) { $reg($u); }
+
+// --- The club profile (0.13.0) ---------------------------------------------------------
+$bare = $mk('bare');
+foreach (array('mobile_number', 'birth_date', 'gender_dropdown') as $k) { delete_user_meta($bare, $k); }
+$no = $reg($bare);
+$check('registering needs a complete club profile, and says what\'s missing', is_wp_error($no) && $no->get_error_code() === 'rsl_profile' && !RSL_Players::is_registered($bare)
+    && strpos($no->get_error_message(), 'mobile, date of birth and gender') !== false, is_wp_error($no) ? $no->get_error_message() : 'registered');
+update_user_meta($bare, 'mobile_number', '0491 570 156');
+update_user_meta($bare, 'birth_date', 'not a date');
+update_user_meta($bare, 'gender', array('Male')); // the older gender field some accounts still have
+$p = RSL_Players::profile($bare);
+$check('a date of birth that isn\'t a date counts as missing; the older gender field counts', $p['missing'] === array('Date of birth') && $p['values']['Gender'] === 'Male', implode(', ', $p['missing']));
+update_user_meta($bare, 'birth_date', '2001/02/30');
+$check('so does 30 February', RSL_Players::profile($bare)['missing'] === array('Date of birth'));
+update_user_meta($bare, 'birth_date', rsl_dev_dob(0, -1)); // tomorrow on the site's clock
+$check('and a date of birth in the future', RSL_Players::profile($bare)['missing'] === array('Date of birth'));
+update_user_meta($bare, 'birth_date', '2001/02/03');
+$check('complete: registers, and the date of birth shows back in words', $reg($bare) === true && RSL_Players::profile($bare)['values']['Date of birth'] === '3 February 2001');
+delete_user_meta($bare, 'mobile_number');
+$check('updating your answers later doesn\'t ask for the profile again', RSL_Players::register($bare, array('level' => 'vvl', 'years' => 'gt3')) === true && RSL_Players::get($bare)->level === 'vvl');
+$was_user = get_current_user_id();
+$inc = $mk('inc');
+delete_user_meta($inc, 'birth_date');
+wp_set_current_user($inc);
+$page = do_shortcode('[rsl_my_league]');
+$check('the league page asks for the missing details instead of showing the form', strpos($page, 'finish your club profile') !== false && strpos($page, 'missing your date of birth') !== false
+    && strpos($page, 'name="do" value="register"') === false && strpos($page, 'um_action=edit') !== false);
+$ready = $mk('ready');
+wp_set_current_user($ready);
+$page = do_shortcode('[rsl_my_league]');
+$check('with a complete profile it shows their details above the form', strpos($page, 'Your details') !== false && strpos($page, '15 June 1995') !== false && strpos($page, '0491 570 156') !== false
+    && strpos($page, 'name="do" value="register"') !== false);
+$check('nobody is asked whether they\'re under 18', stripos($page, 'under 18') === false && strpos($page, 'name="under18"') === false);
+wp_set_current_user($was_user);
 
 // --- Cleared to play -----------------------------------------------------------------
 $check('not cleared with no rego or membership', RSL_Rego::clearance($p1)['cleared'] === false);

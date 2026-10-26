@@ -1628,6 +1628,7 @@ class RSL_Placement {
         foreach ($rows as $r) {
             $groups[$r->group_code !== '' ? 'g:' . $r->group_code : 'u:' . intval($r->user_id)][] = $r;
         }
+        $is_under18 = RSL_Free_Agents::under18_for($rows, $season);
         $units = array();
         foreach ($groups as $key => $list) {
             usort($list, function ($a, $b) {
@@ -1662,7 +1663,7 @@ class RSL_Placement {
                 if (intval($r->proposed_locked) && $locked === '' && $r->proposed_dest !== '') {
                     $locked = $r->proposed_dest;
                 }
-                $under18 += intval($r->under18) ? 1 : 0;
+                $under18 += !empty($is_under18[$uid]) ? 1 : 0;
             }
             if ($code !== '') {
                 $requested += isset($asked_group[$code]) ? $asked_group[$code] : array();

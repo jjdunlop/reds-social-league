@@ -21,6 +21,7 @@ if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production'
 }
 
 require_once ABSPATH . 'wp-admin/includes/user.php';
+require_once __DIR__ . '/lib-profile.php';
 global $wpdb;
 
 $season = RSL_Seasons::next(RSL_Seasons::current());
@@ -120,6 +121,9 @@ $make_user = function ($i) use ($first, $last, $levels, $years, $positions) {
     }
     update_user_meta($uid, 'rsl_fake_fa', '1');
     update_user_meta($uid, 'profile_confirmed_year', current_time('Y'));
+    // Registering needs a club profile; adults, born 1980–2004 (not from
+    // mt_rand, so the rest of the pretend sign-ups stay the same).
+    rsl_dev_profile($uid, sprintf('%04d/%02d/%02d', 1980 + ($i * 7) % 25, ($i * 5) % 12 + 1, ($i * 11) % 28 + 1), $i % 2 ? 'Male' : 'Female');
     $level = $levels[mt_rand(0, count($levels) - 1)];
     $mine = array($positions[mt_rand(0, count($positions) - 1)]);
     if (mt_rand(0, 2) === 0) {
@@ -187,6 +191,9 @@ for ($i = 0; $i < 45; $i++) {
         continue;
     }
     $player = RSL_Players::get($uid);
+    if (in_array($i, array(8, 23, 40), true)) {
+        update_user_meta($uid, 'birth_date', rsl_dev_dob(16, $i)); // three under-18s (from the date of birth)
+    }
     $pref = RSL_Free_Agents::default_division($player);
     if ($pref === 'either' && $i % 5 === 0) {
         $pref = 'ranked';
@@ -203,7 +210,6 @@ for ($i = 0; $i < 45; $i++) {
         'time_pref' => array('any', 'any', 'early', 'late')[$i % 4],
         'away_dates' => $away,
         'captain_ok' => in_array($i, array(4, 11, 19, 27, 36), true),
-        'under18' => in_array($i, array(8, 23, 40), true),
         'browsable' => !in_array($i, array(14, 31), true),
     ), true);
     if (is_wp_error($row)) {

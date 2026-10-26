@@ -16,6 +16,7 @@ if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production'
 }
 
 require_once ABSPATH . 'wp-admin/includes/user.php';
+require_once __DIR__ . '/lib-profile.php';
 global $wpdb;
 
 $fake_option = 'rsl_fake_team_ids';
@@ -81,6 +82,9 @@ for ($i = 1; $i <= 150; $i++) {
     if (!is_wp_error($uid)) {
         update_user_meta($uid, 'rsl_fake', '1');
         update_user_meta($uid, 'profile_confirmed_year', current_time('Y')); // past the site's yearly profile check
+        // Registering needs a club profile; adults, born 1978–2004 (not from
+        // mt_rand, so the pretend league stays the same).
+        rsl_dev_profile($uid, sprintf('%04d/%02d/%02d', 1978 + ($i * 7) % 27, ($i * 5) % 12 + 1, ($i * 11) % 28 + 1), $i % 2 ? 'Male' : 'Female');
         $players[] = $uid;
     }
 }

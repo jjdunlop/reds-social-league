@@ -422,7 +422,7 @@ class RSL_Portal {
             $this->render_logged_out($invited_to);
         } elseif (!RSL_Players::is_registered($user_id)) {
             echo self::take_flash();
-            $this->render_register($invited_to ? $code : '', $invited_to);
+            $this->render_register($invited_to ? $code : '', $invited_to, $user_id);
         } else {
             echo self::take_flash();
             $this->render_dashboard($user_id, $code, $invited_to);
@@ -455,13 +455,32 @@ class RSL_Portal {
         <?php
     }
 
-    private function render_register($code, $invited_to) {
+    private function render_register($code, $invited_to, $user_id) {
+        $profile = RSL_Players::profile($user_id);
+        $edit = RSL_Players::profile_edit_url();
         ?>
         <?php if ($invited_to): ?>
             <div class="rsl-card rsl-card-accent"><p><strong>You've been invited to join <?php echo esc_html($invited_to->name); ?>.</strong> Register below and you'll go straight onto the team.</p></div>
         <?php endif; ?>
         <h2>Register for the Reds Social League</h2>
         <p>Registering is free and takes a minute. To play you'll also need a current social rego (<?php echo esc_html(self::rego_price()); ?>, lasts 12 months) before your first game — unless you're a full or life club member.</p>
+        <?php if ($profile['missing']): ?>
+            <div class="rsl-card rsl-card-warn">
+                <p><strong>First, finish your club profile.</strong> It's missing your <?php echo esc_html(RSL_Players::list_words(array_map('strtolower', $profile['missing']))); ?>. The league uses the same profile as VVL trials, so we can reach you and place you on the right team.</p>
+                <p><a class="rsl-btn" href="<?php echo esc_url($edit); ?>">Edit your profile</a></p>
+                <p class="rsl-hint">Save it, then come back to this page to register<?php echo $invited_to ? ' — we\'ll remember your invite' : ''; ?>.</p>
+            </div>
+            <?php return; ?>
+        <?php endif; ?>
+        <div class="rsl-card">
+            <p><strong>Your details</strong> <span class="rsl-hint">— from your club profile. <a href="<?php echo esc_url($edit); ?>">Edit your profile</a> to change them.</span></p>
+            <dl class="rsl-profile">
+                <dt>Name</dt><dd><?php echo esc_html($profile['values']['First name'] . ' ' . $profile['values']['Last name']); ?></dd>
+                <dt>Mobile</dt><dd><?php echo esc_html($profile['values']['Mobile']); ?></dd>
+                <dt>Date of birth</dt><dd><?php echo esc_html($profile['values']['Date of birth']); ?></dd>
+                <dt>Gender</dt><dd><?php echo esc_html($profile['values']['Gender']); ?></dd>
+            </dl>
+        </div>
         <form method="post" class="rsl-form">
             <?php echo self::fields('register', array('join_code' => $code)); ?>
             <?php echo self::experience_fields(null); ?>
@@ -778,6 +797,9 @@ class RSL_Portal {
             .rsl-card-accent { border-left: 4px solid var(--rsl-navy); background: #f5f8fc; }
             .rsl-card-good { border-left: 4px solid #2e8540; background: #f2f9f3; }
             .rsl-card-warn { border-left: 4px solid #d97706; background: #fffaf0; }
+.rsl-portal .rsl-profile { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin: 8px 0 2px; }
+.rsl-portal .rsl-profile dt { color: var(--rsl-muted); }
+.rsl-portal .rsl-profile dd { margin: 0; }
             .rsl-card p { margin: 6px 0; }
             .rsl-flash { padding: 10px 14px; border-radius: 6px; margin: 12px 0; }
             .rsl-flash-success { background: #e8f5ea; border: 1px solid #2e8540; color: #1e6b2a; }

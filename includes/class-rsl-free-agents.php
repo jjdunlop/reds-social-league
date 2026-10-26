@@ -305,7 +305,6 @@ class RSL_Free_Agents {
             'time_pref' => $time,
             'away_dates' => substr(implode(',', $away), 0, 255),
             'captain_ok' => empty($data['captain_ok']) ? 0 : 1,
-            'under18' => empty($data['under18']) ? 0 : 1,
             'browsable' => empty($data['browsable']) ? 0 : 1,
         );
     }
@@ -313,7 +312,8 @@ class RSL_Free_Agents {
     /**
      * Put a registered player on the season's list (or back on it). $data:
      * division_pref, time_pref, away_dates (array of night dates),
-     * captain_ok, under18, browsable. Returns the row or WP_Error.
+     * captain_ok, browsable. Returns the row or WP_Error. (Whether they're
+     * under 18 comes from their date of birth — see under18_for().)
      */
     public static function join($user_id, $season, $data, $quiet = false) {
         global $wpdb;
@@ -369,7 +369,6 @@ class RSL_Free_Agents {
             'time_pref' => $row->time_pref,
             'away_dates' => array_filter(explode(',', $row->away_dates)),
             'captain_ok' => (int) $row->captain_ok,
-            'under18' => (int) $row->under18,
             'browsable' => (int) $row->browsable,
         );
         $fields = self::clean($data, $user_id, $season);
@@ -686,7 +685,8 @@ class RSL_Free_Agents {
 
     /**
      * The free agent list as a captain sees it: units that could join this
-     * team (right division, room, not under 18 unless allowed, browsable,
+     * team (right division, room, nobody under 18 unless allowed — see
+     * under18_for() — browsable,
      * not turned down either way, not already invited). Empty for anyone
      * but the team's captain, or outside the asking/inviting phases.
      * $filters: position (key), level (key).
@@ -715,10 +715,12 @@ class RSL_Free_Agents {
         $position = isset($filters['position']) ? (string) $filters['position'] : '';
         $level = isset($filters['level']) ? (string) $filters['level'] : '';
         $out = array();
-        foreach (self::open_units($team->season) as $unit) {
+        $units = self::open_units($team->season);
+        $under18 = $settings['under18_in_pool'] ? array() : self::under18_for($units ? call_user_func_array('array_merge', array_values($units)) : array());
+        foreach ($units as $unit) {
             $ok = count($unit) <= $room && in_array($team->division, self::group_divisions($unit), true) && !self::unit_declined($declined, $team->id, $unit);
             foreach ($unit as $r) {
-                if (!$r->browsable || ($r->under18 && !$settings['under18_in_pool']) || isset($invited[intval($r->user_id)]) || ($r->group_code !== '' && isset($asked_codes[$r->group_code]))) {
+                if (!$r->browsable || !empty($under18[intval($r->user_id)]) || isset($invited[intval($r->user_id)]) || ($r->group_code !== '' && isset($asked_codes[$r->group_code]))) {
                     $ok = false;
                 }
             }
@@ -1368,7 +1370,37 @@ class RSL_Free_Agents {
         ", current_time('mysql'), $season));
     }
 
-    /** Admin-only fields: band override and a note. */
+    /**
+     * Who on the list counts as under 18: from the account's date of birth
+     * for the row's season (RSL_Players::under18_map(), so no date of birth
+     * counts too), or marked by an admin (the under18 column, which only
+     * admin_update() writes, for an account whose date of birth is wrong).
+     * $rows are free agent rows (user_id, under18, and season unless
+     * $season is given); one query per season. Returns user id => true for
+     * each under-18.
+     */
+    public static function under18_for($rows, $season = '') {
+        $by_season = array();
+        foreach ($rows as $r) {
+            $by_season[isset($r->season) && $r->season !== '' ? (string) $r->season : (string) $season][] = intval($r->user_id);
+        }
+        $out = array();
+        foreach ($by_season as $season => $ids) {
+            foreach (RSL_Players::under18_map($ids, $season) as $id => $under) {
+                if ($under) {
+                    $out[$id] = true;
+                }
+            }
+        }
+        foreach ($rows as $r) {
+            if (!empty($r->under18)) {
+                $out[intval($r->user_id)] = true;
+            }
+        }
+        return $out;
+    }
+
+    /** Admin-only fields: band override, a note, and "treat as under 18". */
     public static function admin_update($fa_id, $data) {
         global $wpdb;
         $row = self::get_by_id($fa_id);

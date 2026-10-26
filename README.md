@@ -6,6 +6,34 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## Club profile first, and ages from it (0.13.0)
+
+- **Registering needs a complete club profile**, the same details as a VVL
+  trial application: first and last name, mobile, date of birth and gender
+  (`RSL_Players::profile_fields()`). The league reads them from the
+  player's account and never keeps a copy. The register page shows them
+  back ("Your details — from your club profile") with an *Edit your
+  profile* link; if any are missing (or the date of birth isn't a real
+  date) it lists what's missing and links to the profile instead of
+  showing the form, and `RSL_Players::register()` refuses a new
+  registration without them. An invite link is remembered while they fill
+  it in. Updating your experience answers later doesn't ask again.
+- **Nobody is asked whether they're under 18.** It comes from the date of
+  birth (`RSL_Players::is_under18()`), judged on the earlier of today and
+  the season's first night: 17 while captains are browsing counts, and so
+  does 17 on the first night, for the whole season. An account with no
+  date of birth counts as under 18 (the safe side). Under-18s are still
+  left out of the list captains browse (unless an admin allows it), and
+  admins see each free agent's age (or *No date of birth*).
+- The free agent row's `under18` column is now only an admin's **Treat as
+  under 18** tick (Free Agents, for an account whose date of birth is
+  wrong); players can't set it, and it adds to the date of birth rather
+  than replacing it (`RSL_Free_Agents::under18_for()`). Ticks saved by
+  players before 0.13.0 count as admin ticks.
+- Dev: `dev/lib-profile.php` gives pretend accounts a profile
+  (`rsl_dev_profile()`, `rsl_dev_dob()`); the tests and both fake-league
+  scripts use it.
+
 ## Players without a team: free agents and placement (0.12.0)
 
 - **Sign-up season.** `RSL_Seasons::signup()` is the season people join,
@@ -20,7 +48,8 @@ finals (see `CLAUDE.md`).
   season): division (Unranked by default for beginners; Ranked or Either is
   the player's consent to Ranked), earlier/later games, weeks away, a friend
   group (up to 3, joined with a shareable code — never looked up by email),
-  happy to captain, under 18 (admin-only), let captains find me.
+  happy to captain, under 18 (admin-only; from 0.13.0 worked out from the
+  date of birth), let captains find me.
 - **The team-building window** (settings, counted back from night 1): the
   list opens 21 days before; until the deadline (10 days before) captains
   with open spots ("Looking for players?") can browse the list and invite
@@ -408,7 +437,8 @@ and refs will claim.
 A **Social League** page is created automatically (`[rsl_my_league]`).
 
 - **Register** — free, a short profile: highest level played, years
-  playing, positions, and an optional free agent flag.
+  playing, positions, and an optional free agent flag (from 0.13.0, only
+  with a complete club profile).
 - **Cleared to play** — needed before a player's first game, not to join
   a team: a **full or life club member** (read live from the MURVC Club
   Manager) is covered; anyone else needs a **social rego** — 12 months

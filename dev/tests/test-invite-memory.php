@@ -13,6 +13,7 @@ if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production'
     exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
+require_once dirname(__DIR__) . '/lib-profile.php';
 global $wpdb;
 
 $season = '2093-pre';
@@ -29,6 +30,7 @@ $users = array();
 $mk = function ($tag) use ($suffix, &$users) {
     $u = wp_insert_user(array('user_login' => "rsli-$tag-$suffix", 'user_email' => "rsli-$tag-$suffix@example.test", 'user_pass' => wp_generate_password(), 'display_name' => "RSLI $tag $suffix"));
     $users[] = $u;
+    rsl_dev_profile($u);
     return $u;
 };
 

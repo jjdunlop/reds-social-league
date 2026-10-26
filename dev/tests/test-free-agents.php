@@ -15,6 +15,7 @@ if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production'
     exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
+require_once dirname(__DIR__) . '/lib-profile.php';
 global $wpdb;
 
 $season = '2088-pre';
@@ -33,6 +34,7 @@ $mk = function ($tag, $level = 'social', $years = '1to3', $display = '') use ($s
     $u = wp_insert_user(array('user_login' => "rslfa-$tag-$suffix", 'user_email' => "rslfa-$tag-$suffix@example.test", 'user_pass' => wp_generate_password(),
         'display_name' => $display !== '' ? $display : "Fa$tag Tester", 'first_name' => $display === '' ? "Fa$tag" : '', 'role' => 'subscriber'));
     $users[] = $u;
+    rsl_dev_profile($u);
     if ($level !== '') {
         RSL_Players::register($u, array('level' => $level, 'years' => $years, 'positions' => array('setter')));
     }
@@ -101,8 +103,10 @@ $vvl = $mk('vvl', 'vvl', 'gt3');
 RSL_Free_Agents::join($vvl, $season, array('browsable' => 1), true);
 $check('experienced players default to Either', RSL_Free_Agents::get($vvl, $season)->division_pref === 'either');
 $check('bands: beginner 1 … VVL 4', RSL_Free_Agents::band(RSL_Players::get($beg)) == 1.0 && RSL_Free_Agents::band(RSL_Players::get($vvl)) == 4.0);
-$check('first names never show an email', RSL_Free_Agents::first_name($mk('emailname', 'social', '1to3', 'someone@example.test')) === 'Player');
-$check('first names never show a login name (WordPress\'s default display name)', RSL_Free_Agents::first_name($mk('loginname', 'social', '1to3', "rslfa-loginname-$suffix")) === 'Player');
+// Registered (so with a profile), then the first name taken off it again.
+$noname = function ($tag, $display) use ($mk) { $u = $mk($tag, 'social', '1to3', $display); delete_user_meta($u, 'first_name'); return $u; };
+$check('first names never show an email', RSL_Free_Agents::first_name($noname('emailname', 'someone@example.test')) === 'Player');
+$check('first names never show a login name (WordPress\'s default display name)', RSL_Free_Agents::first_name($noname('loginname', "rslfa-loginname-$suffix")) === 'Player');
 $twoname = $mk('twoname');
 update_user_meta($twoname, 'first_name', 'Fatwo Surname');
 $check('first names never show a surname typed into the first name field', RSL_Free_Agents::first_name($twoname) === 'Fatwo');
@@ -138,6 +142,7 @@ $tr = RSL_Teams::get($tr->id);
 $check('captain sets open spots (note capped at 100)', intval($tr->spots_open) === 2 && $tr->spots_level === 'some' && mb_strlen($tr->spots_note) === 100);
 $check('only the captain sets spots', is_wp_error(RSL_Free_Agents::set_spots($tr->id, $cap_u, array('spots' => 4))));
 $teen = $mk('teen'); $shy = $mk('shy');
+update_user_meta($teen, 'birth_date', rsl_dev_dob(16)); // under 18 comes from the account (0.13.0)
 RSL_Free_Agents::join($teen, $season, array('division_pref' => 'either', 'under18' => 1, 'browsable' => 1), true);
 RSL_Free_Agents::join($shy, $season, array('division_pref' => 'either', 'browsable' => 0), true);
 $pool_r = RSL_Free_Agents::browse_for_captain($tr->id, $cap_r);
@@ -150,6 +155,46 @@ foreach ($pool_r as $card) {
 $check('captains see only first name, level, positions and friends', $pool_r && $keys_ok);
 $names_r = array_map(function ($c) { return $c['first_name']; }, $pool_r);
 $check('under-18s and people who opted out of browsing are hidden', !in_array('Fateen', $names_r, true) && !in_array('Fashy', $names_r, true));
+
+// --- Under 18, from the account's date of birth (0.13.0) -------------------------------------
+$first_night = RSL_Free_Agents::dates($season)['first_night'];
+$check('(the test season starts in the future)', $first_night > $today, $first_night);
+$fa_teen = RSL_Free_Agents::get($teen, $season);
+$check('a player can\'t set the under-18 mark themselves (it\'s admin-only now)', (int) $fa_teen->under18 === 0);
+$check('the teen counts as under 18 from their date of birth', RSL_Players::is_under18($teen, $season) && !empty(RSL_Free_Agents::under18_for(array($fa_teen))[$teen]));
+$nodob = $mk('nodob'); $adult = $mk('adult18'); $marked = $mk('marked');
+delete_user_meta($nodob, 'birth_date');
+update_user_meta($adult, 'birth_date', rsl_dev_dob(18, 1)); // turned 18 yesterday (the exact birthday is checked with age_on() below; 29 February would roll over)
+foreach (array($nodob, $adult, $marked) as $u) {
+    RSL_Free_Agents::join($u, $season, array('division_pref' => 'either', 'browsable' => 1), true);
+}
+RSL_Free_Agents::update($adult, $season, array('under18' => 1));
+$check('updating your choices never sets the mark either', (int) RSL_Free_Agents::get($adult, $season)->under18 === 0);
+RSL_Free_Agents::admin_update(RSL_Free_Agents::get($marked, $season)->id, array('under18' => 1, 'admin_note' => ''));
+$names_r = array_map(function ($c) { return $c['first_name']; }, RSL_Free_Agents::browse_for_captain($tr->id, $cap_r));
+$check('no date of birth counts as under 18, so they\'re hidden', !in_array('Fanodob', $names_r, true));
+$check('an admin\'s "treat as under 18" hides an adult', !in_array('Famarked', $names_r, true));
+$check('someone who has just turned 18 is shown', in_array('Faadult18', $names_r, true));
+RSL_Free_Agents::update($marked, $season, array('time_pref' => 'early'));
+$check('the player updating their choices keeps the admin\'s mark', (int) RSL_Free_Agents::get($marked, $season)->under18 === 1);
+$soon = $mk('soon', '');
+update_user_meta($soon, 'birth_date', rsl_dev_dob(18, -10)); // 18 in ten days, before the first night
+$check('17 today counts while captains are browsing, even if 18 by the first night', RSL_Players::is_under18($soon, $season) && RSL_Players::is_under18($soon));
+$past = '2088-mid1';
+$set_start($past, $days(-20)); // that season's first night was 20 days ago
+$turned = $mk('turned', '');
+update_user_meta($turned, 'birth_date', rsl_dev_dob(18, 10)); // turned 18 ten days ago
+$check('17 on the season\'s first night counts as under 18 all that season', RSL_Players::is_under18($turned, $past) && !RSL_Players::is_under18($turned, $season) && !RSL_Players::is_under18($turned));
+$set_start($past, '');
+$check('ages in whole years, birthdays on the day', RSL_Players::age_on('2008-03-01', '2026-02-28') === 17 && RSL_Players::age_on('2008-03-01', '2026-03-01') === 18 && RSL_Players::age_on('2008-02-29', '2026-02-28') === 17);
+$rules_u18 = RSL_Free_Agents::settings();
+RSL_Free_Agents::save_settings(array_merge($rules_u18, array('under18_in_pool' => 1)));
+$names_open = array_map(function ($c) { return $c['first_name']; }, RSL_Free_Agents::browse_for_captain($tr->id, $cap_r));
+RSL_Free_Agents::save_settings($rules_u18);
+$check('with under-18s allowed in the list (admin setting), captains see them', in_array('Fateen', $names_open, true) && in_array('Fanodob', $names_open, true));
+foreach (array($nodob, $adult, $marked) as $u) {
+    RSL_Free_Agents::leave($u, $season);
+}
 $check('Unranked-only players aren\'t shown to Ranked teams', !in_array('Fabeg', $names_r, true));
 $grp = array_values(array_filter($pool_r, function ($c) { return $c['first_name'] === 'Faf1'; }));
 $check('a friend group is one card with +2 friends', count($grp) === 1 && $grp[0]['friends_n'] === 2 && !in_array('Faf2', $names_r, true));

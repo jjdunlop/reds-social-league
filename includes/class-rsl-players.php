@@ -3,6 +3,9 @@
  * League players: registering for the social league (separate from paying
  * — see RSL_Rego). Registration is a short profile: experience answers that
  * seed ratings and help place free agents, and a "looking for a team" flag.
+ * It needs a complete club profile first (name, mobile, date of birth and
+ * gender, as for VVL trials), read from the account and never copied here;
+ * whether someone is under 18 comes from that date of birth (is_under18()).
  */
 
 if (!defined('ABSPATH')) {
@@ -50,6 +53,14 @@ class RSL_Players {
         global $wpdb;
         if (!get_userdata($user_id)) {
             return new WP_Error('rsl_user', 'Please log in first.');
+        }
+        // A new registration needs the club profile; updating experience
+        // answers later doesn't ask again.
+        if (!self::get($user_id)) {
+            $missing = self::profile($user_id)['missing'];
+            if ($missing) {
+                return new WP_Error('rsl_profile', 'Add your ' . self::list_words(array_map('strtolower', $missing)) . ' to your club profile first, then register.');
+            }
         }
         $level = isset($data['level']) ? (string) $data['level'] : '';
         $years = isset($data['years']) ? (string) $data['years'] : '';
@@ -111,5 +122,144 @@ class RSL_Players {
     public static function count() {
         global $wpdb;
         return (int) $wpdb->get_var("SELECT COUNT(*) FROM " . RSL_Database::table('players'));
+    }
+
+    // ------------------------------------------------------------------
+    // The club profile (the account's own details)
+    // ------------------------------------------------------------------
+
+    /**
+     * What registering needs from the club profile: the same details as a
+     * VVL trial application. Keys are the account's own (Ultimate Member)
+     * fields; the league reads them and never stores a copy.
+     */
+    public static function profile_fields() {
+        return array(
+            'first_name' => 'First name',
+            'last_name' => 'Last name',
+            'mobile_number' => 'Mobile',
+            'birth_date' => 'Date of birth',
+            'gender' => 'Gender',
+        );
+    }
+
+    /**
+     * The player's profile for showing back to them: 'values' (label =>
+     * value, '' when missing) and 'missing' (labels). A date of birth that
+     * isn't a real date counts as missing.
+     */
+    public static function profile($user_id) {
+        $values = array();
+        $missing = array();
+        foreach (self::profile_fields() as $key => $label) {
+            if ($key === 'gender') {
+                $value = self::gender($user_id);
+            } elseif ($key === 'birth_date') {
+                $dob = self::birth_date($user_id);
+                $value = $dob === '' ? '' : DateTime::createFromFormat('!Y-m-d', $dob)->format('j F Y');
+            } else {
+                $value = trim((string) get_user_meta($user_id, $key, true));
+            }
+            $values[$label] = $value;
+            if ($value === '') {
+                $missing[] = $label;
+            }
+        }
+        return array('values' => $values, 'missing' => $missing);
+    }
+
+    /** Where a player fills in their club profile (the page VVL trials send them to). */
+    public static function profile_edit_url() {
+        $page = get_page_by_path('um-member-profile-custom');
+        if ($page && $page->post_status === 'publish') {
+            return add_query_arg(array('profiletab' => 'main', 'um_action' => 'edit'), get_permalink($page));
+        }
+        if (function_exists('um_user_profile_url') && get_current_user_id()) {
+            return add_query_arg('um_action', 'edit', um_user_profile_url(get_current_user_id()));
+        }
+        return admin_url('profile.php');
+    }
+
+    /** The account's date of birth as Y-m-d, or '' when it's missing or not a real date. */
+    public static function birth_date($user_id) {
+        $dates = self::birth_dates(array($user_id));
+        return isset($dates[(int) $user_id]) ? $dates[(int) $user_id] : '';
+    }
+
+    /** Dates of birth for several accounts in one query: user id => Y-m-d or ''. */
+    public static function birth_dates($user_ids) {
+        global $wpdb;
+        $ids = array_values(array_unique(array_filter(array_map('intval', (array) $user_ids))));
+        $out = array_fill_keys($ids, '');
+        if (!$ids) {
+            return $out;
+        }
+        $rows = $wpdb->get_results("SELECT user_id, meta_value FROM {$wpdb->usermeta} WHERE meta_key = 'birth_date' AND user_id IN (" . implode(',', $ids) . ')');
+        $today = current_time('Y-m-d');
+        foreach ($rows as $r) {
+            // The profile form saves YYYY/MM/DD.
+            if (preg_match('/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/', trim((string) $r->meta_value), $m)
+                && checkdate((int) $m[2], (int) $m[3], (int) $m[1]) && (int) $m[1] >= 1900) {
+                $dob = sprintf('%04d-%02d-%02d', $m[1], $m[2], $m[3]);
+                $out[(int) $r->user_id] = $dob <= $today ? $dob : '';
+            }
+        }
+        return $out;
+    }
+
+    /** Whole years old on $date (both Y-m-d). */
+    public static function age_on($dob, $date) {
+        list($y, $m, $d) = array_map('intval', explode('-', $dob));
+        list($y2, $m2, $d2) = array_map('intval', explode('-', $date));
+        return $y2 - $y - (($m2 < $m || ($m2 === $m && $d2 < $d)) ? 1 : 0);
+    }
+
+    /**
+     * Under 18 for a season, from the account's date of birth, judged on the
+     * earlier of today and the season's first night: someone who is 17 while
+     * captains are browsing counts, and so does someone still 17 when the
+     * season starts, all season. With no date of birth on the account we
+     * can't tell, so they count as under 18 (the safe side).
+     */
+    public static function is_under18($user_id, $season = '') {
+        $map = self::under18_map(array($user_id), $season);
+        return !empty($map[(int) $user_id]);
+    }
+
+    /** is_under18() for several accounts in one query: user id => bool. */
+    public static function under18_map($user_ids, $season = '') {
+        $on = current_time('Y-m-d');
+        $dates = $season !== '' && class_exists('RSL_Free_Agents') && RSL_Seasons::is_valid($season) ? RSL_Free_Agents::dates($season) : null;
+        if ($dates && $dates['first_night'] < $on) {
+            $on = $dates['first_night'];
+        }
+        $out = array();
+        foreach (self::birth_dates($user_ids) as $id => $dob) {
+            $out[$id] = $dob === '' || self::age_on($dob, $on) < 18;
+        }
+        return $out;
+    }
+
+    /** Gender from the profile: the form's field first, then the older one some accounts still have. */
+    private static function gender($user_id) {
+        if (class_exists('TeamOversight_Database') && method_exists('TeamOversight_Database', 'get_member_gender')) {
+            return trim((string) TeamOversight_Database::get_member_gender($user_id));
+        }
+        $gender = trim((string) get_user_meta($user_id, 'gender_dropdown', true));
+        if ($gender === '') {
+            $older = maybe_unserialize(get_user_meta($user_id, 'gender', true));
+            $gender = is_array($older) ? (string) reset($older) : (string) $older;
+        }
+        return trim($gender);
+    }
+
+    /** "a", "a and b", "a, b and c". */
+    public static function list_words($items) {
+        $items = array_values($items);
+        if (count($items) < 2) {
+            return implode('', $items);
+        }
+        $last = array_pop($items);
+        return implode(', ', $items) . ' and ' . $last;
     }
 }

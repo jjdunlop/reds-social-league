@@ -54,8 +54,15 @@ Free agents (0.12.0): **captains browsing the list see first name, level,
 positions and "+N friends" only** (built only by
 `RSL_Free_Agents::browse_for_captain()`; a test pins the keys). No free
 text from players anywhere. Under-18s are left out of the captain's browse
-list (one admin-only checkbox, and the `under18_in_pool` setting is off by
-default; no date of birth). An under-18 can still ask a team themselves;
+list (the `under18_in_pool` setting is off by default). Since 0.13.0 nobody
+is asked: under 18 comes from the date of birth on the account
+(`RSL_Players::is_under18()`, judged on the earlier of today and the
+season's first night; no date of birth counts as under 18), plus an
+admin-only *Treat as under 18* tick (the `under18` column, written only by
+`RSL_Free_Agents::admin_update()`). Every check goes through
+`RSL_Free_Agents::under18_for()`, never `$row->under18` alone. The league
+reads the date of birth and never stores it, and an age is never shown to
+a captain. An under-18 can still ask a team themselves;
 that captain then sees their request card (first name, level, positions),
 and an accepted request swaps emails, as placement does (spec O11 — the
 committee's call). Friend groups use shareable codes,
@@ -78,7 +85,7 @@ Locks are always taken team first, then person.
 - `includes/class-rsl-database.php` — table creation (`dbDelta`) + `maybe_upgrade()`; bump `SCHEMA_VERSION` when the schema changes.
 - `includes/class-rsl-seasons.php` — league seasons: four a year, keys like `2027-pre`, `2027-mid1`, `2027-mid2`, `2027-post`; the current season.
 - `includes/class-rsl-teams.php` — teams, rosters, approximate level (`est_level`: an admin-only seed for first Ranked ratings, never public or shown to players), captain fixturing preferences (`pref_*`), captain applications (pending → approved/declined/withdrawn), invite codes, email invites. Data layer (no output); returns results or `WP_Error` with a readable message.
-- `includes/class-rsl-players.php` — league registration profile (free; separate from paying). `set_looking()` puts someone on / takes them off the sign-up season's free agent list.
+- `includes/class-rsl-players.php` — league registration profile (free; separate from paying). A new registration needs a complete club profile (`profile_fields()`: first and last name, mobile, date of birth, gender — as for VVL trials; `profile()` reads them from the account, gender through the Club Manager's `get_member_gender()` when it's there). `birth_dates()` / `age_on()` / `is_under18()` / `under18_map()` are the one age rule. `set_looking()` puts someone on / takes them off the sign-up season's free agent list.
 - `includes/class-rsl-free-agents.php` — the free agent list (`rsl_free_agents`, per person per season), the team-building window (`dates()`, `phase()`: before / open / placing / season), friend groups (codes), captains' open spots, pool invites, join requests (`rsl_join_requests` — only the team's captain can answer), `on_member_added` (closes everything else), admin place-now, "Not for me", expiry. Accepting a pool invite brings the invitee's current friend group only if it's unchanged since the invite and every friend agreed to the team's division (`pool_invite_ids()`). `unplaced_words()` is the one rule for which placement reasons a player may see. `browse_for_captain()` / `card()` are the ONLY builders of what a captain sees about a free agent (first name, level, positions, +friends) — never add personal fields there. Emails through `RSL_Mail`.
 - `includes/class-rsl-placement.php` — placing free agents after the deadline. Pure core `propose()` (no DB, deterministic; invariants: groups never split, Unranked-only never in Ranked, never over max, new teams within min..max with a volunteer captain) simulated by `dev/simulate-placement.php`; `suggest()` / `draft()` / `move()` / `update_new()` / `blockers()` / `confirm()` (idempotent) wrap it, each under the season's placement lock; `destinations()` / `destinations_all()` say where an admin may move someone.
 - `includes/class-rsl-mail.php` — queued email (`rsl_outbox`, UNIQUE dedupe key), sent in batches by cron (`rsl_hourly`, `rsl_send_outbox`); sent rows pruned after 30 days.
@@ -96,6 +103,7 @@ Locks are always taken team first, then person.
 - `includes/class-rsl-admin-payments.php` — Social League → Team Balances: overview, a team's history + adjust, rules.
 - `includes/class-rsl-pairing.php` — automatic fixtures. Pure core (`pair_cost`, `pair_division`, `match`, `assign_slots`, `set_win_probability`) with no database, so it's testable and simulated by `dev/simulate-pairing.php`; `context()`/`plan()`/`generate()`/`explain_night()` wrap it for a real night. Closeness is each team's chance of winning a set (unit: a 67/33 matchup costs 1); weights in `weights()`. Re-run the simulator before changing weights.
 - `includes/class-rsl-stats.php` — the season's story for public pages. The rating stays honest; what's shown as earned is designed to be fair: earned tiers with instant promotion and slow, protected demotion (`step_tier()`, pure), Season Points/levels that only go up (`POINTS`, `LEVEL_POINTS`), "In placements" while provisional, per-night rating changes, form/streaks, upsets, close games, achievements, season leaders, and `hype()` tags for coming games. Teams only; never shows a rating, change, odds, upset or "Even match" while a team is in placements (protects the hidden seed). Public pages show hype, not odds (`RSL_Public_Fixtures::SHOW_SET_CHANCES`). `season()` is cached between page views in a transient (`RSL_Stats::CACHE_PREFIX` + season) keyed by a one-query fingerprint of the season's data — no write-side cache bumps needed; `RSL_Ratings::season_data()` is a per-request snapshot, so tests must call `RSL_Ratings::flush()` after changing results in the same request. Ratings and ladders count published nights only.
+- `dev/lib-profile.php` — `rsl_dev_profile()` gives a pretend account the club profile registering needs (made-up mobile; date of birth as YYYY/MM/DD), `rsl_dev_dob()` a date of birth for a given age. Any test or dev script that registers a player must give them a profile first.
 - `dev/lib-sim.php` — plays a pretend timed game rally by rally (best of three in an hour, third set to 15 or 25, score stands at time). Used by `fake-season.php`, `simulate-pairing.php` and `simulate-ratings.php` (rating model comparison — re-run before changing `RSL_Ratings` weights).
 - `includes/class-rsl-admin-fixtures.php` — Social League → Fixtures: per night, make automatically / adjust / publish / enter results.
 - `includes/class-rsl-public-fixtures.php` — `[rsl_fixtures]` (Fixtures & Results page), `[rsl_ladder]` (League Ladder page), and the fixtures/standing section on team pages. Published nights only.
