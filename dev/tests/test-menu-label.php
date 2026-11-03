@@ -5,9 +5,10 @@
  * registered, "My team" on an active team or with a team application waiting (in a season
  * the league page shows), and "My league" otherwise. Logged-out viewers, other items, an item
  * kept for logged-out visitors (Nav Menu Roles' "out") and a dropdown heading are left alone,
- * and the state costs one query at most. Made-up menu items and two throwaway menu item posts in
- * no menu (no menu is changed), far-future (and far-past) seasons, a throwaway @example.test
- * account; cleans up.
+ * and the state costs one query at most; and (0.18.0) a sign-up pin left on a finished season
+ * names the first open season's year, or with nothing open the next season's. Made-up menu
+ * items and two throwaway menu item posts in no menu (no menu is changed), far-future (and
+ * far-past) seasons, throwaway @example.test accounts; cleans up.
  *
  *   wp eval-file dev/tests/test-menu-label.php
  */
@@ -36,7 +37,9 @@ $made_page = 0;
 $out_id = 0;
 $real_id = 0;
 $cands = null;
-$test_seasons = array('2092-pre', '2092-mid1', '1992-pre');
+$cands14 = null;
+$courts_keys = array('2092-mid1', '2095-pre'); // the season settings check 14 adds
+$test_seasons = array('2092-pre', '2092-mid1', '1992-pre', '2095-pre');
 $users = array();
 $mk = function ($tag) use ($suffix, &$users) {
     $u = wp_insert_user(array('user_login' => "rslml-$tag-$suffix", 'user_email' => "rslml-$tag-$suffix@example.test", 'user_pass' => wp_generate_password(),
@@ -202,6 +205,34 @@ $t2 = $titles(RSL_Portal::menu_labels($pair('0'), (object) array()));
 $check('13 a dropdown heading keeps its words (and only that holds it: as a plain item it follows the person)',
     $t === array('Social League', 'Fixtures') && $t2 === array('My league', 'Fixtures'), wp_json_encode(array($t, $t2)));
 
+// 14 (0.18.0): the sign-up pin left on a finished season: "Register for" names the year of the
+// first season open for sign-up (calendar order), not the finished one's; with nothing open, the
+// year of the season after the finished one; a sign-up season still to run keeps its own year.
+remove_filter('rsl_open_for_signup_candidates', $cands);
+$keys14 = array('2095-pre', '2092-mid1'); // not in calendar order: the first open is by the calendar
+$cands14 = function ($keys) use (&$keys14) { return $keys14; };
+add_filter('rsl_open_for_signup_candidates', $cands14);
+$d14 = function ($n) { return date('Y-m-d', strtotime(current_time('Y-m-d') . ' +' . intval($n) . ' days')); };
+RSL_Courts::save_settings('2092-mid1', array('start' => $d14(30), 'end' => $d14(90)));
+RSL_Courts::save_settings('2095-pre', array('start' => $d14(120), 'end' => $d14(180)));
+RSL_Seasons::set_signup('1992-post'); // no dates: its quarter, long finished; the season after is 1993-pre
+$w = $mk('w');                        // logged in, not registered
+wp_set_current_user($w);
+$t = $label();
+$check('14 a finished sign-up pin: Register for the year of the first season open for sign-up', RSL_Portal::menu_season() === '2092-mid1' && $t[0] === 'Register for 2092', wp_json_encode($t));
+RSL_Portal::flush_menu_state();
+$n = $wpdb->num_queries;
+RSL_Portal::menu_labels($items(), (object) array());
+$q14 = $wpdb->num_queries - $n;
+$check('...still one query for the menu', $q14 === 1, (string) $q14);
+$keys14 = array();
+$t = $label();
+$check('...nothing open: the year of the season after the finished one', RSL_Portal::menu_season() === '1993-pre' && $t[0] === 'Register for 1993', wp_json_encode($t));
+RSL_Seasons::set_signup('2092-mid1');
+$keys14 = array('2095-pre', '2092-mid1');
+$t = $label();
+$check('...a sign-up season still to run keeps its own year, with a later year open too', RSL_Portal::menu_season() === '2092-mid1' && $t[0] === 'Register for 2092', wp_json_encode($t));
+
 } catch (Throwable $e) {
     $fails++;
     echo 'FAIL: threw ' . get_class($e) . ': ' . $e->getMessage() . ' (line ' . $e->getLine() . ")\n";
@@ -211,6 +242,14 @@ wp_set_current_user(0);
 RSL_Portal::flush_menu_state();
 if ($cands) {
     remove_filter('rsl_open_for_signup_candidates', $cands);
+}
+if ($cands14) {
+    remove_filter('rsl_open_for_signup_candidates', $cands14);
+}
+$cs = get_option(RSL_Courts::SETTINGS_OPTION, null);
+if (is_array($cs) && array_intersect_key($cs, array_flip($courts_keys))) {
+    foreach ($courts_keys as $s_key) { unset($cs[$s_key]); }
+    update_option(RSL_Courts::SETTINGS_OPTION, $cs, false);
 }
 foreach ($test_seasons as $s_key) {
     foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $s_key)) as $tid) {

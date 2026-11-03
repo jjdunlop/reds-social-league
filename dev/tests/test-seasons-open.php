@@ -5,7 +5,8 @@
  * dates_words(), day_words()), quarters, calendar order (ordinal()),
  * span() and the rsl_open_for_signup_candidates filter; and (0.17.0) the
  * choices() span, signup_choices(), pick_open() (the one check of a season a
- * player picks) and default_pick(). Pure checks first,
+ * player picks) and default_pick(); and (0.18.0) nothing open: signup_choices()
+ * empty, pick_open() refusing with closed_words(). Pure checks first,
  * with made-up keys and a made-up today; then the wrapper with far-future
  * (and far-past) seasons only. The site's real seasons are only read.
  *
@@ -137,9 +138,14 @@ try {
     remove_filter('rsl_open_for_signup_candidates', $swap);
     $swap = function ($keys) { return array(); };
     add_filter('rsl_open_for_signup_candidates', $swap);
-    $check('nothing open at all: the sign-up season alone, as before (the page never dead-ends)',
-        RSL_Seasons::signup_choices() === array('1990-pre' => RSL_Seasons::label_with_dates('1990-pre', RSL_Seasons::span('1990-pre'))) && RSL_Seasons::pick_open('') === '1990-pre',
-        wp_json_encode(RSL_Seasons::signup_choices()));
+    $none = RSL_Seasons::pick_open('');
+    $none_named = RSL_Seasons::pick_open('1990-pre');
+    $closed_words = 'Sign-ups for 1990 Pre-season have closed and nothing is open yet.';
+    $check('nothing open at all (0.18.0): no season to pick, and any pick is refused with the closed sentence, never the finished season',
+        RSL_Seasons::signup_choices() === array() && RSL_Seasons::closed_words() === $closed_words
+        && is_wp_error($none) && $none->get_error_code() === 'rsl_signup_closed' && $none->get_error_message() === $closed_words
+        && is_wp_error($none_named) && $none_named->get_error_code() === 'rsl_signup_closed' && $none_named->get_error_message() === $closed_words,
+        wp_json_encode(array(RSL_Seasons::signup_choices(), is_wp_error($none) ? $none->get_error_message() : $none)));
     remove_filter('rsl_open_for_signup_candidates', $swap);
     $swap = null;
     $open = RSL_Seasons::open_for_signup();

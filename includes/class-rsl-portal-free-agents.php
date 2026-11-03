@@ -82,7 +82,9 @@ class RSL_Portal_FA {
 
             case 'fa_leave':
                 $done = RSL_Free_Agents::leave($user_id, $season);
-                return is_wp_error($done) ? self::result('error', $done->get_error_message()) : self::result('success', 'You\'ve left the free agent list. You can rejoin any time from this page.');
+                // "Rejoin any time" only while that season is still open for sign-up (0.18.0).
+                return is_wp_error($done) ? self::result('error', $done->get_error_message())
+                    : self::result('success', 'You\'ve left the free agent list.' . (isset(RSL_Seasons::signup_choices()[$season]) ? ' You can rejoin any time from this page.' : ''));
 
             case 'fa_group_create':
                 $code = RSL_Free_Agents::group_create($user_id, $season);
@@ -239,7 +241,9 @@ class RSL_Portal_FA {
                 }
                 return self::result('success', 'You\'re registered and your application for ' . $team->name . RSL_Portal::season_aside($team->season) . ' is in. Once the league approves it you\'ll get an invite link for your players.');
             case 'later':
-                return self::result('success', 'Thanks — you\'re registered for the Reds Social League. Whenever you\'re ready, join a team, start one or ask us to find you one from this page.');
+                // With nothing open for sign-up (0.18.0) an invite code is the only way onto a team.
+                return self::result('success', 'Thanks — you\'re registered for the Reds Social League. Whenever you\'re ready, '
+                    . (RSL_Seasons::signup_choices() ? 'join a team, start one or ask us to find you one' : 'join a team with an invite code') . ' from this page.');
         }
         return null;
     }
@@ -256,7 +260,9 @@ class RSL_Portal_FA {
      * over RSL_Seasons::signup_choices() (0.17.0). Nothing inside a panel is
      * required: a hidden required field would block the form. Arriving on an
      * invite link, joining that team is the only route (the form already
-     * carries the code), for the team's own season.
+     * carries the code), for the team's own season. With nothing open for
+     * sign-up (0.18.0) the routes are an invite code or Not yet, under
+     * RSL_Seasons::closed_words(), and the legend names the league.
      */
     public static function route_fields($player, $season, $invited_to) {
         $id = self::uid('rsl-route');
@@ -270,11 +276,16 @@ class RSL_Portal_FA {
             'find' => array('Find me a team', 'Put me on the free agent list and the league finds me a team.'),
             'later' => array('Not yet', 'Just register for now.'),
         );
+        if (!$choices) {
+            // Nothing open for sign-up (0.18.0): no team to start and no list to join; an invite
+            // code (its team's own season) and Not yet stay, and the form says why.
+            unset($routes['start'], $routes['find']);
+        }
         if ($invited_to) {
             // The invite's own season (a team in a later season open for sign-up can invite too).
             $legend = 'How are you joining ' . RSL_Seasons::label(!empty($invited_to->season) ? $invited_to->season : $season) . '?';
         } else {
-            $legend = $multi ? 'How are you joining the Reds Social League?' : 'How are you joining ' . RSL_Seasons::label($pick) . '?';
+            $legend = $multi || $pick === '' ? 'How are you joining the Reds Social League?' : 'How are you joining ' . RSL_Seasons::label($pick) . '?';
         }
         ob_start();
         ?>
@@ -284,6 +295,7 @@ class RSL_Portal_FA {
                 <input type="radio" class="rsl-fa-radio rsl-fa-r-join" name="route" value="join" id="<?php echo esc_attr($id . '-join'); ?>" checked>
                 <label class="rsl-fa-route" for="<?php echo esc_attr($id . '-join'); ?>">Join <?php echo esc_html($invited_to->name); ?><small>Your captain's invite — you'll go straight onto the team when you register.</small></label>
             <?php else: ?>
+                <?php if (!$choices): ?><p class="rsl-hint"><?php echo esc_html(RSL_Seasons::closed_words()); ?></p><?php endif; ?>
                 <?php foreach ($routes as $key => $words): ?>
                     <input type="radio" class="rsl-fa-radio rsl-fa-r-<?php echo esc_attr($key); ?>" name="route" value="<?php echo esc_attr($key); ?>" id="<?php echo esc_attr($id . '-' . $key); ?>"<?php echo $key === 'join' ? ' required' : ''; ?>>
                     <label class="rsl-fa-route" for="<?php echo esc_attr($id . '-' . $key); ?>"><?php echo esc_html($words[0]); ?><small><?php echo esc_html($words[1]); ?></small></label>
@@ -294,16 +306,20 @@ class RSL_Portal_FA {
                     </label>
                     <p class="rsl-hint">Your captain can find it on their league page — or just open the invite link they sent you.</p>
                 </div>
+                <?php if (isset($routes['start'])): ?>
                 <div class="rsl-fa-panel rsl-fa-p-start">
                     <p class="rsl-hint">Tell us about your team — your application goes in when you register.</p>
                     <?php echo RSL_Portal::team_fields(array(), $choices, false); ?>
                 </div>
+                <?php endif; ?>
+                <?php if (isset($routes['find'])): ?>
                 <div class="rsl-fa-panel rsl-fa-p-find">
                     <?php echo RSL_Portal::season_field('fa_season', $choices, $pick); ?>
                     <?php echo self::fields_html(null, $player, $pick, $multi); ?>
                 </div>
+                <?php endif; ?>
                 <div class="rsl-fa-panel rsl-fa-p-later">
-                    <p class="rsl-hint">No problem — you can join a team, start one or ask us to find you one from this page any time.</p>
+                    <p class="rsl-hint"><?php if ($choices): ?>No problem — you can join a team, start one or ask us to find you one from this page any time.<?php else: ?>No problem — you can join a team with an invite code from this page any time.<?php endif; ?></p>
                 </div>
             <?php endif; ?>
         </fieldset>
@@ -420,8 +436,9 @@ class RSL_Portal_FA {
      * a placement run couldn't fit them, the unplaced card), the teams board,
      * their requests, friend group and details; not on the list and $find →
      * the "Find me a team" card over $choices (key => label with dates; null:
-     * RSL_Seasons::signup_choices(); empty: '' — every season on offer already
-     * has their team, application or list entry); not on the list and not
+     * RSL_Seasons::signup_choices(); empty: '' when every season on offer already
+     * has their team, application or list entry; the closed sentence when nothing
+     * is open, 0.18.0); not on the list and not
      * $find (a later season's part of the page) → ''.
      */
     public static function dashboard($user_id, $season, $choices = null, $find = true) {
@@ -443,7 +460,9 @@ class RSL_Portal_FA {
         } elseif ($find) {
             $choices = $choices === null ? RSL_Seasons::signup_choices() : (is_array($choices) ? $choices : array());
             if (!$choices) {
-                return '';
+                // Nothing open for sign-up at all (0.18.0): say so where Find me a team would be.
+                // Every season on offer already taken (a team, application or list entry): nothing.
+                return RSL_Seasons::signup_choices() ? '' : '<div class="rsl-fa"><div class="rsl-card rsl-fa-closed"><p>' . esc_html(RSL_Seasons::closed_words()) . '</p></div></div>' . self::styles();
             }
             $html = self::find_card($row, $player, $season, $choices);
         } else {

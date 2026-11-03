@@ -6,6 +6,48 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## A season preview while the ladder is empty, and three small fixes (0.18.0)
+
+- **Season preview.** Until a season's first fixtures are published, the
+  League Teams, League Ladder and Fixtures & Results pages show a preview
+  card: when the season starts ("2027 Pre-season (Summer) starts Sunday
+  24 January") with a countdown ("53 days to go", counted again in the
+  visitor's browser by the site's own date and time zone, so a cached page
+  never shows an old number and every visitor sees the same count), how many
+  teams are in so far in each division (never their names, never
+  applications still waiting), the Ranked tiers from Bronze to Diamond
+  (three placement games, then climb) and what Unranked is, the free agent
+  dates while the window is still to close, and buttons to register and to
+  read how the league works. It goes as soon as a night's fixtures are
+  published or the first night has passed. A season with no dates says its
+  dates are coming soon. On the Teams page it sits above the team list (in
+  place of "No teams yet"), on the Ladder above "How the ladder works", on
+  Fixtures & Results above the weeks.
+- **How the league works button.** Social League → Teams has a League pages
+  box: pick the page that explains the league and the preview links to it.
+  With none picked there's no button.
+- **League pages box note.** If the chosen page is later unpublished, the
+  box says so under the picker (the button is hidden until it is published
+  again).
+- Fixes: the menu's "Register for YEAR" names the year of the season open
+  for sign-up (or, with none open, of the season after) when the sign-up
+  season it was pinned to has finished; with nothing open for sign-up, a
+  team application or a free agent entry is refused with "Sign-ups for
+  SEASON have closed and nothing is open yet." (and the league page says so
+  where those forms were, and its Not yet words and messages offer only an
+  invite code) instead of going into a finished season; the "runs out
+  soon" note stays quiet for a player whose season rego for this season
+  still counts after its dates moved later, when the next season is
+  already paid for.
+- Dev: `RSL_Public::season_preview()` and `preview_state()` (the one show
+  rule; both take the season's nights when the caller has them),
+  `preview_fa_words()`, `teams_in_words()`, `countdown_words()`,
+  `days_until()`, `count_word()`, `about_url()` and `ABOUT_OPTION`
+  (`rsl_about_page_id`); `RSL_Seasons::closed_words()` (error
+  `rsl_signup_closed`; `signup_choices()` no longer falls back to a finished
+  season); `RSL_Portal::menu_season()`; `RSL_Rego::paid_ahead()` counts a
+  season rego for its whole season; `dev/tests/test-season-preview.php`.
+
 ## Start a team in one step, pick the season, and a menu that knows you (0.17.0)
 
 - **Start a team at registration in one go.** Choosing *Start a team* when

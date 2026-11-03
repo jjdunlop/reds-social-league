@@ -270,14 +270,16 @@ class RSL_Rego {
      * $season)): that cover runs to the season's last night and the season after it
      * (RSL_Seasons::next()) is already covered (season_covered(): its own season rego, or cover
      * for all its nights). The runs-out-soon nudge stays quiet then (0.17.0). Cover that ends
-     * part-way through $season never counts: they still need the rest of it.
+     * part-way through $season never counts: they still need the rest of it. A season rego for
+     * $season that still counts (season_row()) covers it to its last night however its dates have
+     * moved since the sale, even though $clear, judged on a date, ends at the row's own end (0.18.0).
      */
     public static function paid_ahead($user_id, $clear, $season) {
         if (empty($clear['cleared']) || !RSL_Seasons::is_valid($season)) {
             return false;
         }
         $s = RSL_Seasons::span($season);
-        if (!$s || (string) $clear['until'] < $s['end']) {
+        if (!$s || ((string) $clear['until'] < $s['end'] && !self::season_row($user_id, $season))) {
             return false;
         }
         return self::season_covered($user_id, RSL_Seasons::next($season));

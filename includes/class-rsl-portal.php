@@ -58,10 +58,12 @@ class RSL_Portal {
 
     /**
      * The league page's menu item follows the person (0.17.0, wp_nav_menu_objects): "Register
-     * for 2027" (the sign-up season's year) until they've registered, "My team" while they're on
-     * an active team or have a team application waiting in a season the league page shows, else
-     * "My league". Logged-in viewers only: a logged-out visitor's item is static (and cached pages
-     * serve it), so it is never touched, nor is an item Nav Menu Roles keeps for logged-out
+     * for 2027" (the year of menu_season(): the sign-up season's; once the sign-up season has
+     * finished, the first open season's, or with none open the next season's, 0.18.0) until
+     * they've registered, "My team" while they're on an active team or have a team application
+     * waiting in a season the league page shows, else "My league". Logged-in viewers only: a
+     * logged-out visitor's item is static (and cached pages serve it), so it is never touched,
+     * nor is an item Nav Menu Roles keeps for logged-out
      * visitors (_nav_menu_role 'out'; that plugin has already removed it for logged-in viewers on
      * wp_get_nav_menu_items, this is belt and braces). Only items for the page itself (type
      * post_type, object_id = the page), and never a dropdown heading (an item other items sit
@@ -95,14 +97,18 @@ class RSL_Portal {
                 continue;
             }
             if ($label === null) {
-                $label = self::menu_label(self::menu_state(get_current_user_id()), RSL_Seasons::signup());
+                $label = self::menu_label(self::menu_state(get_current_user_id()), self::menu_season());
             }
             $item->title = $label;
         }
         return $items;
     }
 
-    /** The words for a state: 'team' My team, 'league' My league, else "Register for <the sign-up season's year>". Pure. */
+    /**
+     * The words for a state: 'team' My team, 'league' My league, else "Register for <the year of
+     * $signup>" (menu_labels() passes menu_season(): the sign-up season's; once the sign-up season
+     * has finished, the first open season's, or with none open the next season's). Pure.
+     */
     public static function menu_label($state, $signup) {
         if ($state === 'team') {
             return 'My team';
@@ -111,6 +117,27 @@ class RSL_Portal {
             return 'My league';
         }
         return 'Register for ' . (RSL_Seasons::is_valid($signup) ? substr($signup, 0, 4) : current_time('Y'));
+    }
+
+    /**
+     * The season whose year "Register for" names (0.18.0): the sign-up season, or, once it has
+     * finished (a pin left on a season that's over), the first season open for sign-up (calendar
+     * order); with nothing open, the season after the finished one (RSL_Seasons::next()), never
+     * the finished season itself. Options only, which the page has read by then, so the menu
+     * still costs one query at most.
+     */
+    public static function menu_season() {
+        $signup = RSL_Seasons::signup();
+        $span = RSL_Seasons::span($signup);
+        if ($span && $span['end'] < current_time('Y-m-d')) {
+            $open = RSL_Seasons::open_for_signup();
+            if ($open) {
+                reset($open);
+                return (string) key($open);
+            }
+            return RSL_Seasons::next($signup);
+        }
+        return $signup;
     }
 
     /**
@@ -601,11 +628,12 @@ class RSL_Portal {
     /**
      * Whether a failed application can be sent again from the #rsl-apply card (0.17.0): not
      * when the card won't be there for that season or can't succeed (already on a team, an
-     * application waiting, too many withdrawn this season). Decides the draft, the "send it
-     * again" sentence and the #rsl-apply redirect.
+     * application waiting, too many withdrawn this season), nor while nothing is open for
+     * sign-up (the card isn't there, 0.18.0). Decides the draft, the "send it again" sentence
+     * and the #rsl-apply redirect.
      */
     public static function apply_retry($error) {
-        return !(is_wp_error($error) && in_array($error->get_error_code(), array('rsl_pending', 'rsl_elsewhere', 'rsl_withdrawn'), true));
+        return !(is_wp_error($error) && in_array($error->get_error_code(), array('rsl_pending', 'rsl_elsewhere', 'rsl_withdrawn', 'rsl_signup_closed'), true));
     }
 
     /**

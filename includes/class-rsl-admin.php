@@ -199,6 +199,19 @@ class RSL_Admin {
                 self::notice(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : 'Rego removed — it no longer covers them from today.');
                 return admin_url('admin.php?page=' . self::REG_PAGE);
 
+            case 'save_about_page':
+                // The season preview's How the league works button (0.18.0): a published page, or none.
+                $page_id = isset($post['about_page_id']) ? intval($post['about_page_id']) : 0;
+                if ($page_id && (get_post_type($page_id) !== 'page' || get_post_status($page_id) !== 'publish')) {
+                    self::notice('error', 'Pick a published page for How the league works.');
+                    return $back . '#rsl-league-pages';
+                }
+                update_option(RSL_Public::ABOUT_OPTION, $page_id, true);
+                self::notice('success', $page_id
+                    ? 'The season preview\'s How the league works button now goes to ' . get_post_field('post_title', $page_id) . '.'
+                    : 'The season preview has no How the league works button now.');
+                return $back . '#rsl-league-pages';
+
             case 'remove_member':
             case 'make_captain':
                 $user_id = isset($post['user_id']) ? intval($post['user_id']) : 0;
@@ -353,6 +366,42 @@ class RSL_Admin {
                 </tbody>
             </table>
         <?php endif; ?>
+
+        <h2 id="rsl-league-pages">League pages</h2>
+        <?php
+        $made = array();
+        $own = array(
+            RSL_Portal::PAGE_OPTION => 'Social League',
+            RSL_Public::PAGE_OPTION => 'League Teams',
+            RSL_Public_Fixtures::FIXTURES_PAGE_OPTION => 'Fixtures & Results',
+            RSL_Public_Fixtures::LADDER_PAGE_OPTION => 'League Ladder',
+            RSL_Ref_Page::PAGE_OPTION => 'Ref Jobs',
+        );
+        foreach ($own as $opt => $name) {
+            $pid = intval(get_option($opt));
+            if ($pid && get_post_status($pid) === 'publish') {
+                $title = (string) get_post_field('post_title', $pid);
+                $made[] = '<a href="' . esc_url(get_permalink($pid)) . '" target="_blank">' . esc_html($title !== '' ? $title : $name) . '</a>';
+            }
+        }
+        // A page chosen before that's no longer a published page isn't in the picker (it lists
+        // published pages only), so the picker shows None: say so, or a save would clear it unseen.
+        $about_id = intval(get_option(RSL_Public::ABOUT_OPTION));
+        $about_lost = $about_id && RSL_Public::about_url() === '';
+        $about_title = $about_lost ? (string) get_post_field('post_title', $about_id) : '';
+        ?>
+        <p class="description">The pages the league made for itself: <?php echo $made ? implode(', ', $made) . '.' : 'none yet.'; ?></p>
+        <form method="post" action="<?php echo esc_url($post_url); ?>" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <?php echo self::fields('save_about_page', $season); ?>
+            <label for="rsl-about-page"><strong>How the league works page</strong></label>
+            <?php echo wp_dropdown_pages(array('name' => 'about_page_id', 'id' => 'rsl-about-page', 'selected' => $about_id,
+                'show_option_none' => '— None (no button) —', 'option_none_value' => '0', 'echo' => 0)); ?>
+            <button type="submit" class="button">Save</button>
+        </form>
+        <?php if ($about_lost): ?>
+            <p class="description">The page chosen before<?php echo $about_title !== '' ? ' (' . esc_html($about_title) . ')' : ''; ?> isn't published, so the button is hidden.</p>
+        <?php endif; ?>
+        <p class="description">Until the current season's first fixtures are published, the League Teams, League Ladder and Fixtures &amp; Results pages show a season preview: when the season starts, teams in so far, the tiers and the free agent dates, with a Register button (to the Social League page) and a How the league works button to the page chosen here. With none chosen, that button isn't shown.</p>
         <?php echo self::badge_styles(); ?>
         <?php
     }

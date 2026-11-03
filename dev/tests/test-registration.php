@@ -13,7 +13,9 @@
  *  - Start a team at registration in one step and the season pickers
  *    (0.17.0): success, a double submit, failures that open the card with
  *    what was typed, seasons that aren't open, the card's old field names,
- *    later seasons on the league page and their invite links.
+ *    later seasons on the league page and their invite links;
+ *  - (0.18.0) nothing open for sign-up refuses a team application or a free
+ *    agent entry, and the runs-out-soon nudge after a season moved later.
  *
  *   wp eval-file dev/tests/test-registration.php
  */
@@ -903,6 +905,16 @@ $check('26.11 a season rego running out with the next season already paid: clear
     && strpos($vq, 'You\'re cleared to play') !== false && strpos($vq, 'It runs out soon.') === false && strpos($vr, 'It runs out soon.') !== false
     && RSL_Rego::paid_ahead($sq, RSL_Rego::clearance_for($sq, $RUN), $RUN) === true && RSL_Rego::paid_ahead($sr, RSL_Rego::clearance_for($sr, $RUN), $RUN) === false,
     wp_json_encode(RSL_Rego::clearance_for($sq, $RUN)));
+// 11b (0.18.0): this season's last night moved later after the sale. The season rego still counts for
+// all of it, so with the next season paid there's still no nudge (without it, there is).
+RSL_Courts::save_settings($RUN, array('start' => $day(-10), 'end' => $day(25)));
+$vq = $page($sq);
+$vr = $page($sr);
+$cq = RSL_Rego::clearance_for($sq, $RUN);
+$check('26.11b the season moved later after the sale: still no nudge with the next season paid (the other player still gets it)',
+    $cq['until'] === $day(20) && RSL_Rego::paid_ahead($sq, $cq, $RUN) === true && strpos($vq, 'It runs out soon.') === false
+    && strpos($vr, 'It runs out soon.') !== false && RSL_Rego::paid_ahead($sr, RSL_Rego::clearance_for($sr, $RUN), $RUN) === false, wp_json_encode($cq));
+RSL_Courts::save_settings($RUN, array('start' => $day(-10), 'end' => $day(20)));
 RSL_Seasons::set_current($season);
 
 // 12: waiting for a team with nothing to pay online: the card says why.
@@ -941,6 +953,47 @@ $block_rego_insert = null;
 $wpdb->suppress_errors($quiet_rego);
 $quiet_rego = null;
 $check('...one that couldn\'t be saved says so, and adds nothing', $msg === 'That 12-month rego couldn\'t be added — please try again.' && count($rows_for($sz)) === 0, $msg);
+
+// 14 (0.18.0): nothing open for sign-up (the sign-up season pinned to a finished one, no later season
+// with dates). No team to start and no list to join: the forms aren't offered, a form sent anyway
+// (an old page) is refused with the one sentence, and nothing is made in the finished season.
+RSL_Seasons::set_signup($OLD);
+$cand_keys = array($OLD);
+$closed = 'Sign-ups for 1991 Pre-season have closed and nothing is open yet.';
+$su = $mk('su'); // a profile, not registered
+$sv = $mk('sv');
+$reg($sv);
+$v = $page($su);
+$check('26.14 nothing open: the register form offers an invite code or Not yet only, names the league and says why',
+    strpos($v, 'name="route" value="join"') !== false && strpos($v, 'name="route" value="later"') !== false
+    && strpos($v, 'name="route" value="start"') === false && strpos($v, 'name="route" value="find"') === false
+    && strpos($v, 'name="team_season"') === false && strpos($v, 'name="fa_season"') === false
+    && strpos($v, 'How are you joining the Reds Social League?') !== false && strpos($v, esc_html($closed)) !== false
+    && strpos($v, 'No problem — you can join a team with an invite code from this page any time.') !== false && strpos($v, 'start one or ask us to find you one') === false);
+list($to, $fl) = $post_as($su, $reg_fields + array('route' => 'find', 'fa_season' => $OLD));
+$check('...a Find me a team sent anyway: registered, not on the list, and the sentence', RSL_Players::is_registered($su) && !RSL_Free_Agents::get($su, $OLD)
+    && $fl['message'] === 'You\'re registered, but we couldn\'t put you on the free agent list: ' . $closed, $fl['message']);
+$v = $page($sv);
+$check('...the league page: the sentence where Find me a team was, and no application card',
+    strpos($v, esc_html($closed)) !== false && strpos($v, 'id="rsl-apply"') === false && strpos($v, 'Put me on the free agent list') === false);
+list($to, $fl) = $post_as($sv, array('do' => 'apply', 'team_name' => "Closed Team $suffix", 'team_level' => 'social', 'team_season' => $OLD));
+list($to2, $fl2) = $post_as($sv, array('do' => 'apply', 'team_name' => "Closed Team $suffix", 'team_level' => 'social'));
+$check('...an application for the finished season, or with none named: refused with the sentence, no card to go back to, nothing made',
+    $fl['message'] === $closed && $fl2['message'] === $closed && !$ends_apply($to) && !$ends_apply($to2) && $apps_of($sv, $OLD) === 0
+    && get_transient(RSL_Portal::APPLY_DRAFT_PREFIX . $sv) === false, $fl['message'] . ' / ' . $to);
+list($to, $fl) = $post_as($sv, array('do' => 'fa_join', 'fa_season' => $OLD));
+$check('...and so is joining the free agent list', $fl['message'] === $closed && !RSL_Free_Agents::get($sv, $OLD), $fl['message']);
+// Tag ss, not sk: the season rego section's loop already made an account tagged sk.
+$ss = $mk('ss'); // a profile, not registered
+list($to, $fl) = $post_as($ss, $reg_fields + array('route' => 'later'));
+$check('...registering with Not yet: the thank-you names an invite code only', RSL_Players::is_registered($ss)
+    && $fl['message'] === 'Thanks — you\'re registered for the Reds Social League. Whenever you\'re ready, join a team with an invite code from this page.', $fl['message']);
+$joined = RSL_Free_Agents::join($sv, $OLD, array('division_pref' => 'either'), true); // directly (no mail), as an admin script could
+list($to, $fl) = $post_as($sv, array('do' => 'fa_leave', 'season' => $OLD));
+$check('...leaving a list while nothing is open: no promise to rejoin', !is_wp_error($joined) && $fl['type'] === 'success'
+    && $fl['message'] === 'You\'ve left the free agent list.', is_wp_error($joined) ? $joined->get_error_message() : $fl['message']);
+RSL_Seasons::set_signup($S1);
+$cand_keys = array($S1, $S2, $S3, $RUN, $GONE, $OLD);
 
 } catch (Throwable $t) {
     $fails++;

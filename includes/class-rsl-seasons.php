@@ -286,17 +286,17 @@ class RSL_Seasons {
 
     /**
      * The seasons a player may pick to join the free agent list or apply for a team (0.17.0):
-     * open_for_signup(), or, when nothing is open (the sign-up season has finished and no later
-     * season has dates yet), the sign-up season alone, as before 0.17.0, so the league page
-     * never dead-ends. key => label with dates, calendar order.
+     * open_for_signup(). Since 0.18.0 nothing else: when nothing is open (the sign-up season has
+     * finished and no later season has dates yet) it's empty, the league page says closed_words()
+     * where the forms were, and pick_open() refuses. A finished season is never offered.
      */
     public static function signup_choices() {
-        $open = self::open_for_signup();
-        if ($open) {
-            return $open;
-        }
-        $signup = self::signup();
-        return array($signup => self::label_with_dates($signup, self::span($signup)));
+        return self::open_for_signup();
+    }
+
+    /** "Sign-ups for 2026 Post-season have closed and nothing is open yet." The one sentence while nothing is open for sign-up (0.18.0). */
+    public static function closed_words() {
+        return 'Sign-ups for ' . self::short_label(self::signup()) . ' have closed and nothing is open yet.';
     }
 
     /**
@@ -320,11 +320,15 @@ class RSL_Seasons {
     /**
      * The season a player picked on a form, checked against signup_choices(): the key, or
      * WP_Error 'rsl_season_closed' with a sentence for them. Nothing picked ('' or not a
-     * string): default_pick(). Every player-facing route goes through this; admin screens may
-     * use choices().
+     * string): default_pick(). With nothing open, WP_Error 'rsl_signup_closed' with
+     * closed_words(), whatever was picked (0.18.0). Every player-facing route goes through this;
+     * admin screens may use choices().
      */
     public static function pick_open($raw) {
         $choices = self::signup_choices();
+        if (!$choices) {
+            return new WP_Error('rsl_signup_closed', self::closed_words()); // nothing open: never the finished season (0.18.0)
+        }
         $raw = is_string($raw) ? trim($raw) : '';
         if ($raw === '') {
             return self::default_pick($choices);

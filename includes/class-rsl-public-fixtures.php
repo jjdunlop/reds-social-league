@@ -5,6 +5,8 @@
  * "League Ladder" ([rsl_ladder]).
  *
  * Privacy: teams only — never people. Only published nights are shown.
+ * Until the first night's fixtures are published each shows the season preview
+ * (RSL_Public::season_preview(), 0.18.0).
  */
 
 if (!defined('ABSPATH')) {
@@ -54,7 +56,7 @@ class RSL_Public_Fixtures {
         $season = RSL_Seasons::current();
         $nights = RSL_Courts::nights($season);
         if (empty($nights)) {
-            return '<div class="rsl"><p class="rsl-empty">The ' . esc_html(RSL_Seasons::label($season)) . ' fixture isn\'t out yet.</p></div>' . RSL_Public::styles() . self::styles();
+            return '<div class="rsl">' . RSL_Public::season_preview($season, null, $nights) . '<p class="rsl-empty">The ' . esc_html(RSL_Seasons::label($season)) . ' fixture isn\'t out yet.</p></div>' . RSL_Public::styles() . self::styles();
         }
         $labels = RSL_Fixtures::round_labels($season);
         $night = self::chosen_night($nights, isset($_GET['week']) ? sanitize_text_field(wp_unslash($_GET['week'])) : '');
@@ -65,6 +67,7 @@ class RSL_Public_Fixtures {
         ?>
         <div class="rsl">
             <h2 class="rsl-title"><?php echo esc_html(RSL_Seasons::label($season)); ?></h2>
+            <?php echo RSL_Public::season_preview($season, null, $nights); ?>
             <nav class="rsl-weeks" aria-label="Weeks">
                 <?php foreach ($nights as $n): ?>
                     <?php
@@ -431,6 +434,7 @@ class RSL_Public_Fixtures {
                 <h3 class="rsl-division"><?php echo esc_html($label); ?></h3>
                 <?php echo $division === 'ranked' ? self::ranked_table($rows, $mine, $stats) : self::unranked_table($rows, $mine, $stats); ?>
             <?php endforeach; ?>
+            <?php echo RSL_Public::season_preview($season); ?>
             <?php $pts = RSL_Stats::POINTS; ?>
             <details class="rsl-how">
                 <summary>How the ladder works</summary>
