@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Reds Social League
  * Description: MURVC's social volleyball league: player registration and social rego, captain team applications, invites and rosters, courts and game nights, fixtures, results, ratings and ladders.
- * Version: 0.13.0
+ * Version: 0.14.0
  * Author: MURVC
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('RSL_VERSION', '0.13.0');
+define('RSL_VERSION', '0.14.0');
 define('RSL_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('RSL_PLUGIN_URL', plugin_dir_url(__FILE__));
 
@@ -38,6 +38,7 @@ require_once RSL_PLUGIN_DIR . 'includes/class-rsl-pairing.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-placement.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-stats.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-public-fixtures.php';
+require_once RSL_PLUGIN_DIR . 'includes/class-rsl-merge.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-admin.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-admin-courts.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-admin-fixtures.php';
@@ -97,6 +98,9 @@ function rsl_init() {
         add_action('init', 'rsl_ensure_pages_and_routes', 99);
     }
     add_action('init', 'rsl_schedule_cron');
+    // The Club Manager's account merges: hooked here, before any admin
+    // page or admin-post request can preview or run one.
+    RSL_Merge::init();
     RSL_Free_Agents::init();
     new RSL_Public();
     new RSL_Public_Fixtures();
