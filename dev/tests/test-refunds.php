@@ -51,18 +51,13 @@ add_filter('pre_wp_mail', '__return_true');
 $users = array();
 $mk = function ($tag, $role = 'subscriber') use ($suffix, &$users) {
     $u = wp_insert_user(array('user_login' => "rslr-$tag-$suffix", 'user_email' => "rslr-$tag-$suffix@example.test", 'user_pass' => wp_generate_password(), 'display_name' => "RSLR $tag", 'role' => $role));
-    if (!is_wp_error($u)) { // the cleanup only ever sees real account ids (a WP_Error as a user_id matches user_id 0)
-        $users[] = $u;
+    if (is_wp_error($u)) { // e.g. a tag used twice: stop here (the cleanup only ever sees real account ids)
+        throw new Exception("Couldn't make the test account $tag: " . $u->get_error_message());
     }
+    $users[] = $u;
     return $u;
 };
-$cap = $mk('cap');
-$payer = $mk('payer');
-$admin = $mk('admin', 'administrator');
-$team = RSL_Teams::create($season, array('name' => "Refund Team $suffix", 'division' => 'ranked'));
-RSL_Teams::add_member($team->id, $cap, 'captain');
-RSL_Teams::add_member($team->id, $payer);
-$bal = function () use ($team) { return RSL_Payments::balance($team->id); };
+$team = null; // made inside the try, so a failed account stops the test and the cleanup still runs
 $products = array();
 $make_product = function ($name, $price) use (&$products) {
     $p = new WC_Product_Simple();
@@ -116,6 +111,17 @@ $watch_regos = function ($q) use (&$regos_queries) {
 };
 
 try {
+
+$cap = $mk('cap');
+$payer = $mk('payer');
+$admin = $mk('admin', 'administrator');
+$team = RSL_Teams::create($season, array('name' => "Refund Team $suffix", 'division' => 'ranked'));
+if (is_wp_error($team)) {
+    throw new Exception("Couldn't make the test team: " . $team->get_error_message());
+}
+RSL_Teams::add_member($team->id, $cap, 'captain');
+RSL_Teams::add_member($team->id, $payer);
+$bal = function () use ($team) { return RSL_Payments::balance($team->id); };
 
 // --- Top-ups ---------------------------------------------------------------------------------------------
 $topup = $make_product("Top-up test $suffix", 1);
@@ -218,8 +224,8 @@ wc_get_order($ro2->get_id())->update_status('cancelled');
 $check('...and cancelling it again ends it again', !RSL_Rego::clearance($p2)['cleared']);
 // A long note (0.17.0): notes are cut on a whole character with the newest reason kept whole,
 // so the cancellation is still read when the order is paid again (a byte cut used to lose it).
-$p8 = $mk('p8');
-$ro8 = $make_order($rego, $p8, 55);
+$p8n = $mk('p8n');
+$ro8 = $make_order($rego, $p8n, 55);
 $ro8->update_status('completed');
 $i8 = $item_of($ro8);
 $wpdb->update(RSL_Database::table('regos'), array('note' => str_repeat('ü', 120)), array('order_item_id' => $i8->get_id())); // 240 bytes
@@ -228,11 +234,11 @@ $when = date('j M Y', strtotime($today));
 wc_get_order($ro8->get_id())->update_status('cancelled');
 $note8 = $note_of($i8->get_id());
 $check('a long note, cancelled: within 255 bytes, cut on a character (marked …), ending with the cancellation', strlen($note8) <= 255 && preg_match('//u', $note8) === 1
-    && substr($note8, -strlen('— Order cancelled ' . $when)) === '— Order cancelled ' . $when && strpos($note8, '…') !== false && !RSL_Rego::clearance($p8)['cleared'],
+    && substr($note8, -strlen('— Order cancelled ' . $when)) === '— Order cancelled ' . $when && strpos($note8, '…') !== false && !RSL_Rego::clearance($p8n)['cleared'],
     $note8 . ' (' . strlen($note8) . ' bytes)');
 wc_get_order($ro8->get_id())->update_status('processing');
 $note8 = $note_of($i8->get_id());
-$check('...paid again: the rego is back, the note still within 255 bytes and ending with the newest reason', RSL_Rego::clearance($p8)['cleared'] && strlen($note8) <= 255
+$check('...paid again: the rego is back, the note still within 255 bytes and ending with the newest reason', RSL_Rego::clearance($p8n)['cleared'] && strlen($note8) <= 255
     && preg_match('//u', $note8) === 1 && substr($note8, -strlen('Order paid again ' . $when)) === 'Order paid again ' . $when, $note8 . ' (' . strlen($note8) . ' bytes)');
 $p8b = $mk('p8b');
 $g8 = RSL_Rego::grant($p8b, array('source' => 'manual', 'note' => str_repeat('é', 150))); // 300 bytes
