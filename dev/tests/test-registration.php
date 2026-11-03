@@ -7,8 +7,9 @@
  *  - joining with the invite code (instant) or by email invite (must accept);
  *  - privacy: captains see ✓/✗ only, never why; invitees aren't shown;
  *  - the season rego (0.15.0): the season chosen, carried through the cart
- *    and the order, its cover, the refusals, the league page, the rosters and
- *    the admin screen. Throwaway products, orders, seasons and players only.
+ *    and the order, its cover, the refusals (at add-to-cart and checkout),
+ *    the league page, the rosters and the admin screen. Throwaway products,
+ *    orders, seasons and players only (the yearly rego too).
  *
  *   wp eval-file dev/tests/test-registration.php
  */
@@ -32,8 +33,8 @@ foreach (array(RSL_Seasons::CURRENT_OPTION, RSL_Seasons::SIGNUP_OPTION, RSL_Rego
     RSL_Payments::PRODUCT_OPTION, 'woocommerce_prices_include_tax') as $opt) { $saved[$opt] = get_option($opt, '__unset__'); }
 // The yearly-only checks below mean what they say whatever the site has set.
 update_option(RSL_Rego::SEASON_PRODUCT_OPTION, 0);
-// Regos made during this test are removed at the end — including any the
-// past-order scan picks up for other (real, local) accounts.
+// Regos made during this test are removed at the end, whatever made them (the
+// past-order scan only ever sees this file's throwaway products).
 $rego_id_before = (int) $wpdb->get_var("SELECT COALESCE(MAX(id), 0) FROM " . RSL_Database::table('regos'));
 update_option(RSL_Seasons::CURRENT_OPTION, $season);
 delete_option(RSL_Seasons::SIGNUP_OPTION);
@@ -134,11 +135,36 @@ $check('renewing early starts when the current rego ends', RSL_Rego::rego_valid_
 $check('rego covers future dates within its run, not after', RSL_Rego::clearance($p2, date('Y-m-d', strtotime($today . ' +18 months')))['cleared']
     && !RSL_Rego::clearance($p2, date('Y-m-d', strtotime($today . ' +25 months')))['cleared']);
 
+// Throwaway products and orders only: the past-order scan below must never see a real
+// product's orders (it would note them and give their buyers regos for the run).
+$make_product = function ($name, $price) use (&$products) {
+    $p = new WC_Product_Simple();
+    $p->set_name($name);
+    $p->set_regular_price((string) $price);
+    $p->set_virtual(true);
+    $p->set_status('publish');
+    $p->save();
+    $products[] = $p;
+    return $p;
+};
+$make_order = function ($product, $customer, $meta = array()) use (&$orders) {
+    $o = wc_create_order(array('customer_id' => $customer));
+    $item = new WC_Order_Item_Product();
+    $item->set_product($product);
+    $item->set_quantity(1);
+    $item->set_subtotal((float) $product->get_price());
+    $item->set_total((float) $product->get_price());
+    foreach ($meta as $k => $v) { $item->add_meta_data($k, $v, true); }
+    $o->add_item($item);
+    $o->calculate_totals();
+    $o->save();
+    $orders[] = $o;
+    return $o;
+};
+
 // WooCommerce purchase -> rego, once.
-$product_id = 0;
-foreach (wc_get_products(array('type' => 'simple', 'status' => 'publish', 'limit' => 50)) as $prod) {
-    if ($prod->is_purchasable()) { $product_id = $prod->get_id(); break; }
-}
+$yearly = $make_product("Yearly rego test $suffix", 40);
+$product_id = $yearly->get_id();
 update_option(RSL_Rego::PRODUCT_OPTION, $product_id);
 $order = wc_create_order(array('customer_id' => $cap));
 $order->add_product(wc_get_product($product_id), 1);
@@ -308,39 +334,14 @@ $cand_keys = array($S1, $S2, $S3, $RUN, $GONE, $OLD);
 $cands = function ($keys) use (&$cand_keys) { return $cand_keys; };
 add_filter('rsl_open_for_signup_candidates', $cands);
 update_option('woocommerce_prices_include_tax', 'yes');
-$make_product = function ($name, $price) use (&$products) {
-    $p = new WC_Product_Simple();
-    $p->set_name($name);
-    $p->set_regular_price((string) $price);
-    $p->set_virtual(true);
-    $p->set_status('publish');
-    $p->save();
-    $products[] = $p;
-    return $p;
-};
-$yearly = $make_product("Yearly rego test $suffix", 40);
-$season_p = $make_product("Season rego test $suffix", 15);
+$season_p = $make_product("Season rego test $suffix", 15); // the yearly one ($yearly) is made above
 $topup_p = $make_product("Top-up test $suffix", 1);
 $year_id = $yearly->get_id();
 $season_id = $season_p->get_id();
 update_option(RSL_Rego::PRODUCT_OPTION, $year_id);
 update_option(RSL_Rego::SEASON_PRODUCT_OPTION, $season_id);
 update_option(RSL_Payments::PRODUCT_OPTION, $topup_p->get_id());
-$make_order = function ($product, $customer, $meta = array()) use (&$orders) {
-    $o = wc_create_order(array('customer_id' => $customer));
-    $item = new WC_Order_Item_Product();
-    $item->set_product($product);
-    $item->set_quantity(1);
-    $item->set_subtotal((float) $product->get_price());
-    $item->set_total((float) $product->get_price());
-    foreach ($meta as $k => $v) { $item->add_meta_data($k, $v, true); }
-    $o->add_item($item);
-    $o->calculate_totals();
-    $o->save();
-    $orders[] = $o;
-    return $o;
-};
-$pay = function ($o) { wc_get_order($o->get_id())->update_status('processing'); };
+$pay =function ($o) { wc_get_order($o->get_id())->update_status('processing'); };
 $item_of = function ($o) { $items = wc_get_order($o->get_id())->get_items(); return reset($items); };
 $notes = function ($o, $text) {
     return count(array_filter(wc_get_order_notes(array('order_id' => $o->get_id())), function ($n) use ($text) { return strpos($n->content, $text) !== false; }));
@@ -540,6 +541,20 @@ if (!function_exists('WC') || !WC()->session || !WC()->cart) {
     $before = wc_notice_count('error');
     RSL_Rego::check_cart();
     $check('...then checkout goes ahead', wc_notice_count('error') === $before);
+    // The $S1 line stays in the cart: checkout stops when its season has finished meanwhile,
+    // or the player has become covered for it meanwhile (no money for a rego not needed).
+    RSL_Courts::save_settings($S1, array('start' => $day(-30), 'end' => $day(-1)));
+    wc_clear_notices();
+    RSL_Rego::check_cart();
+    $finished_stop = array(wc_notice_count('error'), $holding('error', 'which has finished'), wp_json_encode(wc_get_notices('error')));
+    RSL_Courts::save_settings($S1, array('start' => $day(7), 'end' => $day(60)));
+    $check('checkout: a season line whose season has finished meanwhile is stopped, saying so', $finished_stop[0] === 1 && $finished_stop[1] === 1, $finished_stop[2]);
+    $late = RSL_Rego::grant($sg, array('source' => 'manual', 'season' => $S1));
+    wc_clear_notices();
+    RSL_Rego::check_cart();
+    $covered_stop = array(wc_notice_count('error'), $holding('error', 'so the season rego in your cart isn'), wp_json_encode(wc_get_notices('error')));
+    $wpdb->delete(RSL_Database::table('regos'), array('id' => $late)); // sg pays nothing yet (the league page checks below)
+    $check('...and so is one the player has become covered for meanwhile, saying it isn\'t needed', $late > 0 && $covered_stop[0] === 1 && $covered_stop[1] === 1, $covered_stop[2]);
     WC()->cart->empty_cart();
     wc_clear_notices();
     $ask(null);
@@ -690,6 +705,22 @@ $check('the first night moved earlier after the sale: the paid row still counts 
     && $c['cleared'] && $c['by'] === 'rego' && $c['until'] === $day(60) && RSL_Rego::season_covered($sb, $S1)
     && strpos(RSL_Rego::season_add_error($sb, $S1), 'already covered') !== false && !isset(RSL_Rego::season_choices($sb)[$S1]), wp_json_encode($c));
 RSL_Courts::save_settings($S1, array('start' => $day(7), 'end' => $day(60)));
+
+// 25: a season with no dates whose quarter is still ahead, and cover that starts after today but
+// by the quarter's first day (a hand-added yearly rego from 15 Sep 2091): cleared for that season,
+// as the shop's covered check says, so the league page never asks for money it would refuse.
+$so_u = $mk('so');
+$reg($so_u);
+RSL_Rego::grant($so_u, array('start' => '2091-09-15', 'source' => 'manual', 'note' => 'cash'));
+$c = RSL_Rego::clearance_for($so_u, $S3);
+RSL_Seasons::set_signup($S3);
+$v = $page($so_u);
+RSL_Seasons::set_signup($S1);
+$check('a season with no dates and cover starting by its quarter: cleared for it from when the cover starts, nothing to pay',
+    !RSL_Rego::clearance($so_u)['cleared'] && RSL_Rego::check_date($S3) === $today && RSL_Rego::season_covered($so_u, $S3)
+    && $c['cleared'] && $c['by'] === 'rego' && $c['from'] === '2091-09-15'
+    && strpos($v, 'You\'re cleared to play from ' . RSL_Seasons::day_words('2091-09-15', 2091)) !== false
+    && strpos($v, 'You need a social rego') === false && strpos($v, 'name="rsl_season"') === false, wp_json_encode($c));
 
 } catch (Throwable $t) {
     $fails++;

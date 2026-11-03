@@ -7,8 +7,10 @@
  * rego product (one at a time, its price label) and the "can't check
  * memberships" state. Season regos (0.15.0): refunds, cancellations and an
  * order paid again restore the end they were granted with; a row kept
- * counting by its season's moved dates can still be ended; the past-order
- * scan never guesses a season.
+ * counting by its season's moved dates can still be ended, and one refunded
+ * after its season ended stays ended when the dates move; the past-order
+ * scan never guesses a season; a rego that can't be saved leaves an order
+ * note.
  *
  *   wp eval-file dev/tests/test-refunds.php
  */
@@ -90,6 +92,13 @@ $line_refund = function ($order, $item, $amount, $qty = 0) {
     return wc_create_refund(array('order_id' => $order->get_id(), 'amount' => $amount, 'reason' => 'Test',
         'line_items' => array($item->get_id() => array('qty' => $qty, 'refund_total' => $amount, 'refund_tax' => array()))));
 };
+// Makes a rego insert fail (as against the old table mid-upgrade); set before the try, so the
+// cleanup can always take it off.
+$block_regos = function ($q) {
+    $t = '`' . RSL_Database::table('regos') . '`';
+    return stripos(ltrim((string) $q), 'INSERT INTO ' . $t) === 0 ? str_replace($t, '`' . RSL_Database::table('regos') . '_unsaved`', $q) : $q;
+};
+$quiet = null;
 
 try {
 
@@ -346,6 +355,44 @@ $check('...and the scan itself gives none', count($rows_of($so)) === 0);
 RSL_Rego::on_order_paid($so->get_id());
 $rows = $rows_of($so);
 $check('...while a live payment uses the sign-up season', count($rows) === 1 && $rows[0]->season === $AHEAD && $rows[0]->start_date === $day(5), wp_json_encode($rows));
+
+// A season rego refunded after its season's last night is cut short anyway, so it stays ended
+// when that last night moves later afterwards (postponed finals).
+$DONE = '2093-mid1'; // today-40 to today-5 (its end moves later below)
+RSL_Courts::save_settings($DONE, array('start' => $day(-40), 'end' => $day(-5)));
+$p13 = $mk('p13');
+$so = $make_order($season_rego, $p13, 15, array(RSL_Rego::SEASON_META => $DONE));
+$si = $item_of($so);
+$so = wc_get_order($so->get_id());
+$so->set_date_paid($day(-30) . ' 12:00:00'); // site time
+$so->save();
+$so->update_status('processing');
+$g = $row_for($si);
+$check('set-up: a season rego for a season that has finished', $g && $g->start_date === $day(-30) && $g->end_date === $day(-5) && $g->granted_end === $day(-5), wp_json_encode($g));
+$line_refund($so, $si, $full($si), 1);
+$g = $row_for($si);
+$check('refunded after its season\'s last night: cut a day (below its granted end), noted on the row and the order', $g->end_date === $day(-6) && $g->granted_end === $day(-5)
+    && strpos($g->note, 'Refunded') !== false && $notes(wc_get_order($so->get_id()), 'social rego ended') === 1, wp_json_encode($g));
+RSL_Courts::save_settings($DONE, array('start' => $day(-40), 'end' => $day(10)));
+$check('...then the season\'s last night moves later: the refunded rego still doesn\'t count (not cleared, not covered)', !RSL_Rego::row_counts($row_for($si))
+    && !RSL_Rego::clearance_for($p13, $DONE)['cleared'] && !RSL_Rego::season_covered($p13, $DONE));
+
+// A rego that can't be saved (a payment while another request upgrades the tables): none given,
+// one order note saying how to give it; the past-order scan then gives it.
+$p14 = $mk('p14');
+$ro14 = $make_order($rego, $p14, 55);
+$quiet = $wpdb->suppress_errors(true);
+add_filter('query', $block_regos);
+wc_get_order($ro14->get_id())->update_status('processing');
+wc_get_order($ro14->get_id())->update_status('completed');
+remove_filter('query', $block_regos);
+$wpdb->suppress_errors($quiet);
+$quiet = null;
+$check('a rego that can\'t be saved: none given, one note on the order saying how to give it', count($rows_of($ro14)) === 0
+    && $notes(wc_get_order($ro14->get_id()), 'none was given. Pick up rego purchases') === 1);
+RSL_Rego::on_order_paid($ro14->get_id(), true);
+$check('...and the past-order scan gives it', count($rows_of($ro14)) === 1 && RSL_Rego::clearance($p14)['cleared']
+    && $notes(wc_get_order($ro14->get_id()), '12-month social rego given') === 1);
 wp_set_current_user($admin);
 
 // --- Memberships can't be checked ---------------------------------------------------------------------------
@@ -370,6 +417,10 @@ $_GET = array();
 wp_set_current_user(0);
 remove_filter('pre_wp_mail', '__return_true');
 remove_filter('rsl_membership_source_available', '__return_false');
+remove_filter('query', $block_regos);
+if ($quiet !== null) {
+    $wpdb->suppress_errors($quiet);
+}
 if (!has_action('woocommerce_order_status_processing', array('RSL_Rego', 'on_order_paid'))) {
     add_action('woocommerce_order_status_processing', array('RSL_Rego', 'on_order_paid'));
 }

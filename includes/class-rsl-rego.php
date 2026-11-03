@@ -153,19 +153,33 @@ class RSL_Rego {
      * while its rego starts on its quarter's first day, and a season's dates can move after
      * the sale. 'until' is then the later of the row's end and the season's last night as it
      * is now; 'from' the earlier of the row's start and the season's first night.
+     * Else, like season_covered(): covered for every day from the later of today and the
+     * season's first day to its last (a season with no dates whose quarter is still ahead, and
+     * cover that starts after today but by then): clearance() on that first day, 'from' never
+     * earlier than when that cover starts. So the league page never asks someone to pay for a
+     * season the shop would refuse them as already covered.
      */
     public static function clearance_for($user_id, $season) {
-        $c = self::clearance($user_id, self::check_date($season));
+        $check = self::check_date($season);
+        $c = self::clearance($user_id, $check);
         if ($c['cleared'] || !RSL_Seasons::is_valid($season)) {
             return $c;
         }
-        $row = self::season_row($user_id, $season);
-        if (!$row) {
-            return $c;
-        }
         $s = RSL_Seasons::span($season);
-        return array('cleared' => true, 'by' => 'rego', 'until' => max($row->end_date, $s['end']),
-            'unknown' => false, 'from' => min($row->start_date, $s['start']), 'season' => $season);
+        $row = self::season_row($user_id, $season);
+        if ($row) {
+            return array('cleared' => true, 'by' => 'rego', 'until' => max($row->end_date, $s['end']),
+                'unknown' => false, 'from' => min($row->start_date, $s['start']), 'season' => $season);
+        }
+        $first = max(current_time('Y-m-d'), $s['start']);
+        if ($first > $check && $first <= $s['end'] && self::covered_through($user_id, $first, $s['end'])) {
+            $later = self::clearance($user_id, $first);
+            if ($later['cleared']) {
+                $later['from'] = !empty($later['from']) ? $later['from'] : $first; // a membership: from that day at the latest
+                return $later;
+            }
+        }
+        return $c;
     }
 
     /**
@@ -364,10 +378,12 @@ class RSL_Rego {
      * stops covering from today — it still counts for days already gone —
      * and one that hasn't started yet never covers anything. The row stays
      * (with $why in its note), so a re-run of the past-order scan can't
-     * grant that order item again. A season rego whose own dates are over
-     * but which still counts for its season (row_counts(): the season's
-     * dates moved later) has its end moved back one day, below granted_end,
-     * which ends it. True when done (or already over), or WP_Error.
+     * grant that order item again. A season rego not cut short yet whose
+     * own dates are over has its end moved back one day, below granted_end,
+     * whether or not it still counts for its season now: cut short, it never
+     * counts for its season again (row_counts()), even if the season's last
+     * night moves later afterwards. True when done (or already over), or
+     * WP_Error.
      */
     public static function revoke($grant_id, $why = 'Removed') {
         global $wpdb;
@@ -380,7 +396,9 @@ class RSL_Rego {
         if ($end < $g->start_date) {
             $end = date('Y-m-d', strtotime($g->start_date . ' -1 day')); // covers nothing
         }
-        if ($end >= $g->end_date && self::row_counts($g)) {
+        $season = isset($g->season) ? (string) $g->season : '';
+        $uncut = !self::is_removed($g) && $g->end_date >= (!empty($g->granted_end) ? $g->granted_end : $g->end_date);
+        if ($end >= $g->end_date && $season !== '' && $uncut) {
             $end = date('Y-m-d', strtotime($g->end_date . ' -1 day')); // a day already gone: below granted_end
         }
         if ($end >= $g->end_date) {
@@ -737,7 +755,20 @@ class RSL_Rego {
                     . ($item->get_quantity() > 1 ? ' Quantity ' . intval($item->get_quantity()) . ' was bought but only one rego is given — refund the extra.' : ''));
             } else {
                 self::restore_cancelled($order, intval($item_id), $item); // cancelled and now paid again
+                self::note_if_ungranted($order, intval($item_id));
             }
+        }
+    }
+
+    /**
+     * grant() gave nothing and the line still has no rego row: the insert failed (e.g. a
+     * payment landing while another request upgrades the schema). Say so on the order, once,
+     * so the miss is seen; the past-order scan gives it later.
+     */
+    private static function note_if_ungranted($order, $item_id) {
+        global $wpdb;
+        if ($item_id && !$wpdb->get_var($wpdb->prepare("SELECT id FROM " . RSL_Database::table('regos') . " WHERE order_item_id = %d", $item_id))) {
+            RSL_Payments::order_note($order, 'Social League: the rego for this line couldn\'t be saved just now, so none was given. Pick up rego purchases on Social League → Registration to give it.', '_rsl_rego_unsaved_' . $item_id);
         }
     }
 
@@ -775,6 +806,7 @@ class RSL_Rego {
         $g = $id ? self::get($id) : null;
         if (!$g) {
             self::restore_cancelled($order, $item_id, $item); // a row inserted in between
+            self::note_if_ungranted($order, $item_id);
             return;
         }
         RSL_Payments::order_note($order, 'Social League: season rego given for ' . RSL_Seasons::short_label($season) . ' (' . date('j M Y', strtotime($g->start_date)) . ' – ' . date('j M Y', strtotime($g->end_date)) . ').'

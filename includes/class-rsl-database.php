@@ -418,7 +418,9 @@ class RSL_Database {
      * Runs on every load; cheap unless the schema version moved. True when
      * it upgraded. Only one request at a time runs the upgrade (a stale
      * lock — a request that died part-way — is taken over after a minute);
-     * the others carry on with the old schema for that moment.
+     * the others carry on with the old schema for that moment. (A rego paid
+     * in that moment can't be saved: the order gets a note, and the
+     * past-order scan gives it later.)
      */
     public static function maybe_upgrade() {
         if (get_option(self::SCHEMA_OPTION) === self::SCHEMA_VERSION) {

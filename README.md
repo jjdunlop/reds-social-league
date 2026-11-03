@@ -48,9 +48,10 @@ finals (see `CLAUDE.md`).
   current rego ends.
 - The league page says what covers you ("Season rego, 2027 Pre-season,
   until 21 Mar", "Yearly rego until 2 Nov 2027", "Club membership until …"),
-  counts a rego paid ahead for the season you're playing in, and 30 days
-  before a rego runs out offers the next one. Captains still see only ✓ / ✗,
-  judged for their team's season.
+  counts a rego paid ahead for the season you're playing in (and any cover
+  that starts before that season does), and 30 days before a rego runs out
+  offers the next one. Captains still see only ✓ / ✗, judged for their
+  team's season.
 - Emails that mention the rego say "$15 a season or $40 a year" and link to
   the league page (straight to checkout when only the yearly rego is on
   offer).
@@ -60,7 +61,12 @@ finals (see `CLAUDE.md`).
   league page asks about the season you play in next, and never sells a
   season rego that wouldn't clear you for it.
 - Refunds, cancellations, an order paid again (the rego comes back with the
-  same end) and an admin's Remove work the same for both kinds.
+  same end) and an admin's Remove work the same for both kinds. A season
+  rego refunded after its season has ended stays ended, even if the season's
+  last night is moved later afterwards.
+- A rego payment that can't be saved (rare: a moment while the plugin
+  updates its tables) leaves a note on the order; *Pick up rego purchases*
+  on Social League → Registration then gives it.
 - **Admin** (Social League → Registration): a *Season rego product* beside
   the yearly one (both optional; they can't be the same product, and
   neither can be the team top-up product); *Add a rego by hand* takes 12
