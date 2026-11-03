@@ -5,12 +5,20 @@
  * league, and a merge never changes a league row.
  *
  *  e) Schema guard: every user_id / *_by column in class-rsl-database.php
- *     is in RSL_Merge::columns() (and every listed column exists), so a
- *     new table or column can't be forgotten.
+ *     is in RSL_Merge::columns(), and every bigint column is either there
+ *     or on this test's list of ids that aren't accounts (both lists exact:
+ *     every entry is a bigint column of the schema), so a new table or
+ *     column can't be forgotten.
  *  a) RSL_Merge::uses() is empty for a fresh account and names every kind
- *     of row: one row in each column of RSL_Merge::columns() in turn, a
- *     top-up order's member, the three account spots in the placement
- *     draft option.
+ *     of row: one row in each column of RSL_Merge::columns() in turn (an
+ *     officials row read by its state; an actor column's own row reading
+ *     as the person column's phrase alone), then each spot outside the
+ *     columns: an email invite typed to the account's address, a top-up
+ *     order's member, the three account spots in the placement draft
+ *     option.
+ *  f) RSL_Merge::sentence() (pure) for three accounts, word for word, and
+ *     a failed check (a query made to fail) blocks the preview and throws
+ *     inside the merge with RSL_Merge::CHECK_FAILED.
  *  b) Merging away an account in use: the preview says why (the exact
  *     sentence), the merge is refused, nothing changes. With the preview's
  *     check taken off, the league's handler inside the merge refuses it
@@ -131,12 +139,41 @@ try {
     $check('schema guard: every CREATE TABLE in class-rsl-database.php read', count($tables) > 0 && count($tables) === substr_count($src, 'dbDelta("CREATE TABLE'), count($tables) . ' read');
     // Columns that look like accounts but aren't.
     $not_accounts = array('teams.formed_by' => 'how the team was made (e.g. placement), a word');
+    // Every other bigint column: the id of a league row, a WooCommerce order
+    // or order item, or a counter — never an account. A new bigint column
+    // goes in RSL_Merge::columns() or here, after a look at what it holds.
+    $not_account_ids = array_fill_keys(array(
+        'teams.id',
+        'regos.id', 'regos.order_id', 'regos.order_item_id',
+        'invites.id', 'invites.team_id',
+        'free_agents.id', 'free_agents.team_id',
+        'join_requests.id', 'join_requests.team_id',
+        'outbox.id',
+        'team_members.id', 'team_members.team_id',
+        'venues.id',
+        'courts.id', 'courts.venue_id',
+        'nights.id',
+        'night_venues.id', 'night_venues.night_id', 'night_venues.venue_id',
+        'night_courts.id', 'night_courts.night_id', 'night_courts.court_id',
+        'games.id', 'games.night_id', 'games.venue_id', 'games.court_id', 'games.home_team_id', 'games.away_team_id', 'games.forfeit_team_id',
+        'games.live_seq', // the live scoreboard's sequence number
+        'requests.id', 'requests.team_id', 'requests.night_id',
+        'jobs.id', 'jobs.night_id', 'jobs.game_id', 'jobs.venue_id',
+        'ledger.id', 'ledger.team_id', 'ledger.game_id', 'ledger.night_id', 'ledger.request_id', 'ledger.order_id', 'ledger.order_item_id',
+    ), true);
     $listed = array();
+    $selfs = array();
     foreach (RSL_Merge::columns() as $col) {
-        $listed[substr($col['table'], $prefix_len) . '.' . $col['column']] = true;
+        $short = substr($col['table'], $prefix_len);
+        $listed[$short . '.' . $col['column']] = true;
+        if ($col['self'] !== '') {
+            $selfs[$short . '.' . $col['self']] = $short . '.' . $col['column'];
+        }
     }
     $schema = array();
+    $bigint = array();
     $missing = array();
+    $unsorted = array();
     foreach ($tables as $t) {
         preg_match_all('/^\s*([a-z0-9_]+)\s+(?:bigint|int|tinyint|smallint|mediumint|varchar|char|text|longtext|date|datetime|time|decimal)\b/m', $t[2], $cols);
         foreach ($cols[1] as $name) {
@@ -146,9 +183,22 @@ try {
                 $missing[] = $key;
             }
         }
+        preg_match_all('/^\s*([a-z0-9_]+)\s+bigint\b/m', $t[2], $big);
+        foreach ($big[1] as $name) {
+            $key = $t[1] . '.' . $name;
+            $bigint[$key] = true;
+            if (!isset($listed[$key]) && !isset($not_account_ids[$key])) {
+                $unsorted[] = $key;
+            }
+        }
     }
     $check('schema guard: every user_id / *_by column is in RSL_Merge::columns() (' . count($listed) . ' listed)', !$missing, 'missing: ' . implode(', ', $missing));
-    $check('schema guard: every column in RSL_Merge::columns() exists', !array_diff_key($listed, $schema), implode(', ', array_keys(array_diff_key($listed, $schema))));
+    $check('schema guard: every bigint column (' . count($bigint) . ') is in RSL_Merge::columns() or on the list of ids that aren\'t accounts', count($bigint) > 0 && !$unsorted, 'neither: ' . implode(', ', $unsorted));
+    $check('schema guard: every column in RSL_Merge::columns() is a bigint column of the schema', !array_diff_key($listed, $bigint), implode(', ', array_keys(array_diff_key($listed, $bigint))));
+    $check('schema guard: every id on the list of ids that aren\'t accounts is a bigint column of the schema, and none is in RSL_Merge::columns()',
+        !array_diff_key($not_account_ids, $bigint) && !array_intersect_key($not_account_ids, $listed),
+        implode(', ', array_keys(array_diff_key($not_account_ids, $bigint) + array_intersect_key($not_account_ids, $listed))));
+    $check('schema guard: every self column in RSL_Merge::columns() is a listed column of the same table', !array_diff_key($selfs, $listed), wp_json_encode(array_diff_key($selfs, $listed)));
     $check('schema guard: the columns that only look like accounts still exist', !array_diff_key($not_accounts, $schema));
 
     // ---------- a) uses() names every kind of row ----------
@@ -176,6 +226,35 @@ try {
         'jobs' => array('night_id' => 0, 'type' => 'mergetest', 'game_id' => 0, 'venue_id' => 0, 'user_id' => 0, 'rate' => 0),
         'ledger' => array('team_id' => $team_a->id, 'season' => $season, 'type' => 'adjust', 'amount' => 0, 'note' => $tag),
     );
+    // Columns read by the row's state (columns() 'past'): the row in $base is
+    // the past state (an officials row with no role left); each of these
+    // makes it current.
+    $current = array(
+        'officials' => array(array('ref' => 'applied'), array('ref' => 'approved'), array('supervisor' => 1)),
+    );
+    // What a $base row in this column reads as, for a test account.
+    $reads = function ($col) use ($label) {
+        return ($col['past'] ? $col['past'][1] : $col['what']) . ($col['season'] !== '' ? " in $label" : '');
+    };
+    $put = function ($col, $row, $n, $suffix = '') use ($wpdb, $tag, $prefix_len) {
+        $short = substr($col['table'], $prefix_len);
+        if ($short === 'teams') {
+            $row['name'] = "Merge test $tag row $n$suffix";
+            $row['slug'] = "merge-test-$tag-row-$n$suffix";
+        }
+        if ($short === 'outbox') {
+            $row['dedupe'] = "mergetest:$tag:$n$suffix";
+        }
+        return $wpdb->insert($col['table'], $row) ? (int) $wpdb->insert_id : false;
+    };
+    // Players and officials are keyed by the account, the rest by id.
+    $drop = function ($col, $row, $row_id) use ($wpdb, $prefix_len) {
+        if (in_array(substr($col['table'], $prefix_len), array('players', 'officials'), true)) {
+            $wpdb->delete($col['table'], array('user_id' => $row['user_id']));
+        } else {
+            $wpdb->delete($col['table'], array('id' => $row_id));
+        }
+    };
     foreach (RSL_Merge::columns() as $col) {
         $short = substr($col['table'], $prefix_len);
         $name = $short . '.' . $col['column'];
@@ -185,29 +264,53 @@ try {
         }
         $n++;
         $row = $base[$short];
-        if ($short === 'teams') {
-            $row['name'] = "Merge test $tag row $n";
-            $row['slug'] = "merge-test-$tag-row-$n";
-        }
-        if ($short === 'outbox') {
-            $row['dedupe'] = "mergetest:$tag:$n";
-        }
         $row[$col['column']] = $a;
-        $ok = $wpdb->insert($col['table'], $row);
-        $row_id = (int) $wpdb->insert_id;
-        if (!$ok) {
+        $row_id = $put($col, $row, $n);
+        if ($row_id === false) {
             $check("uses(): a row in $name", false, $wpdb->last_error);
             continue;
         }
-        $want = $col['what'] . ($col['season'] !== '' ? " in $label" : '');
+        $want = $reads($col);
         $got = RSL_Merge::uses($a);
         $check("uses(): a row in $name reads \"$want\"", $got === array($want), wp_json_encode($got));
-        if (in_array($short, array('players', 'officials'), true)) {
-            $wpdb->delete($col['table'], array('user_id' => $row['user_id']));
-        } else {
-            $wpdb->delete($col['table'], array('id' => $row_id));
+        if ($col['past']) {
+            if (empty($current[$short])) {
+                $check("uses(): $name has current states to try", false, 'add the table to $current in this test');
+            }
+            foreach (isset($current[$short]) ? $current[$short] : array() as $state) {
+                $where = in_array($short, array('players', 'officials'), true) ? array('user_id' => $row['user_id']) : array('id' => $row_id);
+                $wpdb->update($col['table'], $state, $where);
+                $want_now = $col['what'] . ($col['season'] !== '' ? " in $label" : '');
+                $got = RSL_Merge::uses($a);
+                $check("uses(): a row in $name with " . wp_json_encode($state) . " reads \"$want_now\"", $got === array($want_now), wp_json_encode($got));
+                $wpdb->update($col['table'], array_intersect_key($row, $state), $where);
+            }
         }
+        $drop($col, $row, $row_id);
         $check("uses(): $name row gone, nothing left", RSL_Merge::uses($a) === array(), wp_json_encode(RSL_Merge::uses($a)));
+
+        // An actor column's own row (the account in its person column too):
+        // the person column's phrase alone, and still in use.
+        if ($col['self'] !== '') {
+            $person = null;
+            foreach (RSL_Merge::columns() as $p) {
+                if ($p['table'] === $col['table'] && $p['column'] === $col['self']) {
+                    $person = $p;
+                }
+            }
+            $own = $row;
+            $own[$col['self']] = $a;
+            $own_id = $put($col, $own, $n, '-own');
+            if ($own_id === false || !$person) {
+                $check("uses(): an own row in $name", false, $own_id === false ? $wpdb->last_error : "no column $short.{$col['self']} in columns()");
+            } else {
+                $want_own = $reads($person);
+                $got = RSL_Merge::uses($a);
+                $check("uses(): an own row in $name (the account in $short.{$col['self']} too) reads \"$want_own\" alone", $got === array($want_own), wp_json_encode($got));
+                $drop($col, $own, $own_id);
+                $check("uses(): $name own row gone, nothing left", RSL_Merge::uses($a) === array(), wp_json_encode(RSL_Merge::uses($a)));
+            }
+        }
     }
     $check('uses(): every listed column was tried', $n === count(RSL_Merge::columns()) && $n === count($listed), "$n tried");
 
@@ -224,25 +327,100 @@ try {
         $order->save();
         $orders[] = $order->get_id();
         $got = RSL_Merge::uses($a);
-        $check('uses(): a top-up order bought for the account reads "paid for a team top-up"', $got === array('paid for a team top-up'), wp_json_encode($got));
+        $check('uses(): a top-up order (unpaid) for the account reads "has a team top-up order"', $got === array('has a team top-up order'), wp_json_encode($got));
         $order->delete(true);
         $check('uses(): order gone, nothing left', RSL_Merge::uses($a) === array(), wp_json_encode(RSL_Merge::uses($a)));
     } else {
         echo "SKIP: top-up order spot (WooCommerce is not active)\n";
     }
 
+    // The spots outside the columns: each one put in place, read, taken away.
+    $invites_t = RSL_Database::table('invites');
+    $email_a = (string) $wpdb->get_var($wpdb->prepare("SELECT user_email FROM {$wpdb->users} WHERE ID = %d", $a));
+    $typed = function ($fields) use ($wpdb, $invites_t, $team_a, $email_a) {
+        return function () use ($wpdb, $invites_t, $team_a, $email_a, $fields) {
+            $wpdb->insert($invites_t, array_merge(array('team_id' => $team_a->id, 'user_id' => 0, 'email' => $email_a, 'invited_by' => 0,
+                'status' => 'pending', 'source' => 'email', 'created_at' => current_time('mysql')), $fields));
+        };
+    };
+    $untyped = function () use ($wpdb, $invites_t, $team_a) {
+        $wpdb->delete($invites_t, array('team_id' => $team_a->id, 'user_id' => 0));
+    };
+    $draft = function ($b) use ($season) {
+        return function () use ($season, $b) {
+            RSL_Free_Agents::save_building($season, $b);
+        };
+    };
     $spots = array(
-        'a placement draft destination' => array(array('proposed_map' => array($a => 'none')), "in the placement draft for $label"),
-        'a draft team\'s captain' => array(array('new_teams' => array('n1' => array('name' => 'Merge test', 'captain_user_id' => $a))), "in the placement draft for $label"),
-        'who confirmed placement' => array(array('confirmed_by' => $a), "confirmed placement for $label"),
+        'an email invite typed to the account\'s address, waiting' => array($typed(array()), array('has a team invite waiting at its email address'), $untyped),
+        'an email invite typed to the account\'s address, cancelled' => array($typed(array('status' => 'cancelled')), array(), $untyped),
+        'an email invite typed to another address, waiting' => array($typed(array('email' => "$tag-other@example.test")), array(), $untyped),
+        'a placement draft destination' => array($draft(array('proposed_map' => array($a => 'none'))), array("in the placement draft for $label"), $forget_draft),
+        'a draft team\'s captain' => array($draft(array('new_teams' => array('n1' => array('name' => 'Merge test', 'captain_user_id' => $a)))), array("in the placement draft for $label"), $forget_draft),
+        'who confirmed placement' => array($draft(array('confirmed_by' => $a)), array("confirmed placement for $label"), $forget_draft),
     );
+    $check('uses(): the account\'s email address read for the invite spots', $email_a !== '');
     foreach ($spots as $what => $spot) {
-        RSL_Free_Agents::save_building($season, $spot[0]);
+        $spot[0]();
         $got = RSL_Merge::uses($a);
-        $check("uses(): $what reads \"{$spot[1]}\"", $got === array($spot[1]), wp_json_encode($got));
-        $forget_draft();
+        $check("uses(): $what reads " . wp_json_encode($spot[1]), $got === $spot[1], wp_json_encode($got));
+        $spot[2]();
         $check("uses(): $what gone, nothing left", RSL_Merge::uses($a) === array(), wp_json_encode(RSL_Merge::uses($a)));
     }
+
+    // ---------- f) sentence() (pure), and a failed check ----------
+    $phr = array(
+        101 => array(),
+        102 => array('registered as a player'),
+        103 => array('on a team in 2027 Pre-season (Summer)', 'has a social rego'),
+    );
+    $never = 'league records never move from one account to another';
+    $check('sentence(): two being merged away in use, the kept one clean',
+        RSL_Merge::sentence(101, array(102, 103), $phr) === "Both #102 and #103 are in use in the Social League, and $never, so they can't be merged into one account."
+            . ' Merge #101 into one of them instead. #102: registered as a player. #103: on a team in 2027 Pre-season (Summer); has a social rego.',
+        RSL_Merge::sentence(101, array(102, 103), $phr));
+    $all3 = array(101 => array('made a night request')) + $phr;
+    $check('sentence(): all three in use',
+        RSL_Merge::sentence(101, array(102, 103), $all3) === "#101, #102 and #103 are all in use in the Social League, and $never, so these accounts can't be merged."
+            . ' #101: made a night request. #102: registered as a player. #103: on a team in 2027 Pre-season (Summer); has a social rego.',
+        RSL_Merge::sentence(101, array(102, 103), $all3));
+    $one = array(101 => array(), 102 => array(), 103 => $phr[103]);
+    $check('sentence(): one being merged away in use',
+        RSL_Merge::sentence(101, array(102, 103), $one) === '#103 is in use in the Social League: on a team in 2027 Pre-season (Summer); has a social rego.'
+            . ' League records never move from one account to another, so keep #103 instead and merge #101 and #102 into it.',
+        RSL_Merge::sentence(101, array(102, 103), $one));
+    $check('sentence(): only the kept one in use: nothing to say', RSL_Merge::sentence(101, array(102, 103), array(101 => array('registered as a player'))) === '');
+
+    // A check that fails stops the merge: the first SELECT naming a league
+    // table is pointed at a table that doesn't exist.
+    $rsl_prefix = RSL_Database::table('');
+    $broken = 0;
+    $break_first = function ($q) use (&$broken, $rsl_prefix, $tag) {
+        if ($broken === 0 && preg_match('/^\s*SELECT\b/i', $q) && strpos($q, $rsl_prefix) !== false) {
+            $broken = 1;
+            return preg_replace('/' . preg_quote($rsl_prefix, '/') . '([a-z0-9_]+)/', $rsl_prefix . 'missing_' . $tag . '_$1', $q, 1);
+        }
+        return $q;
+    };
+    $quiet = $wpdb->suppress_errors(true);
+    add_filter('query', $break_first);
+    try {
+        $got = RSL_Merge::blockers(array(), $a, array($a2));
+        $check('fail closed: blockers() gives RSL_Merge::CHECK_FAILED', $broken === 1 && $got === array(RSL_Merge::CHECK_FAILED), "broken $broken: " . wp_json_encode($got));
+        $broken = 0;
+        $thrown = null;
+        try {
+            RSL_Merge::apply($a, array($a2));
+        } catch (Exception $ex) {
+            $thrown = $ex;
+        }
+        $check('fail closed: apply() throws an Exception with RSL_Merge::CHECK_FAILED', $broken === 1 && $thrown instanceof Exception && $thrown->getMessage() === RSL_Merge::CHECK_FAILED,
+            "broken $broken: " . ($thrown ? get_class($thrown) . ': ' . $thrown->getMessage() : 'nothing thrown'));
+    } finally {
+        remove_filter('query', $break_first);
+        $wpdb->suppress_errors($quiet);
+    }
+    $check('fail closed: with the query back, the same accounts have no blocker', RSL_Merge::blockers(array(), $a, array($a2)) === array());
 
     if (!$cm) {
         echo "SKIP: b) c) d) merges (the Club Manager's account merge tool is not installed)\n";
@@ -256,8 +434,10 @@ try {
         $r3 = RSL_Rego::grant($m1, array('source' => 'manual', 'start' => '1991-01-01', 'note' => $tag));
         RSL_Officials::apply_ref($m1);
         $check('b: the account to merge away is a player on a team, with a rego, on the referees list', $r === true && $r2 === true && $r3 > 0 && RSL_Officials::get($m1)->ref === 'applied');
+        // Ticking happy to ref wrote the account into officials.updated_by
+        // too: its own row, so no "changed an entry" phrase.
         $expected = "#$m1 is in use in the Social League: registered as a player; on a team in $label; has a social rego; "
-            . "on the referees and court supervisors list; changed an entry on the referees and court supervisors list. "
+            . "on the referees and court supervisors list. "
             . "League records never move from one account to another, so keep #$m1 instead and merge #$k1 into it.";
         $rows_before = $rows_of(array($k1, $m1));
         $k_before = $account($k1);
@@ -312,8 +492,7 @@ try {
         // Both in use.
         RSL_Players::register($k1, array('level' => 'vvl', 'years' => 'gt3', 'positions' => array('setter')));
         $both = "Both #$k1 and #$m1 are in use in the Social League, and league records never move from one account to another, so these accounts can't be merged."
-            . " #$k1: registered as a player. #$m1: registered as a player; on a team in $label; has a social rego; on the referees and court supervisors list;"
-            . " changed an entry on the referees and court supervisors list.";
+            . " #$k1: registered as a player. #$m1: registered as a player; on a team in $label; has a social rego; on the referees and court supervisors list.";
         $plan3 = TeamOversight_Account_Merge::plan($k1, array($m1));
         $check('b: both accounts in use: the preview says they can\'t be merged, word for word', !is_wp_error($plan3) && in_array($both, $plan3['blockers'], true) && count($league_blockers($plan3)) === 1,
             is_wp_error($plan3) ? $plan3->get_error_message() : wp_json_encode($plan3['blockers']));

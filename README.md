@@ -11,21 +11,24 @@ finals (see `CLAUDE.md`).
 - **The Club Manager's merge tool (Duplicate accounts) refuses to merge
   away an account that's in use in the league.** The preview lists what
   it's in (registered as a player, on a team or the free agent list in a
-  season, an invite or a request to join, a social rego, the referees and
-  court supervisors list or a job, a team balance line or top-up order,
-  league email, the placement draft, or something it did as a captain, ref
-  or admin) and says to keep that account instead and merge the other one
-  into it.
+  season, an invite (one a captain typed to its email address included) or
+  a request to join, a social rego, the referees and court supervisors list
+  or a job, a team balance line or top-up order, league email, the
+  placement draft, or something it did as a captain, ref or admin) and says
+  to keep that account instead and merge the other one into it.
 - **The account kept can be in use**: its league records stay exactly as
   they are. When both accounts are in use, the preview says so and that
   they can't be merged.
-- **A merge never changes anything in the league**: nothing moves, and
-  nothing happens on Undo. The same check runs again inside the merge, so
+- **A merge never changes a league record**: nothing moves, and nothing
+  happens on Undo. What the league reads from the account itself (date of
+  birth, name, membership) follows the Club Manager's merge, as it does
+  everywhere else. The same check runs again inside the merge, so
   something that changed since the preview still stops it, and a check
   that fails stops the merge rather than letting it through.
 - Dev: `RSL_Merge::columns()` is the one list of columns that name an
   account; `dev/tests/test-merge.php` tries a row in each, and fails if a
-  `user_id` / `*_by` column in the schema isn't on the list.
+  `user_id` / `*_by` column in the schema, or any other `bigint` column not
+  on its list of ids that aren't accounts, isn't on the list.
 
 ## Club profile first, and ages from it (0.13.0)
 

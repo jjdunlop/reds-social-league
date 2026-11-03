@@ -13,10 +13,19 @@
  * Exception, which rolls the whole merge back).
  *
  * columns() is the ONE list of table columns that name an account; uses()
- * adds the places outside the tables (a top-up order's member, the
- * placement draft option). A new table, column or option entry that names
- * an account goes in here in the same change — dev/tests/test-merge.php
- * reads the schema and fails otherwise. Data rules only, no output.
+ * adds the places outside the tables (an email invite typed to the
+ * account's address, a top-up order's member, the placement draft option).
+ * A new table or column holding an account id goes into columns() in the
+ * same change, and a new option entry (or any other place outside the
+ * tables) into uses(). dev/tests/test-merge.php reads the schema and fails
+ * on a user_id / *_by column, or any other bigint column not on its list
+ * of ids that aren't accounts, missing from columns(); nothing checks the
+ * places outside the tables, so those are on whoever adds one.
+ *
+ * Accepted to keep this simple: the check inside the merge reads the
+ * transaction's snapshot and takes no league lock, so a league row
+ * committed for an account being merged away while the merge runs can
+ * still slip through. Data rules only, no output.
  */
 
 if (!defined('ABSPATH')) {
@@ -42,12 +51,18 @@ class RSL_Merge {
     /**
      * Every table column holding an account id, person and actor columns
      * alike: table (RSL_Database::table()), column, what (a short phrase
-     * for the admin) and season — 'season' (the row's own season column),
-     * 'team' (the season of the row's team) or '' (none shown).
+     * for the admin), season — 'season' (the row's own season column),
+     * 'team' (the season of the row's team) or '' (none shown) — and two
+     * that change the wording only, never whether the account is in use:
+     * self, an actor column's person column on the same row (a row naming
+     * the account in both reads as the person column's phrase alone: a
+     * player who ticked happy to ref didn't change the list as an
+     * official), and past, array(SQL true while the row is current, the
+     * phrase when it isn't).
      */
     public static function columns() {
-        $c = function ($table, $column, $what, $season = '') {
-            return array('table' => RSL_Database::table($table), 'column' => $column, 'what' => $what, 'season' => $season);
+        $c = function ($table, $column, $what, $season = '', $self = '', $past = null) {
+            return array('table' => RSL_Database::table($table), 'column' => $column, 'what' => $what, 'season' => $season, 'self' => $self, 'past' => $past);
         };
         return array(
             // The account's own league life.
@@ -58,29 +73,33 @@ class RSL_Merge {
             $c('join_requests', 'user_id', 'asked to join a team', 'season'),
             $c('invites', 'user_id', 'invited to a team'),
             $c('regos', 'user_id', 'has a social rego'),
-            $c('officials', 'user_id', 'on the referees and court supervisors list'),
+            // A row with no role left (withdrawn or removed) stays.
+            $c('officials', 'user_id', 'on the referees and court supervisors list', '', '',
+                array("`ref` <> '' OR `supervisor` = 1", 'once on the referees and court supervisors list')),
             $c('jobs', 'user_id', 'has a referee or court supervisor job'),
             $c('ledger', 'user_id', 'named on a team balance line', 'season'),
-            $c('outbox', 'user_id', 'has league email (sent in the last 30 days or still to go)'),
+            // RSL_Mail::prune() deletes sent email only.
+            $c('outbox', 'user_id', 'has league email (sent in the last ' . RSL_Mail::KEEP_DAYS . ' days, waiting to go or failed to send)'),
             // What the account did as a captain, ref or admin.
-            $c('teams', 'decided_by', 'decided a captain application'),
-            $c('regos', 'created_by', 'added a social rego'),
-            $c('invites', 'invited_by', 'invited someone to a team'),
-            $c('join_requests', 'responded_by', 'answered a request to join a team'),
+            $c('teams', 'decided_by', 'decided a captain application', '', 'applied_by'),
+            $c('regos', 'created_by', 'added a social rego', '', 'user_id'),
+            $c('invites', 'invited_by', 'invited someone to a team', '', 'user_id'),
+            $c('join_requests', 'responded_by', 'answered a request to join a team', '', 'user_id'),
             $c('games', 'result_by', 'entered a game result'),
             $c('requests', 'requested_by', 'made a night request'),
             $c('requests', 'handled_by', 'handled a night request'),
-            $c('officials', 'updated_by', 'changed an entry on the referees and court supervisors list'),
-            $c('jobs', 'assigned_by', 'assigned a referee or court supervisor job'),
-            $c('ledger', 'created_by', 'made a team balance entry'),
+            $c('officials', 'updated_by', 'changed an entry on the referees and court supervisors list', '', 'user_id'),
+            $c('jobs', 'assigned_by', 'assigned a referee or court supervisor job', '', 'user_id'),
+            $c('ledger', 'created_by', 'made a team balance entry', '', 'user_id'),
         );
     }
 
     /**
      * What this account is in, as short phrases ("on a team in 2027
      * Pre-season (Summer)"); an empty array means it isn't in use in the
-     * league. Existence checks only. Throws RuntimeException when a query
-     * fails, so a failed check never reads as "not in use".
+     * league. Existence checks only: every row naming the account counts,
+     * whatever the wording. Throws RuntimeException when a query fails, so
+     * a failed check never reads as "not in use".
      */
     public static function uses($user_id) {
         global $wpdb;
@@ -89,20 +108,52 @@ class RSL_Merge {
             return array();
         }
         $out = array();
+        $own_only = array();
         $teams = RSL_Database::table('teams');
         foreach (self::columns() as $col) {
             $t = $col['table'];
             $c = $col['column'];
+            // An actor column's phrase leaves out the account's own rows (see columns()).
+            $not_own = $col['self'] !== '' ? " AND (x.`{$col['self']}` IS NULL OR x.`{$col['self']}` <> %d)" : '';
+            $args = $col['self'] !== '' ? array($user_id, $user_id) : array($user_id);
             if ($col['season'] === 'season') {
-                $seasons = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT `season` FROM `$t` WHERE `$c` = %d ORDER BY `season`", $user_id));
+                $seasons = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT x.`season` FROM `$t` x WHERE x.`$c` = %d$not_own ORDER BY x.`season`", $args));
             } elseif ($col['season'] === 'team') {
-                $seasons = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT t.season FROM `$t` x LEFT JOIN `$teams` t ON t.id = x.team_id WHERE x.`$c` = %d ORDER BY t.season", $user_id));
+                $seasons = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT t.season FROM `$t` x LEFT JOIN `$teams` t ON t.id = x.team_id WHERE x.`$c` = %d$not_own ORDER BY t.season", $args));
             } else {
-                $seasons = $wpdb->get_var($wpdb->prepare("SELECT 1 FROM `$t` WHERE `$c` = %d LIMIT 1", $user_id)) ? array('') : array();
+                $seasons = $wpdb->get_var($wpdb->prepare("SELECT 1 FROM `$t` x WHERE x.`$c` = %d$not_own LIMIT 1", $args)) ? array('') : array();
             }
             self::check_query();
             if ($seasons) {
-                $out[] = self::phrase($col['what'], $seasons, ' in ');
+                $what = $col['what'];
+                if ($col['past']) {
+                    $current = $wpdb->get_var($wpdb->prepare("SELECT 1 FROM `$t` x WHERE x.`$c` = %d$not_own AND ({$col['past'][0]}) LIMIT 1", $args));
+                    self::check_query();
+                    if (!$current) {
+                        $what = $col['past'][1];
+                    }
+                }
+                $out[] = self::phrase($what, $seasons, ' in ');
+            } elseif ($not_own !== '') {
+                // Own rows only: still a row naming the account.
+                $own = $wpdb->get_var($wpdb->prepare("SELECT 1 FROM `$t` WHERE `$c` = %d LIMIT 1", $user_id));
+                self::check_query();
+                if ($own) {
+                    $own_only[] = $col['what'];
+                }
+            }
+        }
+
+        // An email invite a captain typed to this account's address before
+        // it registered (user_id 0, matched on the address when they sign
+        // in): the address leaves with the account, and the invite with it.
+        $email = $wpdb->get_var($wpdb->prepare("SELECT user_email FROM {$wpdb->users} WHERE ID = %d", $user_id));
+        self::check_query();
+        if (is_string($email) && $email !== '') {
+            $hit = $wpdb->get_var($wpdb->prepare("SELECT 1 FROM `" . RSL_Database::table('invites') . "` WHERE user_id = 0 AND source = 'email' AND status = 'pending' AND email = %s LIMIT 1", $email));
+            self::check_query();
+            if ($hit) {
+                $out[] = 'has a team invite waiting at its email address';
             }
         }
 
@@ -118,7 +169,7 @@ class RSL_Merge {
             $hit = $wpdb->get_var($wpdb->prepare('SELECT 1 FROM `' . self::$woo_meta . '` WHERE meta_key = %s AND meta_value = %s LIMIT 1', self::TOPUP_META, (string) $user_id));
             self::check_query();
             if ($hit) {
-                $out[] = 'paid for a team top-up';
+                $out[] = 'has a team top-up order';
             }
         }
 
@@ -150,6 +201,12 @@ class RSL_Merge {
         }
         if ($confirmed) {
             $out[] = self::phrase('confirmed placement', $confirmed, ' for ');
+        }
+        // The wording never makes an account read as not in use: an own row
+        // whose person column phrase isn't here (it was written between the
+        // two reads) shows as the actor phrase.
+        if (!$out && $own_only) {
+            $out = $own_only;
         }
         return array_values(array_unique($out));
     }
