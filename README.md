@@ -6,6 +6,25 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## League emails in the club look (0.16.0)
+
+- **Every league email now has the club's email look**, the same as the
+  Club Manager's: the club's logo and name, REDS SOCIAL LEAGUE above the
+  heading, the subject as the heading, the message, the club footer, and a
+  plain-text version. That covers the free agent list, invites, requests,
+  placements, team approvals, email invites and the "can't make it"
+  notices to the league.
+- The main link is a button ("Your league page", "Pay your rego"); invite
+  links stay visible so captains can copy them; other links stay links.
+- **Sender**: the Club Manager's sender (VVL Oversight → Emails → Sender);
+  the league never sets its own. Replies go to the league contact emails
+  (Team Balances → Rules) when they're set, so every player sees those
+  addresses: use a league address there, not a personal one.
+- Without the Club Manager, emails go out as plain text exactly as before.
+- Nothing already queued changes: the outbox stores plain text and the
+  look is added when it's sent. A send that fails, or throws, is recorded
+  on its outbox row and tried again like any failure.
+
 ## Season rego or yearly rego, the player picks the season (0.15.0)
 
 - **Players can pay for one season or for a year.** The league page offers

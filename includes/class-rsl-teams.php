@@ -274,7 +274,7 @@ class RSL_Teams {
                 . ($listed ? "\nYou're back on the free agent list, so we'll still find you a team if you don't join one yourself.\n" : '')
                 . "\nYou can apply again or join another team from your league page:\n$portal\n";
         }
-        $sent = wp_mail($captain->user_email, $subject, $body);
+        $sent = RSL_Mail::send_now($captain->user_email, $subject, $body);
         if (!$sent) {
             set_transient('rsl_mail_failed_' . get_current_user_id(), $captain->display_name, 60);
         }
@@ -392,7 +392,7 @@ class RSL_Teams {
         $wpdb->insert($table, array('team_id' => $team->id, 'user_id' => $user_id, 'email' => $email, 'invited_by' => $captain_id, 'source' => 'email', 'created_at' => current_time('mysql')));
         $id = (int) $wpdb->insert_id;
         if ($user_id && !self::is_member($team->id, $user_id)) {
-            wp_mail($user->user_email, 'You\'re invited to join ' . $team->name,
+            RSL_Mail::send_now($user->user_email, 'You\'re invited to join ' . $team->name,
                 "Hi {$user->display_name},\n\nYou've been invited to join {$team->name} in the Reds Social League.\n\nAccept or decline on your league page:\n" . RSL_Portal::url() . "\n");
         }
         return $id;

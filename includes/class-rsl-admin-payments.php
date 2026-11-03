@@ -200,7 +200,7 @@ class RSL_Admin_Payments {
             <label>"Can't make it" is free until <input type="number" name="free_cancel_hours" min="0" max="336" value="<?php echo esc_attr($s['free_cancel_hours']); ?>"> hours before the night (after that the team pays both teams' fees for each of its games — unless the other team had already pulled out of that game)</label>
             <label>Not fixtured when owing more than $<input type="number" name="max_owing" min="0" step="1" value="<?php echo esc_attr($s['max_owing']); ?>"></label>
             <label>League contact email(s) <input type="text" name="contact_emails" value="<?php echo esc_attr($s['contact_emails']); ?>" placeholder="<?php echo esc_attr(get_option('admin_email')); ?>" style="width: 300px;"></label>
-            <span class="description">Who's emailed straight away when a team says it can't make it (separate several with commas). Empty: the site admin email.</span>
+            <span class="description">Who's emailed straight away when a team says it can't make it (separate several with commas). Empty: the site admin email. These addresses are also the reply address on every league email, so players see them: use a league address, not a personal one.</span>
             <label>Top-up product
                 <select name="product_id">
                     <option value="0">— Not set: teams can't pay online —</option>

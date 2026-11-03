@@ -178,7 +178,7 @@ class RSL_Requests {
             return;
         }
         $labels = RSL_Fixtures::round_labels($team->season);
-        $sent = wp_mail($to, '[Social League] ' . $team->name . " can't make " . $labels[$night->id],
+        $sent = RSL_Mail::send_now($to, '[Social League] ' . $team->name . " can't make " . $labels[$night->id],
             $team->name . " has told us they can't make their game(s) on " . date_i18n('l j F', strtotime($night->night_date)) . ' (' . $labels[$night->id] . ")"
             . ($req->late ? (RSL_Payments::late_fees_for_request($req->id) > 0 ? ', after the cut-off (they pay both teams\' fees)' : ', after the cut-off, but the other team had already pulled out (no late fee)') : '') . ".\n\n"
             . "Sort it out with the other team, then mark it handled on Social League > Fixtures:\n"

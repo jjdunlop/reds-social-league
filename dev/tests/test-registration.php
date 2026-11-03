@@ -177,7 +177,7 @@ $declined_by = $mk('dec'); $reg($declined_by);
 $app2 = RSL_Teams::apply($season, $declined_by, array('name' => "Nope $suffix", 'level' => 'new'));
 $sent = array();
 RSL_Admin::process(array('rsl_nonce' => wp_create_nonce('rsl_team_action'), 'season' => $season, 'do' => 'decline', 'team_id' => $app2->id, 'note' => wp_slash("Name's already taken")));
-$check('admin declines with a reason, captain emailed it', RSL_Teams::get($app2->id)->status === 'declined' && strpos($sent[0]['message'], "Name's already taken") !== false);
+$check('admin declines with a reason, captain emailed it', RSL_Teams::get($app2->id)->status === 'declined' && strpos(html_entity_decode($sent[0]['message'], ENT_QUOTES, 'UTF-8'), "Name's already taken") !== false);
 $check('declined captain is free and sees why', RSL_Teams::why_cant_join($declined_by, $season) === null && RSL_Teams::last_decided_application($declined_by, $season)->decision_note === "Name's already taken");
 
 // --- Joining with the code ---------------------------------------------------------------

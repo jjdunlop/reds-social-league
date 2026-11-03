@@ -1434,7 +1434,7 @@ class RSL_Free_Agents {
         return $to ? $to : array_values(array_filter(array(sanitize_email((string) get_option('admin_email')))));
     }
 
-    /** Queue one plain-text email with a greeting and sign-off. */
+    /** Queue one email with a greeting and sign-off: queued as plain text; sent in the club look. */
     public static function mail($to, $subject, $text, $dedupe) {
         $hello = is_numeric($to) ? 'Hi ' . self::first_name($to) . ",\n\n" : '';
         return RSL_Mail::queue($to, $subject, $hello . $text . "\n\n— Reds Social League\n", $dedupe);
