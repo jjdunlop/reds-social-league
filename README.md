@@ -24,6 +24,22 @@ finals (see `CLAUDE.md`).
 - Nothing already queued changes: the outbox stores plain text and the
   look is added when it's sent. A send that fails, or throws, is recorded
   on its outbox row and tried again like any failure.
+- The league page's "runs out soon" note says a yearly rego starts when the
+  current one ends only when it would: the rego on the card is running
+  today. For cover that starts later it just offers the yearly rego.
+- While the plugin updates its tables after an update (a few seconds),
+  regos still count by their own dates, so nobody covered is asked to pay
+  in that moment.
+- Dev: `RSL_Mail::send_now()` is the one send path (the club look when the
+  Club Manager's `TeamOversight_Email` is there, else plain `wp_mail()`);
+  `club_email()` is the pure formatter; the filter `rsl_mail_club_look`
+  can only switch the look off (tests use it); `dev/tests/test-mail.php`
+  covers both paths. `RSL_Database::schema_current()`: the rego reads
+  leave out the schema 11 columns until the upgrade has finished. The
+  tests' cleanups keep their mail stop on until the throwaway accounts are
+  deleted (and turn off Ultimate Member's account deleted email), and
+  `test-registration.php` holds the league send run off and parks its own
+  queued mail, so nothing a test queues goes out from another request.
 
 ## Season rego or yearly rego, the player picks the season (0.15.0)
 

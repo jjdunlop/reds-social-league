@@ -26,76 +26,80 @@ $to = "rslmail-$suffix@example.test";
 $mine = function () use ($wpdb, $table, $to) {
     return $wpdb->get_results($wpdb->prepare("SELECT * FROM $table WHERE to_email = %s ORDER BY id", $to));
 };
-// Other unsent mail on this copy is set aside so drain() and retry_failed() only see ours:
-// stamped "sent" far in the future (prune() only deletes old sent mail), then put back as it was.
+// Set before the try, so the cleanup can always run (it puts back everything below, after a failure too).
 $set_aside = '2999-01-01 00:00:00';
-$others = $wpdb->get_col($wpdb->prepare("SELECT id FROM $table WHERE sent_at IS NULL AND to_email <> %s", $to));
-if ($others) {
-    $wpdb->query($wpdb->prepare("UPDATE $table SET sent_at = %s WHERE id IN (" . implode(',', array_map('intval', $others)) . ")", $set_aside));
-}
-
-$id = RSL_Mail::queue($to, 'Hello', 'Body one', "test:$suffix:a");
-$check('queue an email', is_int($id) && $id > 0);
-$check('the same dedupe key queues nothing', RSL_Mail::queue($to, 'Hello again', 'Body two', "test:$suffix:a") === 0 && count($mine()) === 1);
-$check('a bad address is refused', is_wp_error(RSL_Mail::queue('not-an-email', 'x', 'y', "test:$suffix:bad")));
-$check('a long dedupe key still fits', is_int(RSL_Mail::queue($to, 'Long', 'Body', "test:$suffix:" . str_repeat('k', 200))));
-$check('a send run is scheduled', (bool) wp_next_scheduled(RSL_Mail::SEND_HOOK));
-for ($i = 0; $i < 30; $i++) {
-    RSL_Mail::queue($to, "Batch $i", 'Body', "test:$suffix:batch:$i");
-}
-
-$sent_to = array();
-$ok = function ($return, $atts) use (&$sent_to) { $sent_to[] = $atts['subject']; return true; };
-add_filter('pre_wp_mail', $ok, 10, 2);
-list($sent, $failed) = RSL_Mail::drain();
-remove_filter('pre_wp_mail', $ok, 10);
-$check('a run sends one batch (25)', $sent === RSL_Mail::BATCH && $failed === 0 && count($sent_to) === RSL_Mail::BATCH);
-$check('sent rows are stamped', count(array_filter($mine(), function ($r) { return $r->sent_at !== null; })) === RSL_Mail::BATCH);
-$check('another run is scheduled while mail waits', (bool) wp_next_scheduled(RSL_Mail::SEND_HOOK));
-
-$no = function ($return, $atts) { return false; };
-add_filter('pre_wp_mail', $no, 10, 2);
-for ($i = 0; $i < RSL_Mail::MAX_ATTEMPTS; $i++) {
-    RSL_Mail::drain();
-}
-remove_filter('pre_wp_mail', $no, 10);
-$failed_rows = array_filter($mine(), function ($r) { return $r->sent_at === null; });
-$check('failures are retried, then given up', $failed_rows && !array_filter($failed_rows, function ($r) { return intval($r->attempts) < RSL_Mail::MAX_ATTEMPTS || $r->last_error === ''; }));
-$check('counts show them as failed', RSL_Mail::counts()['failed'] >= count($failed_rows));
-$check('the failed list shows them', count(RSL_Mail::failed(50)) >= count($failed_rows));
-$check('retry puts them back in the queue', RSL_Mail::retry_failed() >= count($failed_rows));
-add_filter('pre_wp_mail', $ok, 10, 2);
-RSL_Mail::drain(100);
-remove_filter('pre_wp_mail', $ok, 10);
-$check('and they go', !array_filter($mine(), function ($r) { return $r->sent_at === null; }));
-
-$old = $mine()[0];
-$wpdb->update($table, array('sent_at' => date('Y-m-d H:i:s', current_time('timestamp') - 40 * DAY_IN_SECONDS)), array('id' => $old->id));
-RSL_Mail::prune();
-$check('sent mail older than 30 days is deleted', !$wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE id = %d", $old->id)) && count($mine()) > 1);
-
-// --- The club look (0.16.0) ---------------------------------------------------------------
+$others = array();
 $saved_settings = get_option(RSL_Payments::SETTINGS_OPTION, '__unset__');
 $contact = "rslmail-contact-$suffix@example.test";
+$sent_to = array();
+$ok = function ($return, $atts) use (&$sent_to) { $sent_to[] = $atts['subject']; return true; };
+$no = function ($return, $atts) { return false; };
 $captured = array();
 $capture = function ($return, $atts) use (&$captured) { $captured[] = $atts; return true; };
-$by_subject = function ($subject) use (&$captured) {
-    foreach ($captured as $atts) {
-        if ($atts['subject'] === $subject) {
-            return $atts;
-        }
-    }
-    return null;
-};
-$header_list = function ($atts) {
-    $h = $atts ? $atts['headers'] : array();
-    return array_values(array_filter(array_map('trim', is_array($h) ? $h : preg_split("/\r\n|\n/", (string) $h)), 'strlen'));
-};
-$row_of = function ($id) use ($wpdb, $table) {
-    return $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $id));
-};
-$body = "Hi Alex,\n\nTom & Jerry <tj@example.test> said <b>hi</b>.\n\nYour league page:\nhttps://example.test/league/\n\nAlso: https://example.test/other/\n\n— Reds Social League\n";
+$throw = null;
 try {
+    // Other unsent mail on this copy is set aside so drain() and retry_failed() only see ours:
+    // stamped "sent" far in the future (prune() only deletes old sent mail), then put back as it was.
+    $others = $wpdb->get_col($wpdb->prepare("SELECT id FROM $table WHERE sent_at IS NULL AND to_email <> %s", $to));
+    if ($others) {
+        $wpdb->query($wpdb->prepare("UPDATE $table SET sent_at = %s WHERE id IN (" . implode(',', array_map('intval', $others)) . ")", $set_aside));
+    }
+
+    $id = RSL_Mail::queue($to, 'Hello', 'Body one', "test:$suffix:a");
+    $check('queue an email', is_int($id) && $id > 0);
+    $check('the same dedupe key queues nothing', RSL_Mail::queue($to, 'Hello again', 'Body two', "test:$suffix:a") === 0 && count($mine()) === 1);
+    $check('a bad address is refused', is_wp_error(RSL_Mail::queue('not-an-email', 'x', 'y', "test:$suffix:bad")));
+    $check('a long dedupe key still fits', is_int(RSL_Mail::queue($to, 'Long', 'Body', "test:$suffix:" . str_repeat('k', 200))));
+    $check('a send run is scheduled', (bool) wp_next_scheduled(RSL_Mail::SEND_HOOK));
+    for ($i = 0; $i < 30; $i++) {
+        RSL_Mail::queue($to, "Batch $i", 'Body', "test:$suffix:batch:$i");
+    }
+
+    add_filter('pre_wp_mail', $ok, 10, 2);
+    list($sent, $failed) = RSL_Mail::drain();
+    remove_filter('pre_wp_mail', $ok, 10);
+    $check('a run sends one batch (25)', $sent === RSL_Mail::BATCH && $failed === 0 && count($sent_to) === RSL_Mail::BATCH);
+    $check('sent rows are stamped', count(array_filter($mine(), function ($r) { return $r->sent_at !== null; })) === RSL_Mail::BATCH);
+    $check('another run is scheduled while mail waits', (bool) wp_next_scheduled(RSL_Mail::SEND_HOOK));
+
+    add_filter('pre_wp_mail', $no, 10, 2);
+    for ($i = 0; $i < RSL_Mail::MAX_ATTEMPTS; $i++) {
+        RSL_Mail::drain();
+    }
+    remove_filter('pre_wp_mail', $no, 10);
+    $failed_rows = array_filter($mine(), function ($r) { return $r->sent_at === null; });
+    $check('failures are retried, then given up', $failed_rows && !array_filter($failed_rows, function ($r) { return intval($r->attempts) < RSL_Mail::MAX_ATTEMPTS || $r->last_error === ''; }));
+    $check('counts show them as failed', RSL_Mail::counts()['failed'] >= count($failed_rows));
+    $check('the failed list shows them', count(RSL_Mail::failed(50)) >= count($failed_rows));
+    $check('retry puts them back in the queue', RSL_Mail::retry_failed() >= count($failed_rows));
+    add_filter('pre_wp_mail', $ok, 10, 2);
+    RSL_Mail::drain(100);
+    remove_filter('pre_wp_mail', $ok, 10);
+    $check('and they go', !array_filter($mine(), function ($r) { return $r->sent_at === null; }));
+
+    $old = $mine()[0];
+    $wpdb->update($table, array('sent_at' => date('Y-m-d H:i:s', current_time('timestamp') - 40 * DAY_IN_SECONDS)), array('id' => $old->id));
+    RSL_Mail::prune();
+    $check('sent mail older than 30 days is deleted', !$wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE id = %d", $old->id)) && count($mine()) > 1);
+
+    // --- The club look (0.16.0) ---------------------------------------------------------------
+    $by_subject = function ($subject) use (&$captured) {
+        foreach ($captured as $atts) {
+            if ($atts['subject'] === $subject) {
+                return $atts;
+            }
+        }
+        return null;
+    };
+    $header_list = function ($atts) {
+        $h = $atts ? $atts['headers'] : array();
+        return array_values(array_filter(array_map('trim', is_array($h) ? $h : preg_split("/\r\n|\n/", (string) $h)), 'strlen'));
+    };
+    $row_of = function ($id) use ($wpdb, $table) {
+        return $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $id));
+    };
+    $body = "Hi Alex,\n\nTom & Jerry <tj@example.test> said <b>hi</b>.\n\nYour league page:\nhttps://example.test/league/\n\nAlso: https://example.test/other/\n\n— Reds Social League\n";
+
     // 1. club_email() on its own (pure: runs with or without the Club Manager).
     $e = RSL_Mail::club_email('[Social League] Hello', $body);
     $check('club_email: the program, and the subject without its prefix as the heading', $e['program'] === 'Reds Social League' && $e['heading'] === 'Hello', $e['heading']);
@@ -213,9 +217,12 @@ try {
     $check('plain path: the stored body byte for byte, no club headers', !$plain_available && $got && $got['message'] === $body
         && stripos($plain_hdrs, 'Content-Type') === false && stripos($plain_hdrs, 'X-MURVC-Email') === false && stripos($plain_hdrs, 'Reply-To') === false, $plain_hdrs);
 } catch (Throwable $t) {
-    $check('the club look checks ran to the end', false, get_class($t) . ': ' . $t->getMessage());
+    $check('the test ran to the end', false, get_class($t) . ': ' . $t->getMessage() . ' (line ' . $t->getLine() . ')');
 } finally {
-    if (isset($throw)) {
+    // --- Cleanup (runs after a failure too) -------------------------------------------------------
+    remove_filter('pre_wp_mail', $ok, 10);
+    remove_filter('pre_wp_mail', $no, 10);
+    if ($throw) {
         remove_filter('pre_wp_mail', $throw, 5);
     }
     remove_filter('pre_wp_mail', $capture, 1000);
@@ -225,11 +232,9 @@ try {
     } else {
         update_option(RSL_Payments::SETTINGS_OPTION, $saved_settings);
     }
-}
-
-// --- Cleanup ------------------------------------------------------------------------------
-$wpdb->query($wpdb->prepare("DELETE FROM $table WHERE to_email IN (%s, %s)", $to, $contact));
-if ($others) {
-    $wpdb->query($wpdb->prepare("UPDATE $table SET sent_at = NULL WHERE sent_at = %s AND id IN (" . implode(',', array_map('intval', $others)) . ")", $set_aside));
+    $wpdb->query($wpdb->prepare("DELETE FROM $table WHERE to_email IN (%s, %s)", $to, $contact));
+    if ($others) {
+        $wpdb->query($wpdb->prepare("UPDATE $table SET sent_at = NULL WHERE sent_at = %s AND id IN (" . implode(',', array_map('intval', $others)) . ")", $set_aside));
+    }
 }
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

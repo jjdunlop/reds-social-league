@@ -10,7 +10,8 @@
  * counting by its season's moved dates can still be ended, and one refunded
  * after its season ended stays ended when the dates move; the past-order
  * scan never guesses a season; a rego that can't be saved leaves an order
- * note.
+ * note; while the schema upgrade runs, the rego reads leave out the season
+ * column and still count every row by its dates.
  *
  *   wp eval-file dev/tests/test-refunds.php
  */
@@ -48,7 +49,9 @@ add_filter('pre_wp_mail', '__return_true');
 $users = array();
 $mk = function ($tag, $role = 'subscriber') use ($suffix, &$users) {
     $u = wp_insert_user(array('user_login' => "rslr-$tag-$suffix", 'user_email' => "rslr-$tag-$suffix@example.test", 'user_pass' => wp_generate_password(), 'display_name' => "RSLR $tag", 'role' => $role));
-    $users[] = $u;
+    if (!is_wp_error($u)) { // the cleanup only ever sees real account ids (a WP_Error as a user_id matches user_id 0)
+        $users[] = $u;
+    }
     return $u;
 };
 $cap = $mk('cap');
@@ -99,6 +102,16 @@ $block_regos = function ($q) {
     return stripos(ltrim((string) $q), 'INSERT INTO ' . $t) === 0 ? str_replace($t, '`' . RSL_Database::table('regos') . '_unsaved`', $q) : $q;
 };
 $quiet = null;
+// The schema option one behind (another request still running the schema 11 upgrade), and a
+// note of every query on the regos table; likewise set before the try.
+$schema_behind = function () { return '10'; };
+$regos_queries = array();
+$watch_regos = function ($q) use (&$regos_queries) {
+    if (strpos((string) $q, RSL_Database::table('regos')) !== false) {
+        $regos_queries[] = (string) $q;
+    }
+    return $q;
+};
 
 try {
 
@@ -393,6 +406,26 @@ $check('a rego that can\'t be saved: none given, one note on the order saying ho
 RSL_Rego::on_order_paid($ro14->get_id(), true);
 $check('...and the past-order scan gives it', count($rows_of($ro14)) === 1 && RSL_Rego::clearance($p14)['cleared']
     && $notes(wc_get_order($ro14->get_id()), '12-month social rego given') === 1);
+
+// While another request runs the schema upgrade (the schema option still one behind), the rego
+// reads never name the season column, which may not exist yet: a season rego running today still
+// clears by its own dates (as a 12-month one would), and no season row is read.
+$p15 = $mk('p15');
+RSL_Rego::grant($p15, array('source' => 'manual', 'season' => $NOW));
+add_filter('pre_option_' . RSL_Database::SCHEMA_OPTION, $schema_behind);
+add_filter('query', $watch_regos);
+$behind_now = RSL_Database::schema_current();
+$c15 = RSL_Rego::clearance_for($p15, $NOW);
+$row15 = RSL_Rego::season_row($p15, $NOW);
+$cov15 = RSL_Rego::season_covered($p15, $NOW);
+remove_filter('query', $watch_regos);
+remove_filter('pre_option_' . RSL_Database::SCHEMA_OPTION, $schema_behind);
+$named = array_filter($regos_queries, function ($q) { return stripos(str_replace(RSL_Database::table('regos'), '', $q), 'season') !== false; });
+$check('during the schema upgrade: the rego reads never name the season column; a season rego running today still clears by its own dates',
+    !$behind_now && $regos_queries && !$named && $row15 === null && $c15['cleared'] && $c15['by'] === 'rego' && $c15['until'] === $day(40)
+    && $c15['season'] === '' && $cov15, wp_json_encode(array($c15, array_values($named))));
+$check('...and once it has finished, the season row is read again', RSL_Database::schema_current() && RSL_Rego::season_row($p15, $NOW) !== null
+    && RSL_Rego::clearance_for($p15, $NOW)['season'] === $NOW);
 wp_set_current_user($admin);
 
 // --- Memberships can't be checked ---------------------------------------------------------------------------
@@ -415,9 +448,11 @@ remove_filter('rsl_membership_source_available', '__return_false');
 // --- Cleanup (runs after a failure too) ----------------------------------------------------------------------
 $_GET = array();
 wp_set_current_user(0);
-remove_filter('pre_wp_mail', '__return_true');
+// The mail stop stays on to the very end: deleting the accounts below must send nothing.
 remove_filter('rsl_membership_source_available', '__return_false');
 remove_filter('query', $block_regos);
+remove_filter('query', $watch_regos);
+remove_filter('pre_option_' . RSL_Database::SCHEMA_OPTION, $schema_behind);
 if ($quiet !== null) {
     $wpdb->suppress_errors($quiet);
 }
@@ -439,6 +474,10 @@ if ($team && !is_wp_error($team)) {
     $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $team->id));
     $wpdb->delete(RSL_Database::table('teams'), array('id' => $team->id));
 }
+// Ultimate Member emails an account deleted notice from delete_user: not for throwaway accounts.
+if (function_exists('UM')) {
+    UM()->user()->send_mail_on_delete = false;
+}
 foreach ($users as $u) {
     $wpdb->delete(RSL_Database::table('regos'), array('user_id' => $u));
     delete_transient(RSL_Portal::FLASH_PREFIX . $u);
@@ -449,5 +488,6 @@ $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('regos') . " WH
 foreach ($saved as $opt => $value) {
     if ($value === '__unset__') { delete_option($opt); } else { update_option($opt, $value); }
 }
+remove_filter('pre_wp_mail', '__return_true');
 }
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

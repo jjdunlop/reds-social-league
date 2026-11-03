@@ -674,14 +674,21 @@ class RSL_Portal {
                 <p><strong>&#10003; You're cleared to play<?php echo $from_later ? ' from ' . esc_html(RSL_Seasons::day_words($clear['from'], $words_year)) : ''; ?>.</strong>
                     <?php echo esc_html(RSL_Rego::cover_words($clear)); ?>.</p>
                 <?php if ($clear['by'] === 'rego' && $clear['until'] < date('Y-m-d', strtotime($today . ' +' . RSL_Rego::RENEW_DAYS . ' days'))): ?>
+                    <?php
+                    // A yearly rego starts after the run of regos covering the day it's paid
+                    // (grant()), so "when this one ends" only while the run on this card covers
+                    // today with this end: not a run that starts later, nor a season row kept
+                    // counting past its own end by its season's moved dates.
+                    $chains = RSL_Rego::rego_valid_until($user_id, $today) === $clear['until'];
+                    ?>
                     <?php if (!RSL_Rego::season_product_id()): ?>
                         <?php if (RSL_Rego::pay_url('year')): ?>
-                            <p>It runs out soon — <a href="<?php echo esc_url(RSL_Rego::pay_url('year')); ?>">renew now</a> (a new 12 months starts when this one ends).</p>
+                            <p>It runs out soon — <a href="<?php echo esc_url(RSL_Rego::pay_url('year')); ?>">renew now</a><?php echo $chains ? ' (a new 12 months starts when this one ends)' : ''; ?>.</p>
                         <?php endif; ?>
                     <?php else: ?>
                         <?php $pay = self::rego_pay($user_id, 'rsl-btn rsl-btn-secondary', $card_season); ?>
                         <?php if ($pay !== ''): ?>
-                            <p>It runs out soon. <?php echo RSL_Rego::product_id() ? 'Pay for another season, or for a year (a yearly rego starts when this one ends):' : 'Pay for another season:'; ?></p>
+                            <p>It runs out soon. <?php echo RSL_Rego::product_id() ? 'Pay for another season, or for a year' . ($chains ? ' (a yearly rego starts when this one ends)' : '') . ':' : 'Pay for another season:'; ?></p>
                             <p><?php echo $pay; ?></p>
                         <?php endif; ?>
                     <?php endif; ?>

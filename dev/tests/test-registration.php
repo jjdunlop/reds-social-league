@@ -46,6 +46,9 @@ $users = array();
 $mk = function ($tag, $role = 'subscriber') use ($suffix, &$users) {
     $u = wp_insert_user(array('user_login' => "rslr-$tag-$suffix", 'user_email' => "rslr-$tag-$suffix@example.test", 'user_pass' => wp_generate_password(),
         'display_name' => "RSLR $tag $suffix", 'role' => $role));
+    if (is_wp_error($u)) { // e.g. a tag used twice: stop here (the cleanup only ever sees real account ids)
+        throw new Exception("Couldn't make the test account $tag: " . $u->get_error_message());
+    }
     $users[] = $u;
     rsl_dev_profile($u);
     return $u;
@@ -63,6 +66,18 @@ $cands = null;
 $cand_keys = array();
 $test_seasons = array();
 $cart_test = false;
+// League mail this test queues must never go out from another request (wp-cron on a page load, the
+// hourly job, the Free Agents screen), where the mail stop above isn't in place: the send run is
+// held off a day (queue() schedules one only when none is), and the test's rows are parked
+// (attempts at the maximum) as soon as they're queued. The cleanup deletes them and puts the
+// send run back.
+$send_was = wp_next_scheduled(RSL_Mail::SEND_HOOK);
+wp_clear_scheduled_hook(RSL_Mail::SEND_HOOK);
+wp_schedule_single_event(time() + DAY_IN_SECONDS, RSL_Mail::SEND_HOOK);
+$park = function () use ($wpdb, $suffix) {
+    return (int) $wpdb->query($wpdb->prepare("UPDATE " . RSL_Database::table('outbox') . " SET attempts = %d WHERE sent_at IS NULL AND to_email LIKE %s",
+        RSL_Mail::MAX_ATTEMPTS, '%-' . $suffix . '@example.test'));
+};
 
 try {
 
@@ -293,6 +308,7 @@ $free = $mk('free'); $reg($free);
 wp_set_current_user($free);
 RSL_Portal::process(array('rsl_nonce' => wp_create_nonce('rsl_front'), 'do' => 'looking', 'looking' => '1'));
 $check('free agent list', (int) RSL_Players::get($free)->looking === 1);
+$check('...its email is queued, and parked at once so no other request can send it', $park() >= 1);
 $free_view = $page($free);
 $check('on the list with no team: the rego can wait until they\'re placed', strpos($free_view, 'no rush') !== false);
 $check('...and their season steps include paying the rego', strpos($free_view, 'Your season') !== false && strpos($free_view, 'Pay your rego') !== false && strpos($free_view, 'Cleared to play') === false);
@@ -584,8 +600,19 @@ $v = $page($sb);
 $check('paid ahead for the season: cleared from its first night, saying by what; nothing to pay', strpos($v, 'You\'re cleared to play from ' . RSL_Seasons::day_words($day(7), 2091)) !== false
     && strpos($v, 'Season rego, 2091 Mid-season 1, until') !== false && strpos($v, 'name="rsl_season"') === false);
 $v = $page($sc);
-$check('a rego that runs out before the season ends: it runs out soon, offering the seasons to come', strpos($v, 'It runs out soon.') !== false
-    && strpos($v, '<select name="rsl_season"') !== false && strpos($v, 'value="' . $S1 . '"') !== false && strpos($v, 'value="' . $S2 . '"') !== false);
+$check('a rego that runs out before the season ends: it runs out soon, offering the seasons to come; a yearly rego would start when it ends', strpos($v, 'It runs out soon.') !== false
+    && strpos($v, '<select name="rsl_season"') !== false && strpos($v, 'value="' . $S1 . '"') !== false && strpos($v, 'value="' . $S2 . '"') !== false
+    && strpos($v, 'Pay for another season, or for a year (a yearly rego starts when this one ends):') !== false);
+// The cover on the card starts after today (a hand-added season rego from today+3 to today+20):
+// a yearly rego paid today starts today (grant() chains only onto a rego running on the payment
+// date), so the nudge never says it starts when this one ends.
+$sx = $mk('sx');
+$reg($sx);
+RSL_Rego::grant($sx, array('start' => $day(3), 'source' => 'manual', 'season' => $RUN));
+$v = $page($sx);
+$check('...but cover that starts after today: the nudge, without promising the yearly rego starts when it ends', strpos($v, 'It runs out soon.') !== false
+    && strpos($v, 'Pay for another season, or for a year:') !== false && strpos($v, 'starts when this one ends') === false
+    && RSL_Rego::rego_valid_until($sx, $today) === null, wp_json_encode(RSL_Rego::clearance_for($sx, $S1)));
 
 // 18-19: rosters, judged for the team's season.
 $steam = RSL_Teams::create($S1, array('name' => "Season Team $suffix", 'division' => 'ranked'));
@@ -734,7 +761,7 @@ if ($cart_test && function_exists('WC') && WC()->cart) {
 wp_set_current_user(0);
 $_GET = array();
 $_REQUEST = array();
-remove_filter('pre_wp_mail', $mail, 10);
+// The mail stop ($mail) stays on to the very end: deleting the accounts below must send nothing.
 if ($cands) {
     remove_filter('rsl_open_for_signup_candidates', $cands);
 }
@@ -759,8 +786,20 @@ foreach (array_unique(array_merge(array($season), $test_seasons)) as $s_key) {
     $wpdb->delete(RSL_Database::table('join_requests'), array('season' => $s_key));
 }
 $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('outbox') . " WHERE to_email LIKE %s", '%-' . $suffix . '@example.test'));
+// The send run back as it was: soon when one was due or other mail is waiting.
+wp_clear_scheduled_hook(RSL_Mail::SEND_HOOK);
+if ($send_was || RSL_Mail::counts()['queued'] > 0) {
+    RSL_Mail::schedule_send();
+}
 $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('regos') . " WHERE id > %d", $rego_id_before));
+// Ultimate Member emails an account deleted notice from delete_user: not for throwaway accounts.
+if (function_exists('UM')) {
+    UM()->user()->send_mail_on_delete = false;
+}
 foreach ($users as $u) {
+    if (!is_int($u) || $u <= 0) {
+        continue; // never a WP_Error: as a user_id it would match the rows with user_id 0
+    }
     foreach (array('players', 'regos', 'team_members', 'invites') as $t) { $wpdb->delete(RSL_Database::table($t), array('user_id' => $u)); }
     $wpdb->delete($mem, array('user_id' => $u));
     delete_transient(RSL_Portal::FLASH_PREFIX . $u);
@@ -768,5 +807,6 @@ foreach ($users as $u) {
     wp_delete_user($u);
 }
 foreach ($saved as $opt => $value) { if ($value === '__unset__') { delete_option($opt); } else { update_option($opt, $value); } }
+remove_filter('pre_wp_mail', $mail, 10);
 }
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

@@ -86,24 +86,28 @@ class RSL_Rego {
     /**
      * The unbroken run of regos covering $date: array('from' => the start of the row that
      * began it, 'until' => its last day, 'season' => the season key of the row that last
-     * moved 'until' ('' for a yearly rego)), or null. Rows' own dates only.
+     * moved 'until' ('' for a yearly rego)), or null. Rows' own dates only. While the schema
+     * upgrade is still to finish (RSL_Database::schema_current()) the season column may not
+     * exist yet, so it isn't read: every row counts by its own dates, with season ''.
      */
     public static function rego_run($user_id, $date = null) {
         global $wpdb;
         $date = $date ?: current_time('Y-m-d');
+        $cols = RSL_Database::schema_current() ? 'start_date, end_date, season' : 'start_date, end_date';
         $grants = $wpdb->get_results($wpdb->prepare("
-            SELECT start_date, end_date, season FROM " . RSL_Database::table('regos') . "
+            SELECT $cols FROM " . RSL_Database::table('regos') . "
             WHERE user_id = %d AND end_date >= %s ORDER BY start_date, end_date
         ", $user_id, $date));
         $run = null;
         foreach ($grants as $g) {
+            $g_season = isset($g->season) ? (string) $g->season : '';
             if ($run === null) {
                 if ($g->start_date <= $date) {
-                    $run = array('from' => $g->start_date, 'until' => $g->end_date, 'season' => (string) $g->season);
+                    $run = array('from' => $g->start_date, 'until' => $g->end_date, 'season' => $g_season);
                 }
             } elseif ($g->start_date <= date('Y-m-d', strtotime($run['until'] . ' +1 day')) && $g->end_date >= $run['until']) {
                 $run['until'] = $g->end_date;
-                $run['season'] = (string) $g->season;
+                $run['season'] = $g_season;
             }
         }
         return $run;
@@ -225,10 +229,14 @@ class RSL_Rego {
         return $s && $s['end'] >= $today;
     }
 
-    /** The player's rego row for this season that still counts (row_counts()), or null. */
+    /**
+     * The player's rego row for this season that still counts (row_counts()), or null. Null
+     * while the schema upgrade is still to finish (no season column yet): rego_run() then
+     * still counts the row by its own dates.
+     */
     public static function season_row($user_id, $season) {
         global $wpdb;
-        if (!$user_id || !RSL_Seasons::is_valid($season)) {
+        if (!$user_id || !RSL_Seasons::is_valid($season) || !RSL_Database::schema_current()) {
             return null;
         }
         $rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM " . RSL_Database::table('regos') . " WHERE user_id = %d AND season = %s ORDER BY end_date DESC, id DESC", $user_id, $season));
@@ -763,7 +771,8 @@ class RSL_Rego {
     /**
      * grant() gave nothing and the line still has no rego row: the insert failed (e.g. a
      * payment landing while another request upgrades the schema). Say so on the order, once,
-     * so the miss is seen; the past-order scan gives it later.
+     * so the miss is seen. Nothing gives it by itself: an admin's Pick up rego purchases (the
+     * past-order scan) on Social League → Registration does, as the note says.
      */
     private static function note_if_ungranted($order, $item_id) {
         global $wpdb;
