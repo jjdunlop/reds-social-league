@@ -105,18 +105,29 @@ class RSL_Players {
     /**
      * On or off the free agent list for the sign-up season (RSL_Free_Agents
      * keeps the list; the looking column mirrors it for older screens).
+     * Joining is a season the player picks, so it goes through
+     * RSL_Seasons::pick_open(): with the sign-up season not open (finished,
+     * nothing open) it's refused, never a finished season's list (0.18.0).
+     * true, or the WP_Error that refused it.
      */
     public static function set_looking($user_id, $looking) {
         global $wpdb;
         $season = RSL_Seasons::signup();
         if ($looking) {
             $row = RSL_Free_Agents::get($user_id, $season);
-            $result = RSL_Free_Agents::is_open($row) ? $row : RSL_Free_Agents::join($user_id, $season, array('browsable' => 1));
+            $pick = RSL_Seasons::pick_open($season);
+            if (RSL_Free_Agents::is_open($row)) {
+                $result = $row;
+            } elseif (is_wp_error($pick)) {
+                $result = $pick;
+            } else {
+                $result = RSL_Free_Agents::join($user_id, $pick, array('browsable' => 1));
+            }
         } else {
             $result = RSL_Free_Agents::is_open(RSL_Free_Agents::get($user_id, $season)) ? RSL_Free_Agents::leave($user_id, $season) : true;
         }
         $wpdb->update(RSL_Database::table('players'), array('looking' => $looking && !is_wp_error($result) ? 1 : 0, 'updated_at' => current_time('mysql')), array('user_id' => $user_id));
-        return !is_wp_error($result);
+        return is_wp_error($result) ? $result : true;
     }
 
     public static function count() {

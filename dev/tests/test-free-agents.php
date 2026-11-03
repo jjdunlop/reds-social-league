@@ -60,6 +60,7 @@ $set_building = function ($season, $changes) {
 $today = current_time('Y-m-d');
 $days = function ($n) use ($today) { return date('Y-m-d', strtotime($today . ' ' . ($n >= 0 ? '+' : '') . $n . ' days')); };
 $cands_fa = null; // the season choice section's candidates filter (0.17.0), removed in the cleanup
+$none_fa = null;  // nothing open for sign-up (0.18.0), removed in the cleanup
 
 try {
 
@@ -383,6 +384,18 @@ RSL_Players::set_looking($old, true);
 $check('set_looking puts them on the sign-up season\'s list', RSL_Free_Agents::is_open(RSL_Free_Agents::get($old, $season)));
 RSL_Players::set_looking($old, false);
 $check('and takes them off', RSL_Free_Agents::get($old, $season)->status === 'withdrawn');
+// 0.18.0: the sign-up pin on a finished season with nothing open: the old flag is refused with the
+// closed sentence, never a finished season's list (it goes through pick_open() like every route).
+RSL_Seasons::set_signup('1990-pre');
+$none_fa = function ($keys) { return array(); };
+add_filter('rsl_open_for_signup_candidates', $none_fa);
+$late = RSL_Players::set_looking($old, true);
+remove_filter('rsl_open_for_signup_candidates', $none_fa);
+$none_fa = null;
+RSL_Seasons::set_signup('');
+$check('...with nothing open for sign-up it\'s refused with the closed sentence, and they go on no list', is_wp_error($late) && $late->get_error_code() === 'rsl_signup_closed'
+    && $late->get_error_message() === 'Sign-ups for 1990 Pre-season have closed and nothing is open yet.' && !RSL_Free_Agents::get($old, '1990-pre')
+    && intval(RSL_Players::get($old)->looking) === 0, is_wp_error($late) ? $late->get_error_message() : wp_json_encode($late));
 $wpdb->update(RSL_Database::table('players'), array('looking' => 1), array('user_id' => $old));
 $wpdb->delete(RSL_Database::table('free_agents'), array('season' => $season, 'user_id' => $old));
 $n1 = RSL_Free_Agents::backfill();
@@ -516,6 +529,9 @@ $wpdb->delete(RSL_Database::table('free_agents'), array('season' => $season));
 $wpdb->delete(RSL_Database::table('join_requests'), array('season' => $season));
 if ($cands_fa) {
     remove_filter('rsl_open_for_signup_candidates', $cands_fa);
+}
+if ($none_fa) {
+    remove_filter('rsl_open_for_signup_candidates', $none_fa);
 }
 $set_start('2088-mid1', '');
 $wpdb->delete(RSL_Database::table('free_agents'), array('season' => '2088-mid1'));

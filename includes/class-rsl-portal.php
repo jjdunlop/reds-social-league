@@ -107,7 +107,8 @@ class RSL_Portal {
     /**
      * The words for a state: 'team' My team, 'league' My league, else "Register for <the year of
      * $signup>" (menu_labels() passes menu_season(): the sign-up season's; once the sign-up season
-     * has finished, the first open season's, or with none open the next season's). Pure.
+     * has finished, the first open season's, or with none open the next season's, never a year
+     * already gone). Pure.
      */
     public static function menu_label($state, $signup) {
         if ($state === 'team') {
@@ -122,20 +123,24 @@ class RSL_Portal {
     /**
      * The season whose year "Register for" names (0.18.0): the sign-up season, or, once it has
      * finished (a pin left on a season that's over), the first season open for sign-up (calendar
-     * order); with nothing open, the season after the finished one (RSL_Seasons::next()), never
-     * the finished season itself. Options only, which the page has read by then, so the menu
-     * still costs one query at most.
+     * order); with nothing open, the season after the finished one (RSL_Seasons::next()), or
+     * today's season by quarter when that's later (a pin more than a season stale), so never the
+     * finished season itself nor a year already gone. Options only, which the page has read by
+     * then, so the menu still costs one query at most.
      */
     public static function menu_season() {
         $signup = RSL_Seasons::signup();
+        $today = current_time('Y-m-d');
         $span = RSL_Seasons::span($signup);
-        if ($span && $span['end'] < current_time('Y-m-d')) {
+        if ($span && $span['end'] < $today) {
             $open = RSL_Seasons::open_for_signup();
             if ($open) {
                 reset($open);
                 return (string) key($open);
             }
-            return RSL_Seasons::next($signup);
+            $after = RSL_Seasons::next($signup);
+            $now = RSL_Seasons::for_date($today);
+            return RSL_Seasons::ordinal($now) > RSL_Seasons::ordinal($after) ? $now : $after;
         }
         return $signup;
     }
@@ -407,7 +412,11 @@ class RSL_Portal {
                 return $back;
 
             case 'looking':
-                RSL_Players::set_looking($user_id, !empty($post['looking']));
+                $looked = RSL_Players::set_looking($user_id, !empty($post['looking']));
+                if (is_wp_error($looked)) {
+                    self::flash('error', $looked->get_error_message()); // e.g. nothing open for sign-up (0.18.0)
+                    return $back;
+                }
                 self::flash('success', !empty($post['looking']) ? 'You\'re on the free agent list — we\'ll be in touch when a team needs players.' : 'You\'re off the free agent list.');
                 return $back;
 

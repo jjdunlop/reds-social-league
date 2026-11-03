@@ -162,11 +162,26 @@ class RSL_Rego {
      * cover that starts after today but by then): clearance() on that first day, 'from' never
      * earlier than when that cover starts. So the league page never asks someone to pay for a
      * season the shop would refuse them as already covered.
+     * Cleared by regos on that date but ending before the season's last night, while a rego for
+     * this season still counts (its dates moved later after the sale): 'until' is the season's
+     * last night (and 'season' this one), so the runs-out-soon nudge and the card judge the cover
+     * the player really has (0.18.0).
      */
     public static function clearance_for($user_id, $season) {
         $check = self::check_date($season);
         $c = self::clearance($user_id, $check);
-        if ($c['cleared'] || !RSL_Seasons::is_valid($season)) {
+        if (!RSL_Seasons::is_valid($season)) {
+            return $c;
+        }
+        if ($c['cleared']) {
+            if ($c['by'] === 'rego') {
+                $s = RSL_Seasons::span($season);
+                $row = $s && (string) $c['until'] < $s['end'] ? self::season_row($user_id, $season) : null;
+                if ($row) {
+                    $c['until'] = max($row->end_date, $s['end']);
+                    $c['season'] = $season;
+                }
+            }
             return $c;
         }
         $s = RSL_Seasons::span($season);
@@ -272,7 +287,8 @@ class RSL_Rego {
      * for all its nights). The runs-out-soon nudge stays quiet then (0.17.0). Cover that ends
      * part-way through $season never counts: they still need the rest of it. A season rego for
      * $season that still counts (season_row()) covers it to its last night however its dates have
-     * moved since the sale, even though $clear, judged on a date, ends at the row's own end (0.18.0).
+     * moved since the sale (clearance_for() already says so; a $clear judged on a date alone, which
+     * ends at the row's own end, is read the same way) (0.18.0).
      */
     public static function paid_ahead($user_id, $clear, $season) {
         if (empty($clear['cleared']) || !RSL_Seasons::is_valid($season)) {

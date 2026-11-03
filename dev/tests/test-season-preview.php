@@ -266,7 +266,7 @@ $check('...a draft page, a published menu item post or no such page is refused, 
     && count(array_filter($bad_n, function ($x) { return $x['type'] === 'error' && $x['message'] === 'Pick a published page for How the league works.'; })) === 3);
 $screen = $admin_screen($admin);
 $check('...the Teams screen shows the League pages box with the page chosen, and no not-published line', strpos($screen, 'id="rsl-league-pages"') !== false
-    && strpos($screen, 'name="about_page_id"') !== false && strpos($screen, 'value="' . $about . '" selected="selected"') !== false
+    && preg_match('/<select name=[\'"]about_page_id[\'"]/', $screen) === 1 && strpos($screen, 'value="' . $about . '" selected="selected"') !== false // core prints the select's name in single quotes
     && strpos($screen, 'The page chosen before') === false);
 $screen = '';
 wp_update_post(array('ID' => $about, 'post_status' => 'draft'));

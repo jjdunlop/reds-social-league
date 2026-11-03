@@ -30,15 +30,16 @@ finals (see `CLAUDE.md`).
   box says so under the picker (the button is hidden until it is published
   again).
 - Fixes: the menu's "Register for YEAR" names the year of the season open
-  for sign-up (or, with none open, of the season after) when the sign-up
-  season it was pinned to has finished; with nothing open for sign-up, a
-  team application or a free agent entry is refused with "Sign-ups for
-  SEASON have closed and nothing is open yet." (and the league page says so
-  where those forms were, and its Not yet words and messages offer only an
-  invite code) instead of going into a finished season; the "runs out
-  soon" note stays quiet for a player whose season rego for this season
-  still counts after its dates moved later, when the next season is
-  already paid for.
+  for sign-up (or, with none open, of the season after, never a year
+  already gone) when the sign-up season it was pinned to has finished; with
+  nothing open for sign-up, a team application or a free agent entry (the
+  older "looking" form too) is refused with "Sign-ups for SEASON have
+  closed and nothing is open yet." (and the league page says so where those
+  forms were, and its Not yet words and messages offer only an invite code)
+  instead of going into a finished season; a season rego that still counts
+  after its season's dates moved later covers the player to the new last
+  night on the league page, so the "runs out soon" note judges that night
+  (and stays quiet when the next season is already paid for).
 - Dev: `RSL_Public::season_preview()` and `preview_state()` (the one show
   rule; both take the season's nights when the caller has them),
   `preview_fa_words()`, `teams_in_words()`, `countdown_words()`,

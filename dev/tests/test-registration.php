@@ -911,9 +911,18 @@ RSL_Courts::save_settings($RUN, array('start' => $day(-10), 'end' => $day(25)));
 $vq = $page($sq);
 $vr = $page($sr);
 $cq = RSL_Rego::clearance_for($sq, $RUN);
-$check('26.11b the season moved later after the sale: still no nudge with the next season paid (the other player still gets it)',
-    $cq['until'] === $day(20) && RSL_Rego::paid_ahead($sq, $cq, $RUN) === true && strpos($vq, 'It runs out soon.') === false
+$check('26.11b the season moved later after the sale: covered to its new last night; still no nudge with the next season paid (the other player, whose cover ends within the month, still gets it)',
+    $cq['until'] === $day(25) && $cq['season'] === $RUN && RSL_Rego::paid_ahead($sq, $cq, $RUN) === true && strpos($vq, 'It runs out soon.') === false
     && strpos($vr, 'It runs out soon.') !== false && RSL_Rego::paid_ahead($sr, RSL_Rego::clearance_for($sr, $RUN), $RUN) === false, wp_json_encode($cq));
+// 11c (0.18.0): moved later by more than the nudge's month: no nudge for either, as the season rego
+// counts to the new last night; the card names that night, not the row's own end.
+RSL_Courts::save_settings($RUN, array('start' => $day(-10), 'end' => $day(45)));
+$vr = $page($sr);
+$cr = RSL_Rego::clearance_for($sr, $RUN);
+$check('26.11c the season moved later by more than a month: no nudge without the next season paid, and the card says the new last night',
+    $cr['cleared'] && $cr['by'] === 'rego' && $cr['until'] === $day(45) && strpos($vr, 'You\'re cleared to play') !== false && strpos($vr, 'It runs out soon.') === false
+    && strpos($vr, esc_html(RSL_Rego::cover_words($cr))) !== false && strpos(RSL_Rego::cover_words($cr), RSL_Seasons::day_words($day(45), (int) substr($RUN, 0, 4))) !== false,
+    wp_json_encode($cr));
 RSL_Courts::save_settings($RUN, array('start' => $day(-10), 'end' => $day(20)));
 RSL_Seasons::set_current($season);
 

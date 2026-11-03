@@ -207,7 +207,8 @@ $check('13 a dropdown heading keeps its words (and only that holds it: as a plai
 
 // 14 (0.18.0): the sign-up pin left on a finished season: "Register for" names the year of the
 // first season open for sign-up (calendar order), not the finished one's; with nothing open, the
-// year of the season after the finished one; a sign-up season still to run keeps its own year.
+// year of the season after the finished one, or of today's season when that's later (never a year
+// already gone); a sign-up season still to run keeps its own year.
 remove_filter('rsl_open_for_signup_candidates', $cands);
 $keys14 = array('2095-pre', '2092-mid1'); // not in calendar order: the first open is by the calendar
 $cands14 = function ($keys) use (&$keys14) { return $keys14; };
@@ -215,7 +216,7 @@ add_filter('rsl_open_for_signup_candidates', $cands14);
 $d14 = function ($n) { return date('Y-m-d', strtotime(current_time('Y-m-d') . ' +' . intval($n) . ' days')); };
 RSL_Courts::save_settings('2092-mid1', array('start' => $d14(30), 'end' => $d14(90)));
 RSL_Courts::save_settings('2095-pre', array('start' => $d14(120), 'end' => $d14(180)));
-RSL_Seasons::set_signup('1992-post'); // no dates: its quarter, long finished; the season after is 1993-pre
+RSL_Seasons::set_signup('1992-post'); // no dates: its quarter, long finished; the season after (1993-pre) is long gone too
 $w = $mk('w');                        // logged in, not registered
 wp_set_current_user($w);
 $t = $label();
@@ -227,7 +228,9 @@ $q14 = $wpdb->num_queries - $n;
 $check('...still one query for the menu', $q14 === 1, (string) $q14);
 $keys14 = array();
 $t = $label();
-$check('...nothing open: the year of the season after the finished one', RSL_Portal::menu_season() === '1993-pre' && $t[0] === 'Register for 1993', wp_json_encode($t));
+$now14 = RSL_Seasons::for_date(current_time('Y-m-d')); // later than 1993-pre, the season after the pin
+$check('...nothing open: the season after the finished one, or today\'s season when the pin is older than that (never a year already gone)',
+    RSL_Portal::menu_season() === $now14 && $t[0] === 'Register for ' . substr($now14, 0, 4), wp_json_encode($t));
 RSL_Seasons::set_signup('2092-mid1');
 $keys14 = array('2095-pre', '2092-mid1');
 $t = $label();
