@@ -46,6 +46,107 @@ class RSL_Portal {
         add_action('template_redirect', array($this, 'maybe_handle_post'));
         add_action('user_register', array(__CLASS__, 'carry_invite_to_new_account'));
         add_action('wp_login', array(__CLASS__, 'flag_after_login'), 10, 2);
+        add_filter('wp_nav_menu_objects', array(__CLASS__, 'menu_labels'), 10, 2);
+    }
+
+    // ------------------------------------------------------------------
+    // The league page's menu item (0.17.0)
+    // ------------------------------------------------------------------
+
+    /** menu_state() by user id, for this request (flush_menu_state() empties it; tests use it). */
+    private static $menu_states = array();
+
+    /**
+     * The league page's menu item follows the person (0.17.0, wp_nav_menu_objects): "Register
+     * for 2027" (the sign-up season's year) until they've registered, "My team" while they're on
+     * an active team or have a team application waiting in a season the league page shows, else
+     * "My league". Logged-in viewers only: a logged-out visitor's item is static (and cached pages
+     * serve it), so it is never touched, nor is an item Nav Menu Roles keeps for logged-out
+     * visitors (_nav_menu_role 'out'; that plugin has already removed it for logged-in viewers on
+     * wp_get_nav_menu_items, this is belt and braces). Only items for the page itself (type
+     * post_type, object_id = the page), and never a dropdown heading (an item other items sit
+     * under: its words head the links below it). A menu without one reads nothing. One query
+     * per page view at most (menu_state(), memoised).
+     */
+    public static function menu_labels($items, $args = null) {
+        if (!is_array($items) || !$items || !is_user_logged_in()) {
+            return $items;
+        }
+        $page_id = intval(get_option(self::PAGE_OPTION));
+        if (!$page_id) {
+            return $items;
+        }
+        $parents = array();
+        foreach ($items as $item) {
+            if (is_object($item) && !empty($item->menu_item_parent)) {
+                $parents[intval($item->menu_item_parent)] = true;
+            }
+        }
+        $label = null;
+        foreach ($items as $item) {
+            if (!is_object($item) || !isset($item->type, $item->object_id) || $item->type !== 'post_type' || intval($item->object_id) !== $page_id) {
+                continue;
+            }
+            $db_id = intval(isset($item->db_id) ? $item->db_id : (isset($item->ID) ? $item->ID : 0));
+            if ($db_id && isset($parents[$db_id])) {
+                continue; // a dropdown heading keeps its words (checked before any meta read)
+            }
+            if (!empty($item->ID) && get_post_meta($item->ID, '_nav_menu_role', true) === 'out') {
+                continue;
+            }
+            if ($label === null) {
+                $label = self::menu_label(self::menu_state(get_current_user_id()), RSL_Seasons::signup());
+            }
+            $item->title = $label;
+        }
+        return $items;
+    }
+
+    /** The words for a state: 'team' My team, 'league' My league, else "Register for <the sign-up season's year>". Pure. */
+    public static function menu_label($state, $signup) {
+        if ($state === 'team') {
+            return 'My team';
+        }
+        if ($state === 'league') {
+            return 'My league';
+        }
+        return 'Register for ' . (RSL_Seasons::is_valid($signup) ? substr($signup, 0, 4) : current_time('Y'));
+    }
+
+    /**
+     * 'register' (no league registration), 'team' (on an active team, or a team application of
+     * theirs waiting, in a season the league page shows) or 'league'. One query; memoised.
+     */
+    public static function menu_state($user_id) {
+        global $wpdb;
+        $user_id = intval($user_id);
+        if (!$user_id) {
+            return 'register';
+        }
+        if (isset(self::$menu_states[$user_id])) {
+            return self::$menu_states[$user_id];
+        }
+        $seasons = self::page_seasons();
+        $in = implode(',', array_fill(0, count($seasons), '%s'));
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT EXISTS(SELECT 1 FROM " . RSL_Database::table('players') . " WHERE user_id = %d) AS registered,
+                EXISTS(SELECT 1 FROM " . RSL_Database::table('team_members') . " m JOIN " . RSL_Database::table('teams') . " t ON t.id = m.team_id
+                    WHERE m.user_id = %d AND m.left_at IS NULL AND t.status = 'active' AND t.season IN ($in)) AS on_team,
+                EXISTS(SELECT 1 FROM " . RSL_Database::table('teams') . " WHERE applied_by = %d AND status = 'pending' AND season IN ($in)) AS applied",
+            array_merge(array($user_id, $user_id), $seasons, array($user_id), $seasons)
+        ));
+        $state = !$row || !(int) $row->registered ? 'register' : (((int) $row->on_team || (int) $row->applied) ? 'team' : 'league');
+        return self::$menu_states[$user_id] = $state;
+    }
+
+    /** Forget the memoised menu states (tests change a person's state within one request). */
+    public static function flush_menu_state() {
+        self::$menu_states = array();
+    }
+
+    /** The seasons the league page shows: the one being played, the sign-up season and those open for sign-up. Options only. */
+    private static function page_seasons() {
+        return array_values(array_unique(array_merge(array(RSL_Seasons::current(), RSL_Seasons::signup()), array_keys(RSL_Seasons::signup_choices()))));
     }
 
     // ------------------------------------------------------------------
