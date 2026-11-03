@@ -44,7 +44,8 @@ finals (see `CLAUDE.md`).
   can't pay online is told why and to contact the league; a team that
   couldn't be saved is reported as an error, never as sent; a free agent
   form from a season the page no longer shows asks for a reload instead of
-  changing another season's entry.
+  changing another season's entry; team balance notes (top-ups, admin
+  adjustments, carried balances) are cut on a whole character too.
 - Dev: `RSL_Seasons::signup_choices()` and `pick_open()` (the one check of
   a season a player picks) and `default_pick()` (the season a picker
   starts on); `RSL_Portal::season_field()`, `team_fields()`,
@@ -54,8 +55,12 @@ finals (see `CLAUDE.md`).
   `flush_menu_state()`; a dropdown heading keeps its words);
   `RSL_Teams::joinable_seasons()` includes the later seasons open for
   sign-up; `RSL_Teams::create()` reports a team it couldn't save;
-  `RSL_Rego::paid_ahead()`; `dev/lib-mail-stop.php`, used by every test
-  that makes accounts; `dev/tests/test-menu-label.php`.
+  `RSL_Rego::paid_ahead()`; `RSL_Rego::note_fit_to()` (public, for ledger
+  notes too); `dev/lib-mail-stop.php`, used by every test that makes
+  accounts and by the fake-data scripts; every test that makes accounts
+  cleans up in a `finally` block, so a check that throws partway still
+  removes its accounts and rows;
+  `dev/tests/test-menu-label.php`.
 
 ## League emails in the club look (0.16.0)
 

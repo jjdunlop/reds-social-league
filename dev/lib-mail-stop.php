@@ -6,9 +6,16 @@
  *   $suffix = time();
  *   $hold = rsl_dev_hold_mail($suffix);            // before $check, and before the first account
  *   $check = function (...) use (&$fails, $hold) { rsl_dev_park_mail($hold); ... };
- *   ...                                            // the cleanup's own row deletes
- *   rsl_dev_delete_users($users);                  // Ultimate Member's account deleted email off first
- *   rsl_dev_release_mail($hold);                   // last of all
+ *   $users = array(); ...                          // everything the cleanup reads, before the try
+ *   try { ... } catch (Throwable $thrown) { $fails++; echo 'FAIL: threw ...'; } finally {
+ *       ...                                        // the cleanup's own row deletes
+ *       rsl_dev_delete_users($users);              // Ultimate Member's account deleted email off first
+ *       rsl_dev_release_mail($hold);               // last of all
+ *   }
+ *
+ * The fake-data scripts (fake-season.php, fake-signup.php) hold the mail for their whole run too.
+ * Nobody should open the admin Free Agents screen while a test runs: it sends up to 10 waiting
+ * emails on every visit, and a row queued since the test's last check isn't parked yet.
  *
  * While held: wp_mail() sends nothing in this process (pre_wp_mail answered false at 999, as
  * test-merge.php does; a test's own capture filters at a lower priority still see each email);

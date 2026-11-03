@@ -13,7 +13,9 @@
  * Run dev/fake-season.php first (it makes the venues). Everything here is
  * tagged — users carry the `rsl_fake_fa` meta and @example.test emails, team
  * ids are kept in an option — and reset removes exactly that, plus next
- * season's dates, nights and list. Refuses to run outside WP-CLI.
+ * season's dates, nights and list. Refuses to run outside WP-CLI. No mail
+ * leaves while it runs (dev/lib-mail-stop.php: Ultimate Member's account
+ * deleted email off, and the pretend mail it queued deleted at the end).
  */
 
 if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production' && !getenv('RSL_DEV'))) {
@@ -22,7 +24,10 @@ if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production'
 
 require_once ABSPATH . 'wp-admin/includes/user.php';
 require_once __DIR__ . '/lib-profile.php';
+require_once __DIR__ . '/lib-mail-stop.php';
 global $wpdb;
+
+$hold = rsl_dev_hold_mail('fake'); // released at the end (or on shutdown, if the run stops first)
 
 $season = RSL_Seasons::next(RSL_Seasons::current());
 $team_option = 'rsl_fake_signup_team_ids';
@@ -45,15 +50,15 @@ $reset = function () use ($wpdb, $season, $team_option) {
     }
     $wpdb->delete(RSL_Database::table('free_agents'), array('season' => $season));
     $wpdb->delete(RSL_Database::table('join_requests'), array('season' => $season));
-    $users = get_users(array('meta_key' => 'rsl_fake_fa', 'meta_value' => '1', 'fields' => 'ID'));
+    $users = array_map('intval', get_users(array('meta_key' => 'rsl_fake_fa', 'meta_value' => '1', 'fields' => 'ID')));
     foreach ($users as $uid) {
         $wpdb->delete(RSL_Database::table('team_members'), array('user_id' => $uid), array('%d'));
         $wpdb->delete(RSL_Database::table('invites'), array('user_id' => $uid), array('%d'));
         $wpdb->delete(RSL_Database::table('free_agents'), array('user_id' => $uid), array('%d'));
         $wpdb->delete(RSL_Database::table('players'), array('user_id' => $uid), array('%d'));
         $wpdb->delete(RSL_Database::table('regos'), array('user_id' => $uid), array('%d'));
-        wp_delete_user($uid);
     }
+    rsl_dev_delete_users($users); // Ultimate Member's account deleted email off first
     foreach (RSL_Courts::nights($season) as $n) {
         $wpdb->delete(RSL_Database::table('night_courts'), array('night_id' => $n->id));
         $wpdb->delete(RSL_Database::table('night_venues'), array('night_id' => $n->id));
@@ -76,6 +81,7 @@ $reset = function () use ($wpdb, $season, $team_option) {
 list($teams_removed, $users_removed) = $reset();
 echo "Removed $teams_removed pretend next-season teams and $users_removed pretend players.\n";
 if (isset($args[0]) && $args[0] === 'reset') {
+    rsl_dev_release_mail($hold);
     return;
 }
 if (!RSL_Courts::venues()) {
@@ -276,6 +282,7 @@ foreach (array('Spiked Punch' => 1, 'Bump Set Fun' => 2) as $team_name => $n) {
 
 // None of this pretend mail goes anywhere.
 $wpdb->query("DELETE FROM " . RSL_Database::table('outbox') . " WHERE to_email LIKE '%@example.test'");
+rsl_dev_release_mail($hold);
 
 $d = RSL_Free_Agents::dates($season);
 $c = RSL_Free_Agents::counts($season);

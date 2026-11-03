@@ -34,6 +34,8 @@ $mk = function ($tag, $role = 'subscriber') use ($suffix, &$users) {
     return $u;
 };
 
+try {
+
 // --- Levels ------------------------------------------------------------------------
 $check('five levels, worded by how a team plays (no old grades)', count(RSL_Teams::levels()) === 5 && strpos(implode(' ', RSL_Teams::levels()), 'grade') === false);
 $check('levels seed ratings from low to high around 1500', RSL_Teams::level_seed_rating('new') < RSL_Teams::level_seed_rating('solid')
@@ -94,18 +96,27 @@ $check('a teammate (not captain) can\'t change them', RSL_Teams::get($team->id)-
 $check('teammates don\'t see the preferences form', strpos($portal->render(), 'value="save_prefs"') === false);
 $check('bad values fall back to safe defaults', RSL_Teams::set_preferences($team->id, $cap, array('time' => 'midnight', 'double' => 0, 'shape' => 'sideways'))->pref_time === 'any');
 
-// --- Cleanup -----------------------------------------------------------------------------
+} catch (Throwable $thrown) {
+    $fails++;
+    echo 'FAIL: threw ' . get_class($thrown) . ': ' . $thrown->getMessage() . ' (line ' . $thrown->getLine() . ")\n";
+} finally {
+// --- Cleanup (runs after a failure too) --------------------------------------------------
 wp_set_current_user(0);
 $_GET = array();
 remove_filter('pre_wp_mail', '__return_true');
-$wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $team->id));
-$wpdb->delete(RSL_Database::table('teams'), array('id' => $team->id));
+// Every team in the test's season (however far the test got).
+foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $season)) as $tid) {
+    $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $tid));
+    $wpdb->delete(RSL_Database::table('invites'), array('team_id' => $tid));
+    $wpdb->delete(RSL_Database::table('teams'), array('id' => $tid));
+}
 foreach ($users as $u) {
-    $wpdb->delete(RSL_Database::table('players'), array('user_id' => $u));
-    delete_transient(RSL_Portal::FLASH_PREFIX . $u);
-    delete_transient(RSL_Admin::NOTICE_PREFIX . $u);
+    if (is_int($u) && $u > 0) {
+        $wpdb->delete(RSL_Database::table('players'), array('user_id' => $u));
+    }
 }
 if ($saved_current === '__unset__') { delete_option(RSL_Seasons::CURRENT_OPTION); } else { update_option(RSL_Seasons::CURRENT_OPTION, $saved_current); }
-rsl_dev_delete_users($users);
+rsl_dev_delete_users($users); // the flash and the admin notice too
 rsl_dev_release_mail($hold);
+}
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

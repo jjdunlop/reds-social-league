@@ -27,6 +27,11 @@ $check = function ($label, $ok, $detail = '') use (&$fails, $hold) {
     echo ($ok ? "OK: $label\n" : "FAIL: $label" . ($detail !== '' ? " — $detail" : '') . "\n");
 };
 $saved_settings = get_option(RSL_Courts::SETTINGS_OPTION, '__unset__');
+// Set before the try, so the cleanup can always run.
+$admin = 0;
+$sub = 0;
+
+try {
 
 // --- Slot maths --------------------------------------------------------------------
 $check('60-minute games, 7–11pm: four slots', RSL_Courts::slot_times('19:00', '23:00', 60) === array(array('19:00', '20:00'), array('20:00', '21:00'), array('21:00', '22:00'), array('22:00', '23:00')));
@@ -226,7 +231,11 @@ $check('a cleared night can be a bye, with no fees, jobs or can\'t make it left'
 $g = RSL_Courts::generate_nights($season);
 $check('once cleared, the next save removes it', $g['removed'] === 1 && !RSL_Courts::get_night($played->id) && count($g['kept']) === 1);
 
-// --- Cleanup -------------------------------------------------------------------------------
+} catch (Throwable $thrown) {
+    $fails++;
+    echo 'FAIL: threw ' . get_class($thrown) . ': ' . $thrown->getMessage() . ' (line ' . $thrown->getLine() . ")\n";
+} finally {
+// --- Cleanup (runs after a failure too) ----------------------------------------------------
 wp_set_current_user(0);
 $_GET = array();
 $wpdb->delete(RSL_Database::table('games'), array('season' => $season));
@@ -237,14 +246,22 @@ foreach (RSL_Courts::nights($season) as $n) {
     $wpdb->delete(RSL_Database::table('jobs'), array('night_id' => $n->id));
 }
 $wpdb->delete(RSL_Database::table('nights'), array('season' => $season));
-foreach (array($ta, $tb) as $t) {
-    $wpdb->delete(RSL_Database::table('requests'), array('team_id' => $t->id));
-    $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $t->id));
-    $wpdb->delete(RSL_Database::table('teams'), array('id' => $t->id));
+// Every team in the test's season (however far the test got).
+foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $season)) as $tid) {
+    $wpdb->delete(RSL_Database::table('requests'), array('team_id' => $tid));
+    $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $tid));
+    $wpdb->delete(RSL_Database::table('teams'), array('id' => $tid));
 }
-$wpdb->delete(RSL_Database::table('jobs'), array('user_id' => $sub));
-foreach (array($v1->id, $v2->id) as $vid) { $wpdb->delete(RSL_Database::table('courts'), array('venue_id' => $vid)); $wpdb->delete(RSL_Database::table('venues'), array('id' => $vid)); }
+if (is_int($sub) && $sub > 0) {
+    $wpdb->delete(RSL_Database::table('jobs'), array('user_id' => $sub));
+}
+// Every venue the test made (each name ends with the suffix), with its courts.
+foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('venues') . " WHERE name LIKE %s", '% ' . $wpdb->esc_like((string) $suffix))) as $vid) {
+    $wpdb->delete(RSL_Database::table('courts'), array('venue_id' => $vid));
+    $wpdb->delete(RSL_Database::table('venues'), array('id' => $vid));
+}
 rsl_dev_delete_users(array($admin, $sub));
 if ($saved_settings === '__unset__') { delete_option(RSL_Courts::SETTINGS_OPTION); } else { update_option(RSL_Courts::SETTINGS_OPTION, $saved_settings); }
 rsl_dev_release_mail($hold);
+}
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

@@ -396,8 +396,8 @@ class RSL_Rego {
 
     const NOTE_BYTES = 255; // the note column: cut by bytes, so it fits whatever the table's character set
 
-    /** $text cut to at most $bytes, never part of a UTF-8 character. */
-    private static function note_fit_to($text, $bytes) {
+    /** $text cut to at most $bytes, never part of a UTF-8 character (team balance notes use it too). */
+    public static function note_fit_to($text, $bytes) {
         $text = (string) $text;
         if (strlen($text) <= $bytes) {
             return $text;

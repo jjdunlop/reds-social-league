@@ -157,9 +157,14 @@ class RSL_Payments {
         return $ok ? intval($wpdb->insert_id) : 0;
     }
 
+    /** A ledger note that fits its column, cut on a whole character (0.17.0; never a byte cut). */
+    private static function note_fit($note) {
+        return RSL_Rego::note_fit_to((string) $note, RSL_Rego::NOTE_BYTES);
+    }
+
     /** A payment that didn't come through the online checkout (e.g. recorded by a script or import). */
     public static function record_payment($team_id, $amount, $user_id, $note = 'Paid') {
-        return self::add($team_id, 'topup', round((float) $amount, 2), array('user_id' => $user_id ?: null, 'note' => substr($note, 0, 255)));
+        return self::add($team_id, 'topup', round((float) $amount, 2), array('user_id' => $user_id ?: null, 'note' => self::note_fit($note)));
     }
 
     /** An admin's credit (positive) or charge (negative), with a note. */
@@ -171,7 +176,7 @@ class RSL_Payments {
         if (trim($note) === '') {
             return new WP_Error('rsl_money', 'Add a short note saying what it\'s for.');
         }
-        return self::add($team_id, 'adjust', $amount, array('note' => substr(sanitize_text_field($note), 0, 255), 'created_by' => $by ?: null, 'user_id' => $by ?: null));
+        return self::add($team_id, 'adjust', $amount, array('note' => self::note_fit(sanitize_text_field($note)), 'created_by' => $by ?: null, 'user_id' => $by ?: null));
     }
 
     // ------------------------------------------------------------------
@@ -224,12 +229,12 @@ class RSL_Payments {
             return new WP_Error('rsl_money', $from->name . '\'s balance is already clear.');
         }
         $state = intval($wpdb->get_var($wpdb->prepare("SELECT MAX(id) FROM " . RSL_Database::table('ledger') . " WHERE team_id = %d", $from->id)));
-        $out = self::add($from->id, 'carry', -$balance, array('note' => substr('Carried to ' . $to->name . ' (' . RSL_Seasons::label($to->season) . ')', 0, 255),
+        $out = self::add($from->id, 'carry', -$balance, array('note' => self::note_fit('Carried to ' . $to->name . ' (' . RSL_Seasons::label($to->season) . ')'),
             'created_by' => $by ?: null, 'charge_key' => 'carry-out:' . $from->id . ':' . $state));
         if (is_wp_error($out) || !$out) {
             return is_wp_error($out) ? $out : new WP_Error('rsl_money', 'That balance has just been carried over.');
         }
-        self::add($to->id, 'carry', $balance, array('note' => substr('Carried from ' . $from->name . ' (' . RSL_Seasons::label($from->season) . ')', 0, 255),
+        self::add($to->id, 'carry', $balance, array('note' => self::note_fit('Carried from ' . $from->name . ' (' . RSL_Seasons::label($from->season) . ')'),
             'created_by' => $by ?: null, 'charge_key' => 'carry-in:' . $from->id . ':' . $state));
         return $balance;
     }

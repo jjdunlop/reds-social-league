@@ -5,8 +5,9 @@
  * registered, "My team" on an active team or with a team application waiting (in a season
  * the league page shows), and "My league" otherwise. Logged-out viewers, other items, an item
  * kept for logged-out visitors (Nav Menu Roles' "out") and a dropdown heading are left alone,
- * and it costs one query at most. Made-up menu items only (no menu is changed), far-future
- * (and far-past) seasons, a throwaway @example.test account; cleans up.
+ * and the state costs one query at most. Made-up menu items and two throwaway menu item posts in
+ * no menu (no menu is changed), far-future (and far-past) seasons, a throwaway @example.test
+ * account; cleans up.
  *
  *   wp eval-file dev/tests/test-menu-label.php
  */
@@ -33,6 +34,7 @@ foreach (array(RSL_Seasons::CURRENT_OPTION, RSL_Seasons::SIGNUP_OPTION) as $opt)
 $saved_page = get_option(RSL_Portal::PAGE_OPTION, '__unset__');
 $made_page = 0;
 $out_id = 0;
+$real_id = 0;
 $cands = null;
 $test_seasons = array('2092-pre', '2092-mid1', '1992-pre');
 $users = array();
@@ -103,7 +105,9 @@ $t = $label();
 $check('4 logged in, not registered: Register for the sign-up season\'s year; other pages, custom links and the logged-out item untouched',
     $t === array('Register for 2092', 'Teams', 'Custom', 'Social League'), wp_json_encode($t));
 
-// 5: one query, memoised (options and the out item's meta read first, as the page has).
+// 5: one query for the state, memoised. The options it reads (the page id, the season pins, the
+// season dates; with no sign-up pin, the free agent settings) and the out item's meta are read
+// first, as the page has by then (with a persistent object cache they're no query at all).
 RSL_Seasons::current();
 RSL_Seasons::signup();
 RSL_Seasons::signup_choices();
@@ -115,7 +119,7 @@ RSL_Portal::menu_labels($items(), (object) array());
 $one = $wpdb->num_queries - $n;
 RSL_Portal::menu_labels($items(), (object) array());
 $two = $wpdb->num_queries - $n;
-$check('5 one query for the menu, and none the second time (memoised)', $one === 1 && $two === 1, "$one / $two");
+$check('5 one query for the menu state, and none the second time (memoised)', $one === 1 && $two === 1, "$one / $two");
 
 // 6: a menu without the league page's item reads nothing.
 RSL_Portal::flush_menu_state();
@@ -146,19 +150,42 @@ $t = $label();
 $check('11 only the seasons the league page shows count: a long-finished season\'s team is My league', $off === true && $old_added === true && $t[0] === 'My league'
     && !in_array('1992-pre', array(RSL_Seasons::current(), RSL_Seasons::signup()), true), wp_json_encode($t));
 
-// 12: through the hook, as a theme's menu runs it (other plugins' filters too).
+// 12: through the hook, as a theme's menu runs it (other plugins' filters too). The item is a real
+// (throwaway) nav_menu_item post in no menu, so a filter that reads an item's own meta keeps it.
 RSL_Portal::flush_menu_state();
-$through = apply_filters('wp_nav_menu_objects', $items(), (object) array('menu' => 0));
-$found = null;
-foreach ((array) $through as $i) {
-    if (is_object($i) && isset($i->object_id, $i->type, $i->ID) && intval($i->object_id) === $page_id && $i->type === 'post_type' && intval($i->ID) === 0) {
-        $found = $i;
+$real_id = (int) wp_insert_post(array('post_type' => 'nav_menu_item', 'post_status' => 'publish', 'post_title' => "RSL item $suffix"));
+$real_items = function () use ($item, $real_id, $page_id, $teams_page) {
+    return array($item($real_id, 'post_type', 'page', $page_id, 'Register for 2027'), $item(0, 'post_type', 'page', $teams_page, 'Teams'));
+};
+$find_real = function ($list) use ($real_id, $page_id) {
+    foreach ((array) $list as $i) {
+        if (is_object($i) && isset($i->object_id, $i->type, $i->ID) && intval($i->object_id) === $page_id && $i->type === 'post_type' && intval($i->ID) === $real_id) {
+            return $i;
+        }
     }
-}
+    return null;
+};
+$found = $real_id > 0 ? $find_real(apply_filters('wp_nav_menu_objects', $real_items(), (object) array('menu' => 0))) : null;
 if ($found) {
     $check('12 through wp_nav_menu_objects: the league page\'s item reads My league', $found->title === 'My league', $found->title);
 } else {
-    echo "SKIP: another plugin's menu filter removed the test item\n";
+    // Name the filter that dropped it: run the hook's callbacks one by one, in order.
+    $who = $real_id > 0 ? 'none found' : 'the test item could not be saved';
+    $list = $real_items();
+    $hook = isset($GLOBALS['wp_filter']['wp_nav_menu_objects']) ? $GLOBALS['wp_filter']['wp_nav_menu_objects'] : null;
+    if ($real_id > 0 && $hook instanceof WP_Hook) {
+        RSL_Portal::flush_menu_state();
+        foreach ($hook->callbacks as $prio => $cbs) {
+            foreach ($cbs as $cb_id => $cb) {
+                $list = call_user_func_array($cb['function'], array_slice(array($list, (object) array('menu' => 0)), 0, max(1, (int) $cb['accepted_args'])));
+                if (!$find_real($list)) {
+                    $who = "$cb_id at $prio";
+                    break 2;
+                }
+            }
+        }
+    }
+    echo "SKIP: 12 another plugin's menu filter removed the test item ($who)\n";
 }
 
 // 13: a dropdown heading (an item other items sit under) keeps its words.
@@ -198,8 +225,10 @@ foreach ($users as $uid) {
     }
     foreach (array('players', 'team_members', 'free_agents') as $t_name) { $wpdb->delete(RSL_Database::table($t_name), array('user_id' => $uid)); }
 }
-if ($out_id) {
-    wp_delete_post($out_id, true);
+foreach (array($out_id, $real_id) as $post_id) {
+    if ($post_id > 0) {
+        wp_delete_post($post_id, true);
+    }
 }
 if ($made_page) {
     wp_delete_post($made_page, true);

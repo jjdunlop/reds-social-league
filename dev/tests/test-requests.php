@@ -27,8 +27,11 @@ update_option(RSL_Seasons::CURRENT_OPTION, $season);
 $mails = 0;
 $count_mail = function () use (&$mails) { $mails++; return true; };
 add_filter('pre_wp_mail', $count_mail);
+$users = array(); // set before the try, so the cleanup can always run
 $parked = $wpdb->get_col("SELECT id FROM " . RSL_Database::table('venues') . " WHERE active = 1");
 if ($parked) { $wpdb->query("UPDATE " . RSL_Database::table('venues') . " SET active = 0 WHERE id IN (" . implode(',', array_map('intval', $parked)) . ")"); }
+
+try {
 
 // Season: one night gone, then four to come (a bye, regular nights, finals).
 $hall = RSL_Courts::create_venue("Req Hall $suffix", 'ranked');
@@ -41,7 +44,6 @@ $nights = RSL_Courts::nights($season);
 // [0] past, [1] last Sunday (past or today), [2] next week (will publish), [3] bye, [4] regular, [5] finals
 RSL_Courts::set_night_type($nights[3]->id, 'bye', 'Long weekend');
 RSL_Courts::set_night_type($nights[5]->id, 'finals');
-$users = array();
 $mk = function ($tag, $role = 'subscriber') use ($suffix, &$users) {
     $u = wp_insert_user(array('user_login' => "rslq-$tag-$suffix", 'user_email' => "rslq-$tag-$suffix@example.test", 'user_pass' => wp_generate_password(), 'display_name' => "RSLQ $tag", 'role' => $role));
     $users[] = $u;
@@ -141,14 +143,19 @@ $_GET = array('page' => 'rsl-fixtures', 'season' => $season, 'night' => $n_next-
 ob_start(); (new RSL_Admin_Fixtures())->render(); $ahtml = ob_get_clean();
 $check('admin page lists the night\'s requests', strpos($ahtml, 'Week off:') !== false && strpos($ahtml, 'Can\'t make it:') !== false);
 
-// --- Cleanup --------------------------------------------------------------------------------------
+} catch (Throwable $thrown) {
+    $fails++;
+    echo 'FAIL: threw ' . get_class($thrown) . ': ' . $thrown->getMessage() . ' (line ' . $thrown->getLine() . ")\n";
+} finally {
+// --- Cleanup (runs after a failure too) -------------------------------------------------------------
 $_GET = array();
 wp_set_current_user(0);
 remove_filter('pre_wp_mail', $count_mail);
-foreach ($teams as $t) {
-    $wpdb->delete(RSL_Database::table('requests'), array('team_id' => $t->id));
-    $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $t->id));
-    $wpdb->delete(RSL_Database::table('teams'), array('id' => $t->id));
+// Every team in the test's season (however far the test got).
+foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $season)) as $tid) {
+    $wpdb->delete(RSL_Database::table('requests'), array('team_id' => $tid));
+    $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $tid));
+    $wpdb->delete(RSL_Database::table('teams'), array('id' => $tid));
 }
 $wpdb->delete(RSL_Database::table('games'), array('season' => $season));
 $wpdb->delete(RSL_Database::table('ledger'), array('season' => $season));
@@ -159,12 +166,18 @@ foreach (RSL_Courts::nights($season) as $n) {
 $wpdb->delete(RSL_Database::table('nights'), array('season' => $season));
 delete_transient(RSL_Stats::CACHE_PREFIX . $season); // RSL_Stats::season() saved a copy above
 $settings = get_option(RSL_Courts::SETTINGS_OPTION, array());
-unset($settings[$season]);
-update_option(RSL_Courts::SETTINGS_OPTION, $settings, false);
-$wpdb->delete(RSL_Database::table('courts'), array('venue_id' => $hall->id));
-$wpdb->delete(RSL_Database::table('venues'), array('id' => $hall->id));
+if (is_array($settings) && isset($settings[$season])) {
+    unset($settings[$season]);
+    update_option(RSL_Courts::SETTINGS_OPTION, $settings, false);
+}
+// Every venue the test made (each name ends with the suffix), with its courts; then the real ones back.
+foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('venues') . " WHERE name LIKE %s", '% ' . $wpdb->esc_like((string) $suffix))) as $vid) {
+    $wpdb->delete(RSL_Database::table('courts'), array('venue_id' => $vid));
+    $wpdb->delete(RSL_Database::table('venues'), array('id' => $vid));
+}
 if ($parked) { $wpdb->query("UPDATE " . RSL_Database::table('venues') . " SET active = 1 WHERE id IN (" . implode(',', array_map('intval', $parked)) . ")"); }
 rsl_dev_delete_users($users);
 if ($saved_current === '__unset__') { delete_option(RSL_Seasons::CURRENT_OPTION); } else { update_option(RSL_Seasons::CURRENT_OPTION, $saved_current); }
 rsl_dev_release_mail($hold);
+}
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

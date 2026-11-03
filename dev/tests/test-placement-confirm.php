@@ -46,7 +46,10 @@ $forget_draft = function () use ($season) {
     }
 };
 $forget_draft();
-$users = array();
+$users = array(); // set before the try, so the cleanup can always run
+
+try {
+
 $mk = function ($tag, $level = '', $years = '1to3', $positions = array('outside')) use ($suffix, &$users) {
     $u = wp_insert_user(array('user_login' => "rslpc-$tag-$suffix", 'user_email' => "rslpc-$tag-$suffix@example.test", 'user_pass' => wp_generate_password(),
         'display_name' => "Pc$tag Tester", 'first_name' => "Pc$tag", 'role' => 'subscriber'));
@@ -299,7 +302,12 @@ wp_set_current_user(0);
 $check('admin: "Start over" forgets the admin\'s holds (nobody stays fixed by an admin)', $n['type'] === 'success' && strpos($n['message'], 'Started over') !== false
     && intval($row($rk)->proposed_locked) === 0 && intval($row($rk2)->proposed_locked) === 0, $n['message']);
 
-// --- Cleanup ----------------------------------------------------------------------------------------------------------------
+} catch (Throwable $thrown) {
+    $fails++;
+    echo 'FAIL: threw ' . get_class($thrown) . ': ' . $thrown->getMessage() . ' (line ' . $thrown->getLine() . ")\n";
+} finally {
+// --- Cleanup (runs after a failure too) -------------------------------------------------------------------------------------
+wp_set_current_user(0);
 foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $season)) as $tid) {
     $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $tid));
     $wpdb->delete(RSL_Database::table('invites'), array('team_id' => $tid));
@@ -309,6 +317,9 @@ $wpdb->delete(RSL_Database::table('free_agents'), array('season' => $season));
 $wpdb->delete(RSL_Database::table('join_requests'), array('season' => $season));
 $forget_draft();
 foreach ($users as $u) {
+    if (!is_int($u) || $u <= 0) {
+        continue;
+    }
     $wpdb->delete(RSL_Database::table('team_members'), array('user_id' => $u));
     $wpdb->delete(RSL_Database::table('players'), array('user_id' => $u));
     $wpdb->delete(RSL_Database::table('free_agents'), array('user_id' => $u));
@@ -322,4 +333,5 @@ if ($saved_fa === '__unset__') {
 }
 rsl_dev_delete_users($users);
 rsl_dev_release_mail($hold);
+}
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

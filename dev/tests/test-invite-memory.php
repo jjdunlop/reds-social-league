@@ -37,6 +37,8 @@ $mk = function ($tag) use ($suffix, &$users) {
     return $u;
 };
 
+try {
+
 $team = RSL_Teams::create($season, array('name' => "Invite Team $suffix"));
 $code = $team->invite_code;
 unset($_COOKIE[RSL_Portal::JOIN_COOKIE]);
@@ -93,18 +95,28 @@ $_COOKIE[RSL_Portal::JOIN_COOKIE] = 'NOTACODE';
 $bogus = $mk('bogus');
 $check('a made-up code in the browser isn\'t carried to the account', get_user_meta($bogus, RSL_Portal::JOIN_META, true) === '');
 
-// --- Cleanup ----------------------------------------------------------------------------------
+} catch (Throwable $thrown) {
+    $fails++;
+    echo 'FAIL: threw ' . get_class($thrown) . ': ' . $thrown->getMessage() . ' (line ' . $thrown->getLine() . ")\n";
+} finally {
+// --- Cleanup (runs after a failure too) -------------------------------------------------------
 wp_set_current_user(0);
 $_GET = array();
 unset($_COOKIE[RSL_Portal::JOIN_COOKIE]);
 remove_filter('pre_wp_mail', '__return_true');
-$wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $team->id));
-$wpdb->delete(RSL_Database::table('teams'), array('id' => $team->id));
+// Every team in the test's season (however far the test got).
+foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $season)) as $tid) {
+    $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $tid));
+    $wpdb->delete(RSL_Database::table('invites'), array('team_id' => $tid));
+    $wpdb->delete(RSL_Database::table('teams'), array('id' => $tid));
+}
 foreach ($users as $u) {
-    $wpdb->delete(RSL_Database::table('players'), array('user_id' => $u));
-    delete_transient(RSL_Portal::FLASH_PREFIX . $u);
+    if (is_int($u) && $u > 0) {
+        $wpdb->delete(RSL_Database::table('players'), array('user_id' => $u));
+    }
 }
 if ($saved_current === '__unset__') { delete_option(RSL_Seasons::CURRENT_OPTION); } else { update_option(RSL_Seasons::CURRENT_OPTION, $saved_current); }
-rsl_dev_delete_users($users);
+rsl_dev_delete_users($users); // the flash too
 rsl_dev_release_mail($hold);
+}
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

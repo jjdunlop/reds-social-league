@@ -8,7 +8,9 @@
  *
  * Everything it makes is tagged — users carry the `rsl_fake` meta and
  * @example.test emails, team ids are kept in an option — and reset removes
- * exactly that. Refuses to run outside WP-CLI.
+ * exactly that. Refuses to run outside WP-CLI. No mail leaves while it runs
+ * (dev/lib-mail-stop.php: Ultimate Member's account deleted email off, and
+ * the pretend mail it queued deleted at the end).
  */
 
 if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production' && !getenv('RSL_DEV'))) {
@@ -17,7 +19,10 @@ if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production'
 
 require_once ABSPATH . 'wp-admin/includes/user.php';
 require_once __DIR__ . '/lib-profile.php';
+require_once __DIR__ . '/lib-mail-stop.php';
 global $wpdb;
+
+$hold = rsl_dev_hold_mail('fake'); // released at the end (or on shutdown, if the run dies first)
 
 $fake_option = 'rsl_fake_team_ids';
 $fake_venues_option = 'rsl_fake_venue_ids';
@@ -41,21 +46,22 @@ $reset = function () use ($wpdb, $fake_option, $fake_venues_option) {
         $wpdb->delete(RSL_Database::table('venues'), array('id' => $vid));
     }
     delete_option($fake_venues_option);
-    $users = get_users(array('meta_key' => 'rsl_fake', 'meta_value' => '1', 'fields' => 'ID'));
+    $users = array_map('intval', get_users(array('meta_key' => 'rsl_fake', 'meta_value' => '1', 'fields' => 'ID')));
     foreach ($users as $uid) {
         $wpdb->delete(RSL_Database::table('jobs'), array('user_id' => $uid), array('%d'));
         $wpdb->delete(RSL_Database::table('officials'), array('user_id' => $uid), array('%d'));
         $wpdb->delete(RSL_Database::table('team_members'), array('user_id' => $uid), array('%d'));
         $wpdb->delete(RSL_Database::table('players'), array('user_id' => $uid), array('%d'));
         $wpdb->delete(RSL_Database::table('regos'), array('user_id' => $uid), array('%d'));
-        wp_delete_user($uid);
     }
+    rsl_dev_delete_users($users); // Ultimate Member's account deleted email off first
     return array(count($team_ids), count($users));
 };
 
 list($teams_removed, $users_removed) = $reset();
 echo "Removed $teams_removed fake teams and $users_removed fake players.\n";
 if (isset($args[0]) && $args[0] === 'reset') {
+    rsl_dev_release_mail($hold);
     return;
 }
 
@@ -301,3 +307,4 @@ $blocked = array_filter($team_ids, function ($tid) { return RSL_Payments::blocke
 echo sprintf("Balances: %d teams owing, %d owing too much to be fixtured (%s).\n",
     count(array_filter($team_ids, function ($tid) { return RSL_Payments::balance($tid) < 0; })), count($blocked),
     implode(', ', array_map(function ($tid) { return RSL_Teams::get($tid)->name . ' owes $' . RSL_Payments::owing($tid); }, $blocked)));
+rsl_dev_release_mail($hold); // the pretend mail queued above goes too

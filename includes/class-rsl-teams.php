@@ -332,7 +332,9 @@ class RSL_Teams {
     /**
      * Seasons people can join teams in (invite codes and invites): the one being played, the one
      * signing up, and (0.17.0) every later season open for sign-up, since a captain can apply for
-     * one of those. Never a finished season, so last season's links still stop working.
+     * one of those. The current and sign-up seasons count whatever they are, finished or not (a
+     * pinned season stays until the admin moves it on); later seasons count only while open. So
+     * last season's links stop working once the current and sign-up seasons have moved past it.
      */
     public static function joinable_seasons() {
         return array_values(array_unique(array_merge(

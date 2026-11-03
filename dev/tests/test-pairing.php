@@ -21,6 +21,14 @@ $check = function ($label, $ok, $detail = '') use (&$fails, $hold) {
     if (!$ok) { $fails++; }
     echo ($ok ? "OK: $label\n" : "FAIL: $label" . ($detail !== '' ? " — $detail" : '') . "\n");
 };
+// Set before the try, so the cleanup can always run.
+$season = '2092-pre';
+$saved_current = get_option(RSL_Seasons::CURRENT_OPTION, '__unset__');
+$parked = array();
+$admin = 0;
+
+try {
+
 $w = RSL_Pairing::weights();
 $r = function ($list) { $out = array(); foreach ($list as $id => $rating) { $out[$id] = array('rating' => $rating, 'sd' => 0); } return $out; };
 $has_pair = function ($pairs, $a, $b) { foreach ($pairs as $p) { if (($p[0] == $a && $p[1] == $b) || ($p[0] == $b && $p[1] == $a)) { return true; } } return false; };
@@ -120,8 +128,6 @@ sort($starts);
 $check('with a break means a slot in between', $starts === array('19:00', '21:00'));
 
 // --- A real night -------------------------------------------------------------------------------
-$season = '2092-pre';
-$saved_current = get_option(RSL_Seasons::CURRENT_OPTION, '__unset__');
 update_option(RSL_Seasons::CURRENT_OPTION, $season);
 // Only our venues for this test: park any others for the duration.
 $parked = $wpdb->get_col("SELECT id FROM " . RSL_Database::table('venues') . " WHERE active = 1");
@@ -261,10 +267,13 @@ ob_start(); (new RSL_Admin_Fixtures())->render(); $html = ob_get_clean();
 $check('admin page shows set chances (not expected scores) and meetings', strpos($html, 'meeting') !== false && preg_match('/\d+% · \d+%/u', $html) === 1
     && strpos($html, 'Set chance') !== false && strpos($html, 'expected one-sided') === false);
 
-// --- Cleanup --------------------------------------------------------------------------------------
+} catch (Throwable $thrown) {
+    $fails++;
+    echo 'FAIL: threw ' . get_class($thrown) . ': ' . $thrown->getMessage() . ' (line ' . $thrown->getLine() . ")\n";
+} finally {
+// --- Cleanup (runs after a failure too) -------------------------------------------------------------
 $_GET = array();
 wp_set_current_user(0);
-delete_transient(RSL_Admin::NOTICE_PREFIX . $admin);
 $wpdb->delete(RSL_Database::table('games'), array('season' => $season));
 $wpdb->delete(RSL_Database::table('ledger'), array('season' => $season));
 foreach (RSL_Courts::nights($season) as $n) {
@@ -274,17 +283,24 @@ foreach (RSL_Courts::nights($season) as $n) {
 }
 $wpdb->delete(RSL_Database::table('nights'), array('season' => $season));
 $settings = get_option(RSL_Courts::SETTINGS_OPTION, array());
-unset($settings[$season]);
-update_option(RSL_Courts::SETTINGS_OPTION, $settings, false);
-foreach (array($hall, $uni) as $v) {
-    $wpdb->delete(RSL_Database::table('courts'), array('venue_id' => $v->id));
-    $wpdb->delete(RSL_Database::table('venues'), array('id' => $v->id));
+if (is_array($settings) && isset($settings[$season])) {
+    unset($settings[$season]);
+    update_option(RSL_Courts::SETTINGS_OPTION, $settings, false);
+}
+// Every venue the test made (each name ends with the suffix), with its courts; then the real ones back.
+foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('venues') . " WHERE name LIKE %s", '% ' . $wpdb->esc_like((string) $suffix))) as $vid) {
+    $wpdb->delete(RSL_Database::table('courts'), array('venue_id' => $vid));
+    $wpdb->delete(RSL_Database::table('venues'), array('id' => $vid));
 }
 if ($parked) { $wpdb->query("UPDATE " . RSL_Database::table('venues') . " SET active = 1 WHERE id IN (" . implode(',', array_map('intval', $parked)) . ")"); }
-foreach (array_merge($teams, $u) as $t) {
-    $wpdb->delete(RSL_Database::table('teams'), array('id' => $t->id));
+// Every team in the test's season (however far the test got).
+foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $season)) as $tid) {
+    $wpdb->delete(RSL_Database::table('requests'), array('team_id' => $tid));
+    $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $tid));
+    $wpdb->delete(RSL_Database::table('teams'), array('id' => $tid));
 }
-rsl_dev_delete_users(array($admin));
+rsl_dev_delete_users(array($admin)); // the admin notice too
 if ($saved_current === '__unset__') { delete_option(RSL_Seasons::CURRENT_OPTION); } else { update_option(RSL_Seasons::CURRENT_OPTION, $saved_current); }
 rsl_dev_release_mail($hold);
+}
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";
