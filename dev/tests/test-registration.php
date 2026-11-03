@@ -9,7 +9,11 @@
  *  - the season rego (0.15.0): the season chosen, carried through the cart
  *    and the order, its cover, the refusals (at add-to-cart and checkout),
  *    the league page, the rosters and the admin screen. Throwaway products,
- *    orders, seasons and players only (the yearly rego too).
+ *    orders, seasons and players only (the yearly rego too);
+ *  - Start a team at registration in one step and the season pickers
+ *    (0.17.0): success, a double submit, failures that open the card with
+ *    what was typed, seasons that aren't open, the card's old field names,
+ *    later seasons on the league page and their invite links.
  *
  *   wp eval-file dev/tests/test-registration.php
  */
@@ -335,7 +339,7 @@ wp_set_current_user($admin);
 
 // --- Season rego (0.15.0) -------------------------------------------------------------------------
 // Far-past and far-future seasons only; the candidates filter lets open_for_signup() see them
-// (choices() is only this year and next). Every date from $today.
+// (choices() is this year and the next two). Every date from $today.
 $S1 = '2091-mid1';   // the sign-up season: today+7 to today+60
 $S2 = '2091-mid2';   // a later season: today+70 to today+130
 $S3 = '2091-post';   // no dates (covers its quarter)
@@ -580,14 +584,20 @@ if (!function_exists('WC') || !WC()->session || !WC()->cart) {
     wp_set_current_user($was);
 }
 
+// The part of a page from $from up to $to (or the end); '' when $from isn't there.
+$segment = function ($html, $from, $to) { $a = strpos($html, $from); if ($a === false) { return ''; } $b = strpos($html, $to, $a + strlen($from)); return (string) substr($html, $a, $b === false ? strlen($html) - $a : $b - $a); };
+// The season rego form alone: the season pickers (0.17.0) print the same season values and labels.
+$rego_form = function ($html) use ($segment) { return $segment($html, 'class="rsl-rego-season"', '</form>'); };
+
 // 14-17: the league page.
 $v = $page($sg);
+$f = $rego_form($v);
 $at_season = strpos($v, 'Pay the $15 season rego');
 $at_year = strpos($v, 'Pay the $40 yearly rego');
 $check('league page, both products: the price, the season form (the sign-up season chosen, the later one offered), then the yearly rego',
-    strpos($v, 'It\'s $15 for a season or $40 for a year.') !== false && strpos($v, 'name="add-to-cart" value="' . $season_id . '"') !== false
-    && strpos($v, '<select name="rsl_season"') !== false && strpos($v, 'value="' . $S1 . '" selected=\'selected\'') !== false && strpos($v, 'value="' . $S2 . '"') !== false
-    && strpos($v, esc_html($s1_label)) !== false && $at_season !== false && $at_year !== false && $at_season < $at_year && strpos($v, 'add-to-cart=' . $year_id) !== false);
+    $f !== '' && strpos($v, 'It\'s $15 for a season or $40 for a year.') !== false && strpos($v, 'name="add-to-cart" value="' . $season_id . '"') !== false
+    && strpos($f, '<select name="rsl_season"') !== false && strpos($f, 'value="' . $S1 . '" selected=\'selected\'') !== false && strpos($f, 'value="' . $S2 . '"') !== false
+    && strpos($f, esc_html($s1_label)) !== false && $at_season !== false && $at_year !== false && $at_season < $at_year && strpos($v, 'add-to-cart=' . $year_id) !== false);
 update_option(RSL_Rego::PRODUCT_OPTION, 0);
 $v = $page($sg);
 $check('season only: the season form, no yearly rego', strpos($v, 'name="rsl_season"') !== false && strpos($v, 'yearly rego') === false);
@@ -597,14 +607,16 @@ $v = $page($sg);
 $check('yearly only: as before', strpos($v, 'It\'s $40 and lasts 12 months.') !== false && strpos($v, 'Pay the $40 rego') !== false && strpos($v, 'rsl_season') === false);
 update_option(RSL_Rego::SEASON_PRODUCT_OPTION, $season_id);
 $v = $page($sa);
-$check('paid for the later season: only the sign-up season is offered, named beside the button', strpos($v, 'type="hidden" name="rsl_season" value="' . $S1 . '"') !== false
-    && strpos($v, esc_html($s1_label)) !== false && strpos($v, '<select name="rsl_season"') === false && strpos($v, 'value="' . $S2 . '"') === false);
+$f = $rego_form($v);
+$check('paid for the later season: only the sign-up season is offered, named beside the button', $f !== '' && strpos($f, 'type="hidden" name="rsl_season" value="' . $S1 . '"') !== false
+    && strpos($f, esc_html($s1_label)) !== false && strpos($f, '<select name="rsl_season"') === false && strpos($f, 'value="' . $S2 . '"') === false);
 $v = $page($sb);
 $check('paid ahead for the season: cleared from its first night, saying by what; nothing to pay', strpos($v, 'You\'re cleared to play from ' . RSL_Seasons::day_words($day(7), 2091)) !== false
     && strpos($v, 'Season rego, 2091 Mid-season 1, until') !== false && strpos($v, 'name="rsl_season"') === false);
 $v = $page($sc);
+$f = $rego_form($v);
 $check('a rego that runs out before the season ends: it runs out soon, offering the seasons to come; a yearly rego would start when it ends', strpos($v, 'It runs out soon.') !== false
-    && strpos($v, '<select name="rsl_season"') !== false && strpos($v, 'value="' . $S1 . '"') !== false && strpos($v, 'value="' . $S2 . '"') !== false
+    && $f !== '' && strpos($f, '<select name="rsl_season"') !== false && strpos($f, 'value="' . $S1 . '"') !== false && strpos($f, 'value="' . $S2 . '"') !== false
     && strpos($v, 'Pay for another season, or for a year (a yearly rego starts when this one ends):') !== false);
 // The cover on the card starts after today (a hand-added season rego from today+3 to today+20):
 // a yearly rego paid today starts today (grant() chains only onto a rego running on the payment
@@ -664,14 +676,14 @@ $msg = $admin_do(array('do' => 'grant_rego', 'who' => "rslr-sm-$suffix@example.t
 $rows = $rows_for($sm);
 $check('...a start date that isn\'t a date reads as today', count($rows) === 1 && $rows[0]->start_date === $day(7) && $rows[0]->end_date === $day(60), $msg);
 $msg = $admin_do(array('do' => 'grant_rego', 'who' => "rslr-sn-$suffix@example.test", 'kind' => $OLD, 'start' => $today));
-$check('...a season outside this year and next is refused', $msg === 'Pick 12 months or a season.' && count($rows_for($sn)) === 0, $msg);
+$check('...a season outside this year and the next two is refused', $msg === 'Pick 12 months or a season.' && count($rows_for($sn)) === 0, $msg);
 $finished = '';
 foreach (array_keys(RSL_Seasons::choices()) as $k) {
     $ks = RSL_Seasons::span($k);
     if ($ks && $ks['end'] < $today) { $finished = $k; break; }
 }
 if ($finished === '') {
-    echo "SKIP: no season this year or next has finished yet\n";
+    echo "SKIP: no season this year or the next two has finished yet\n";
 } else {
     $msg = $admin_do(array('do' => 'grant_rego', 'who' => "rslr-sn-$suffix@example.test", 'kind' => $finished, 'start' => $today));
     $check('...a season that ended before the start date is refused', strpos($msg, 'before the start date') !== false && count($rows_for($sn)) === 0, $msg);
@@ -752,6 +764,127 @@ $check('a season with no dates and cover starting by its quarter: cleared for it
     && strpos($v, 'You\'re cleared to play from ' . RSL_Seasons::day_words('2091-09-15', 2091)) !== false
     && strpos($v, 'You need a social rego') === false && strpos($v, 'name="rsl_season"') === false, wp_json_encode($c));
 
+// 26: Start a team at registration in one step, and a season for every sign-up (0.17.0).
+// Here: current $season; signing up $S1 (today+7 to +60), $S2 (today+70 to +130) open too;
+// $RUN, $GONE, $S3 and $OLD not open; both products set; the candidates filter on.
+$post_as = function ($u, $fields) {
+    wp_set_current_user($u);
+    delete_transient(RSL_Portal::FLASH_PREFIX . $u);
+    $to = RSL_Portal::process(array_merge(array('rsl_nonce' => wp_create_nonce('rsl_front')), $fields));
+    $f = get_transient(RSL_Portal::FLASH_PREFIX . $u);
+    return array((string) $to, is_array($f) ? $f : array('type' => '', 'message' => ''));
+};
+$reg_fields = array('do' => 'register', 'level' => 'social', 'years' => '1to3');
+$ends_apply = function ($to) { return substr((string) $to, -strlen('#rsl-apply')) === '#rsl-apply'; };
+$apps_of = function ($u, $s) use ($wpdb) {
+    return (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . RSL_Database::table('teams') . " WHERE applied_by = %d AND season = %s AND status = 'pending'", $u, $s));
+};
+$st = array();
+foreach (array('st1', 'st2', 'st3', 'st4', 'st5', 'st6', 'st7') as $tag) { $st[$tag] = $mk($tag); }
+
+// 1: the register form.
+$v = $page($st['st1']);
+$ts = $segment($v, '<select name="team_season">', '</select>');
+$fs = $segment($v, '<select name="fa_season">', '</select>');
+$none_closed = function ($seg) use ($GONE, $RUN, $S3) {
+    return strpos($seg, '"' . $GONE . '"') === false && strpos($seg, '"' . $RUN . '"') === false && strpos($seg, '"' . $S3 . '"') === false;
+};
+$check('26.1 the register form: the team fields, and both season pickers offer the seasons open for sign-up (the sign-up season chosen)',
+    strpos($v, 'name="team_name"') !== false && strpos($v, 'name="team_division"') !== false && strpos($v, 'name="team_level"') !== false && strpos($v, 'name="team_colour"') !== false
+    && strpos($ts, 'value="' . $S1 . '" selected=\'selected\'') !== false && strpos($ts, 'value="' . $S2 . '"') !== false && $none_closed($ts)
+    && strpos($fs, 'value="' . $S1 . '" selected=\'selected\'') !== false && strpos($fs, 'value="' . $S2 . '"') !== false && $none_closed($fs), $ts . ' / ' . $fs);
+$check('...nothing is required inside the hidden panels, and the legend names the league (more than one season)',
+    strpos($segment($v, 'rsl-fa-p-start', 'rsl-fa-p-find'), ' required') === false && strpos($segment($v, 'rsl-fa-p-find', 'rsl-fa-p-later'), ' required') === false
+    && strpos($v, 'How are you joining the Reds Social League?') !== false);
+
+// 2: Start a team inline: success, the same form twice, another name.
+$start_fields = $reg_fields + array('route' => 'start', 'team_name' => "Startup $suffix", 'team_division' => 'unranked', 'team_level' => 'social', 'team_colour' => '#123456', 'team_season' => $S2);
+list($to, $fl) = $post_as($st['st1'], $start_fields);
+$app1 = RSL_Teams::pending_application_for_user($st['st1'], $S2);
+$want = "You're registered and your application for Startup $suffix (2091 Mid-season 2) is in. Once the league approves it you'll get an invite link for your players.";
+$check('26.2 Start a team: one submit registers and sends the application, for the season picked', RSL_Players::is_registered($st['st1']) && $app1
+    && $app1->name === "Startup $suffix" && $app1->division === 'unranked' && $app1->est_level === 'social' && $app1->colour === '#123456' && $app1->status === 'pending'
+    && !RSL_Teams::pending_application_for_user($st['st1'], $S1) && $to === RSL_Portal::url() && $fl['type'] === 'success' && $fl['message'] === $want, wp_json_encode(array($to, $fl)));
+list($to, $fl) = $post_as($st['st1'], $start_fields);
+$check('...the same form sent again (a double click): the same success, still one application', $fl['type'] === 'success' && $fl['message'] === $want
+    && strpos($to, '#rsl-apply') === false && $apps_of($st['st1'], $S2) === 1, wp_json_encode(array($to, $fl)));
+list($to, $fl) = $post_as($st['st1'], $reg_fields + array('route' => 'start', 'team_name' => "Startup Two $suffix", 'team_level' => 'social', 'team_season' => $S2));
+$check('...another name for that season: the application waiting is the reason, with nothing to send again', $fl['type'] === 'error'
+    && strpos($fl['message'], 'You\'re registered, but your team application didn\'t go through: You have a team application waiting') === 0
+    && strpos($fl['message'], 'Check the details below') === false && strpos($to, '#rsl-apply') === false
+    && get_transient(RSL_Portal::APPLY_DRAFT_PREFIX . $st['st1']) === false && $apps_of($st['st1'], $S2) === 1, wp_json_encode(array($to, $fl)));
+
+// 3: the page after it.
+$v = $page($st['st1']);
+$check('26.3 the league page: the application under Later season; the card offers the sign-up season only (the later one is taken)', strpos($v, 'Later season') !== false
+    && strpos($v, "Your application for Startup $suffix is waiting for approval") !== false && strpos($v, 'name="team_season" value="' . $S1 . '"') !== false
+    && strpos($v, '<select name="team_season">') === false && strpos($v, 'id="rsl-apply" open') === false);
+
+// 4: Start a team inline that fails: registered all the same, and the card opens with what was typed.
+list($to, $fl) = $post_as($st['st2'], $reg_fields + array('route' => 'start', 'team_name' => '', 'team_level' => 'social', 'team_colour' => '#654321', 'team_season' => $S1));
+$check('26.4 Start a team with no name: still registered, the reason, back to the card', RSL_Players::is_registered($st['st2'])
+    && !RSL_Teams::pending_application_for_user($st['st2'], $S1) && $ends_apply($to) && $fl['type'] === 'error'
+    && strpos($fl['message'], 'You\'re registered, but your team application didn\'t go through: A team needs a name.') === 0, wp_json_encode(array($to, $fl)));
+$v = $page($st['st2']);
+$check('...the card opens with what was typed', strpos($v, 'id="rsl-apply" open') !== false
+    && strpos($segment($v, '<select name="team_level"', '</select>'), 'value="social" selected=\'selected\'') !== false && strpos($v, 'value="#654321"') !== false);
+$check('...once: the next view has no draft', strpos($page($st['st2']), 'id="rsl-apply" open') === false);
+
+// 5: a name already taken that season.
+list($to, $fl) = $post_as($st['st3'], $reg_fields + array('route' => 'start', 'team_name' => "Startup $suffix", 'team_level' => 'new', 'team_season' => $S2));
+$v = $page($st['st3']);
+$check('26.5 a name already taken that season: the reason, and the card with the name and the season typed', $fl['type'] === 'error'
+    && strpos($fl['message'], 'already a team called') !== false && $ends_apply($to) && strpos($v, 'value="Startup ' . $suffix . '"') !== false
+    && strpos($segment($v, '<select name="team_season">', '</select>'), 'value="' . $S2 . '" selected=\'selected\'') !== false, wp_json_encode(array($to, $fl)));
+
+// 6: Find me a team for a later season.
+list($to, $fl) = $post_as($st['st4'], $reg_fields + array('route' => 'find', 'fa_season' => $S2, 'division_pref' => 'either', 'browsable' => '1'));
+$park();
+$fa4 = RSL_Free_Agents::get($st['st4'], $S2);
+$check('26.6 Find me a team for a later season: on that season\'s list, not the sign-up season\'s', $fa4 && RSL_Free_Agents::is_open($fa4)
+    && !RSL_Free_Agents::is_open(RSL_Free_Agents::get($st['st4'], $S1)) && strpos($fl['message'], 'on the free agent list for ' . RSL_Seasons::label($S2)) !== false, wp_json_encode($fl));
+$v = $page($st['st4']);
+$check('...the page shows it under Later season with its own cards, no rush to pay, and the find card offers the sign-up season only', strpos($v, 'Later season') !== false
+    && strpos($v, "You're on the free agent list for 2091 Mid-season 2 (Winter)") !== false && strpos($v, 'id="rsl-fa-edit-' . $S2 . '"') !== false
+    && strpos($v, 'no rush') !== false && strpos($v, 'name="fa_season" value="' . $S1 . '"') !== false && strpos($v, '<select name="fa_season">') === false);
+list($to, $fl) = $post_as($st['st4'], array('do' => 'fa_leave', 'season' => $S2));
+$fa4 = RSL_Free_Agents::get($st['st4'], $S2);
+$check('...and leaving acts on that season\'s entry', $fa4 && $fa4->status === 'withdrawn', wp_json_encode($fl));
+
+// 7: seasons that aren't open are refused.
+list($to, $fl) = $post_as($st['st5'], $reg_fields + array('route' => 'find', 'fa_season' => $GONE, 'division_pref' => 'either'));
+$check('26.7 a season that isn\'t open is refused at registration (the registration stands)', RSL_Players::is_registered($st['st5']) && $fl['type'] === 'error'
+    && strpos($fl['message'], 'isn\'t open for sign-up') !== false && !RSL_Free_Agents::get($st['st5'], $GONE), wp_json_encode($fl));
+list($to, $fl) = $post_as($st['st5'], array('do' => 'apply', 'team_name' => "Gone $suffix", 'team_level' => 'social', 'team_season' => $GONE));
+$gone_named = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . RSL_Database::table('teams') . " WHERE season = %s AND name = %s", $GONE, "Gone $suffix"));
+$check('...and on the application card, naming the season', $gone_named === 0 && !RSL_Teams::pending_application_for_user($st['st5'], $GONE)
+    && $fl['message'] === '2090 Mid-season 2 isn\'t open for sign-up — pick one of the seasons listed.' && $ends_apply($to), wp_json_encode(array($to, $fl)));
+list($to, $fl) = $post_as($st['st5'], array('do' => 'apply', 'team_name' => "Gone $suffix", 'team_level' => 'social', 'team_season' => 'nope'));
+$check('...and a value that isn\'t a season', $fl['message'] === 'Pick one of the seasons listed.', $fl['message']);
+
+// 8: the card's old field names, for a page opened before the update.
+list($to, $fl) = $post_as($st['st5'], array('do' => 'apply', 'name' => "Legacy $suffix", 'division' => 'ranked', 'level' => 'solid', 'colour' => '#00aa00'));
+$leg = RSL_Teams::pending_application_for_user($st['st5'], $S1);
+$check('26.8 the card\'s old field names still work for one release', $leg && $leg->name === "Legacy $suffix" && $leg->est_level === 'solid'
+    && $fl['message'] === "Application sent for Legacy $suffix. We'll email you when it's approved.", wp_json_encode($fl));
+
+// 9: registration never borrows the player's own level (social is a team level too).
+list($to, $fl) = $post_as($st['st6'], $reg_fields + array('route' => 'start', 'team_name' => "Borrow $suffix", 'team_season' => $S1));
+$check('26.9 Start a team never takes the player\'s own level for the team\'s', $fl['type'] === 'error' && strpos($fl['message'], 'didn\'t go through') !== false
+    && strpos($fl['message'], 'Pick roughly what level') !== false && !RSL_Teams::pending_application_for_user($st['st6'], $S1), wp_json_encode($fl));
+
+// 10: a later season's team: its invite link works as soon as it's approved.
+wp_set_current_user($admin);
+$ok1 = $app1 ? RSL_Teams::approve($app1->id) : null;
+$later_code = ($ok1 && !is_wp_error($ok1)) ? (string) $ok1->invite_code : '';
+$by_code = $later_code !== '' ? RSL_Teams::get_by_code($later_code) : null;
+$reg($st['st7']);
+$joined7 = $later_code !== '' ? RSL_Teams::join_by_code($st['st7'], $later_code) : null;
+$check('26.10 a later season\'s approved team: its invite link works straight away', $by_code && intval($by_code->id) === intval($app1->id)
+    && in_array($S2, RSL_Teams::joinable_seasons(), true) && $joined7 && !is_wp_error($joined7) && RSL_Teams::is_member($app1->id, $st['st7']));
+$check('...while a season that\'s neither played nor open still isn\'t joinable', RSL_Teams::get_by_code($rteam->invite_code) === null && !in_array($RUN, RSL_Teams::joinable_seasons(), true));
+wp_set_current_user($admin);
+
 } catch (Throwable $t) {
     $fails++;
     echo 'FAIL: threw ' . get_class($t) . ': ' . $t->getMessage() . ' (line ' . $t->getLine() . ")\n";
@@ -808,6 +941,7 @@ foreach ($users as $u) {
     foreach (array('players', 'regos', 'team_members', 'invites') as $t) { $wpdb->delete(RSL_Database::table($t), array('user_id' => $u)); }
     $wpdb->delete($mem, array('user_id' => $u));
     delete_transient(RSL_Portal::FLASH_PREFIX . $u);
+    delete_transient(RSL_Portal::APPLY_DRAFT_PREFIX . $u);
     delete_transient(RSL_Admin::NOTICE_PREFIX . $u);
     delete_transient('rsl_mail_failed_' . $u); // approve() / decline() under a mail stop: the email "failed"
     wp_delete_user($u);

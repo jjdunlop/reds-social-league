@@ -73,6 +73,7 @@ function rsl_dev_delete_users($users) {
             continue; // never a WP_Error: as a user_id it would match the rows with user_id 0
         }
         delete_transient(RSL_Portal::FLASH_PREFIX . $u);
+        delete_transient(RSL_Portal::APPLY_DRAFT_PREFIX . $u);
         delete_transient(RSL_Admin::NOTICE_PREFIX . $u);
         delete_transient('rsl_mail_failed_' . $u); // approve() / decline() under the stop: the email "failed"
         wp_delete_user($u);

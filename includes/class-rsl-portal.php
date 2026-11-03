@@ -23,6 +23,13 @@ class RSL_Portal {
     const PAGE_OPTION = 'rsl_portal_page_id';
     const FLASH_PREFIX = 'rsl_flash_';
 
+    // A captain application that failed: what was typed, for the #rsl-apply card on the next
+    // page view (taken and deleted there). Per user, short-lived; not league data (like the flash,
+    // not in RSL_Merge::uses()). As long as the flash (60 seconds), so the card never opens
+    // filled in without the message that says why.
+    const APPLY_DRAFT_PREFIX = 'rsl_apply_draft_';
+    const APPLY_DRAFT_TTL = 60;
+
     // Remembering a captain's invite through sign-up: the code is kept in a
     // cookie when the link is opened, copied onto the account when it's
     // created (covers switching devices), and offered on the league page
@@ -199,9 +206,8 @@ class RSL_Portal {
             self::flash('error', 'Your session expired — please try again.');
             return $back;
         }
-        // Joining, applying and the free agent list are for the season people
-        // are signing up for (next season, once its window is open).
-        $season = RSL_Seasons::signup();
+        // Applying and the free agent list are for the season the player picks
+        // (RSL_Seasons::pick_open()); joining by code is for the team's own season.
         $do = isset($post['do']) ? sanitize_key($post['do']) : '';
         $code = isset($post['join_code']) ? sanitize_text_field(wp_unslash($post['join_code'])) : '';
 
@@ -278,13 +284,12 @@ class RSL_Portal {
                 return $back;
 
             case 'apply':
-                $team = RSL_Teams::apply($season, $user_id, array(
-                    'name' => isset($post['name']) ? wp_unslash($post['name']) : '',
-                    'division' => isset($post['division']) ? sanitize_key($post['division']) : 'ranked',
-                    'colour' => isset($post['colour']) ? wp_unslash($post['colour']) : '',
-                    'level' => isset($post['level']) ? sanitize_key($post['level']) : '',
-                ));
-                self::flash(is_wp_error($team) ? 'error' : 'success', is_wp_error($team) ? $team->get_error_message() : 'Application sent for ' . $team->name . '. We\'ll email you when it\'s approved.');
+                $team = self::apply_from_post($user_id, $post, true);
+                if (is_wp_error($team)) {
+                    self::flash('error', $team->get_error_message());
+                    return self::apply_retry($team) ? $back . '#rsl-apply' : $back;
+                }
+                self::flash('success', 'Application sent for ' . $team->name . self::season_aside($team->season) . '. We\'ll email you when it\'s approved.');
                 return $back;
 
             case 'withdraw':
@@ -399,6 +404,160 @@ class RSL_Portal {
         $flash = get_transient($key);
         delete_transient($key);
         return is_array($flash) ? '<div class="rsl-flash rsl-flash-' . esc_attr($flash['type']) . '">' . esc_html($flash['message']) . '</div>' : '';
+    }
+
+    // ------------------------------------------------------------------
+    // The season picker and the captain application (0.17.0)
+    // ------------------------------------------------------------------
+
+    /**
+     * The season picker, the one markup wherever a player says which season (0.17.0): the
+     * registration form's Find me a team and Start a team panels, the Find me a team card and
+     * the captain application card. A select named $name over $choices (key => label with dates,
+     * from RSL_Seasons::signup_choices(), maybe narrowed), $selected chosen when offered, else
+     * RSL_Seasons::default_pick(). One choice: a hidden field and the season named. '' with no
+     * choices. Never required (it sits in CSS-hidden panels too): RSL_Seasons::pick_open()
+     * checks it.
+     */
+    public static function season_field($name, $choices, $selected = '') {
+        $choices = is_array($choices) ? $choices : array();
+        if (!$choices) {
+            return '';
+        }
+        if (!isset($choices[$selected])) {
+            $selected = RSL_Seasons::default_pick($choices);
+        }
+        if (count($choices) === 1) {
+            return '<input type="hidden" name="' . esc_attr($name) . '" value="' . esc_attr($selected) . '">'
+                . '<p class="rsl-hint">For ' . esc_html($choices[$selected]) . '.</p>';
+        }
+        $html = '<label class="rsl-field">Which season? <select name="' . esc_attr($name) . '">';
+        foreach ($choices as $key => $label) {
+            $html .= '<option value="' . esc_attr($key) . '"' . selected($key, $selected, false) . '>' . esc_html($label) . '</option>';
+        }
+        return $html . '</select></label>';
+    }
+
+    /**
+     * The team application's fields (0.17.0), one markup for the registration form's Start a team
+     * panel and the #rsl-apply card: which season (season_field(), team_season), team name,
+     * division, roughly what level, colour. $v: values to show again (an apply draft: name,
+     * division, level, colour, season). $required: the card's browser checks; never in the
+     * registration panel, which CSS hides while another route is chosen (a hidden required field
+     * would block the form). The server checks either way (RSL_Teams::apply(), pick_open()).
+     */
+    public static function team_fields($v, $choices, $required) {
+        $v = array_merge(array('name' => '', 'division' => 'ranked', 'level' => '', 'colour' => '', 'season' => ''), is_array($v) ? $v : array());
+        $req = $required ? ' required' : '';
+        ob_start();
+        ?>
+        <?php echo self::season_field('team_season', $choices, (string) $v['season']); ?>
+        <label class="rsl-field">Team name <input type="text" name="team_name" maxlength="100" value="<?php echo esc_attr($v['name']); ?>"<?php echo $req; ?>></label>
+        <label class="rsl-field">Division
+            <select name="team_division"><?php foreach (RSL_Teams::DIVISIONS as $key => $label): ?><option value="<?php echo esc_attr($key); ?>"<?php selected($v['division'], $key); ?>><?php echo esc_html($label); ?></option><?php endforeach; ?></select>
+        </label>
+        <label class="rsl-field">Roughly what level does your team play at?
+            <select name="team_level"<?php echo $req; ?>>
+                <option value="">Choose…</option>
+                <?php foreach (RSL_Teams::levels() as $key => $label): ?><option value="<?php echo esc_attr($key); ?>"<?php selected($v['level'], $key); ?>><?php echo esc_html($label); ?></option><?php endforeach; ?>
+            </select>
+        </label>
+        <p class="rsl-hint">Just a starting guess so your first games are even — it isn't shown anywhere, and your results take over after a couple of weeks.</p>
+        <label class="rsl-field">Team colour <input type="color" name="team_colour" value="<?php echo esc_attr($v['colour'] !== '' ? $v['colour'] : '#1d3d6e'); ?>"></label>
+        <p class="rsl-hint">You'll be the captain. Once the league approves it you'll get an invite link for your players.</p>
+        <?php
+        return ob_get_clean();
+    }
+
+    /** A scalar POST value, unslashed and trimmed; null when absent. */
+    private static function post_value($post, $name) {
+        return isset($post[$name]) && is_scalar($post[$name]) ? trim((string) wp_unslash($post[$name])) : null;
+    }
+
+    /**
+     * The team fields from a form, cleaned (RSL_Teams::apply() and pick_open() check them).
+     * $legacy (do=apply only): the card's names before 0.17.0 too, for a page opened before the
+     * update. Never at registration, whose form posts the player's own level as `level`.
+     */
+    private static function team_values($post, $legacy) {
+        $get = function ($new, $old) use ($post, $legacy) {
+            $v = self::post_value($post, $new);
+            if ($v === null && $legacy && $old !== '') {
+                $v = self::post_value($post, $old);
+            }
+            return (string) $v;
+        };
+        $division = sanitize_key($get('team_division', 'division'));
+        return array(
+            'name' => sanitize_text_field($get('team_name', 'name')),
+            'division' => isset(RSL_Teams::DIVISIONS[$division]) ? $division : 'ranked',
+            'level' => sanitize_key($get('team_level', 'level')),
+            'colour' => (string) sanitize_hex_color($get('team_colour', 'colour')),
+            'season' => sanitize_key($get('team_season', '')),
+        );
+    }
+
+    /**
+     * Whether a failed application can be sent again from the #rsl-apply card (0.17.0): not
+     * when the card won't be there for that season or can't succeed (already on a team, an
+     * application waiting, too many withdrawn this season). Decides the draft, the "send it
+     * again" sentence and the #rsl-apply redirect.
+     */
+    public static function apply_retry($error) {
+        return !(is_wp_error($error) && in_array($error->get_error_code(), array('rsl_pending', 'rsl_elsewhere', 'rsl_withdrawn'), true));
+    }
+
+    /**
+     * The captain application from a form (0.17.0): the #rsl-apply card ($legacy true) or Start
+     * a team at registration. The season through RSL_Seasons::pick_open(), then RSL_Teams::apply().
+     * Returns the pending team (always an object) or WP_Error. A second submit of the same
+     * application (a double click, a re-sent POST) returns the application the first one made.
+     * On an error worth retrying what was typed is kept for the card (APPLY_DRAFT_PREFIX); on
+     * success any old draft goes.
+     */
+    public static function apply_from_post($user_id, $post, $legacy = false) {
+        $user_id = intval($user_id);
+        $v = self::team_values(is_array($post) ? $post : array(), $legacy);
+        $season = RSL_Seasons::pick_open($v['season']);
+        $team = is_wp_error($season) ? $season : RSL_Teams::apply($season, $user_id, array(
+            'name' => $v['name'],
+            'division' => $v['division'],
+            'colour' => $v['colour'],
+            'level' => $v['level'],
+        ));
+        if (!is_wp_error($team) && !is_object($team)) {
+            $team = new WP_Error('rsl_save', 'That team couldn\'t be saved — please try again.');
+        }
+        // The same application sent twice: the first went in, so the second is that success,
+        // not "you have an application waiting" over the first one's flash.
+        if (is_wp_error($team) && !is_wp_error($season) && $v['name'] !== ''
+            && in_array($team->get_error_code(), array('rsl_pending', 'rsl_duplicate', 'rsl_save'), true)) {
+            $mine = RSL_Teams::pending_application_for_user($user_id, $season);
+            if ($mine && $mine->name === $v['name']) {
+                $team = $mine;
+            }
+        }
+        if (!is_wp_error($team)) {
+            delete_transient(self::APPLY_DRAFT_PREFIX . $user_id);
+        } elseif (self::apply_retry($team)) {
+            set_transient(self::APPLY_DRAFT_PREFIX . $user_id, $v, self::APPLY_DRAFT_TTL);
+        }
+        return $team;
+    }
+
+    /** The draft for the #rsl-apply card (array, maybe empty), taken: the next page view shows it once. */
+    private static function take_apply_draft($user_id) {
+        $key = self::APPLY_DRAFT_PREFIX . intval($user_id);
+        $draft = get_transient($key);
+        if ($draft !== false) {
+            delete_transient($key);
+        }
+        return is_array($draft) ? $draft : array();
+    }
+
+    /** " (2027 Mid-season 1)" after a team name when its season isn't the sign-up season, else ''. */
+    public static function season_aside($season) {
+        return $season !== RSL_Seasons::signup() ? ' (' . RSL_Seasons::short_label($season) . ')' : '';
     }
 
     // ------------------------------------------------------------------
@@ -615,17 +774,42 @@ class RSL_Portal {
         $player = RSL_Players::get($user_id);
         $now_team = RSL_Teams::current_team_for_user($user_id, $current);
         $next_team = $signup === $current ? $now_team : RSL_Teams::current_team_for_user($user_id, $signup);
+        // Two seasons overlap while next season signs up: show this season's team first.
+        $two = $signup !== $current && $now_team;
         $invites = RSL_Teams::pending_invites_for_user($user_id);
+        $today = current_time('Y-m-d');
+        $fa_row = class_exists('RSL_Free_Agents') ? RSL_Free_Agents::get($user_id, $signup) : null;
+        // Later seasons open for sign-up (0.17.0): what they have there (shown under Later
+        // season), and so which seasons the pickers still offer them.
+        $open = RSL_Seasons::signup_choices();
+        $others = self::other_seasons($user_id, $open, $signup, $two ? $current : '');
+        $pending_signup = RSL_Teams::pending_application_for_user($user_id, $signup);
+        $draft = self::take_apply_draft($user_id);
+        $taken = array();
+        $listed = array();
+        foreach ($others as $key => $o) {
+            if ($o['team'] || $o['pending']) {
+                $taken[$key] = true;
+            } else {
+                $listed[$key] = true;
+            }
+        }
+        $apply_choices = array_diff_key($open, $taken);
+        $fa_choices = array_diff_key($open, $taken, $listed);
         // The season they play in next: a rego paid ahead for it counts, and a finished
         // current season is never the one judged.
         $card_season = RSL_Seasons::playing_season($current, $signup, (bool) $now_team);
+        // Nothing in the season being played or signing up, but something in a later one: that's
+        // the season they play in next, so the card judges it (and preselects it to pay).
+        if (!$now_team && !$next_team && !$pending_signup && !RSL_Free_Agents::is_open($fa_row) && $others) {
+            reset($others);
+            $card_season = (string) key($others);
+        }
         $clear = RSL_Rego::clearance_for($user_id, $card_season);
-        $today = current_time('Y-m-d');
-        $fa_row = class_exists('RSL_Free_Agents') ? RSL_Free_Agents::get($user_id, $signup) : null;
+        $other_team = (bool) array_filter($others, function ($o) { return (bool) $o['team']; });
+        $other_fa = (bool) array_filter($others, function ($o) { return RSL_Free_Agents::is_open($o['fa']); });
         // Only someone on no team at all can leave the rego until they're placed.
-        $waiting_for_team = !$now_team && !$next_team && RSL_Free_Agents::is_open($fa_row);
-        // Two seasons overlap while next season signs up: show this season's team first.
-        $two = $signup !== $current && $now_team;
+        $waiting_for_team = !$now_team && !$next_team && !$other_team && (RSL_Free_Agents::is_open($fa_row) || $other_fa);
         ?>
         <h2>Reds Social League <span class="rsl-season"><?php echo esc_html(RSL_Seasons::label($two || !$now_team ? $signup : $current)); ?></span></h2>
 
@@ -715,7 +899,18 @@ class RSL_Portal {
             <?php $this->render_my_team($now_team, $user_id); ?>
             <h3 class="rsl-season-head">Next season <span class="rsl-season"><?php echo esc_html(RSL_Seasons::label($signup)); ?></span></h3>
         <?php endif; ?>
-        <?php $this->render_season($user_id, $signup, $next_team, $player); ?>
+        <?php $this->render_season($user_id, $signup, $next_team, $player, $pending_signup, $fa_choices, $apply_choices, $draft); ?>
+
+        <?php foreach ($others as $key => $o): ?>
+            <h3 class="rsl-season-head">Later season <span class="rsl-season"><?php echo esc_html(RSL_Seasons::label($key)); ?></span></h3>
+            <?php if ($o['team']): ?>
+                <?php $this->render_my_team($o['team'], $user_id); ?>
+            <?php elseif ($o['pending']): ?>
+                <?php echo self::pending_card($o['pending']); ?>
+            <?php elseif (class_exists('RSL_Portal_FA')): ?>
+                <?php echo RSL_Portal_FA::dashboard($user_id, $key, array(), false); ?>
+            <?php endif; ?>
+        <?php endforeach; ?>
 
         <details class="rsl-card">
             <summary><strong>My details</strong></summary>
@@ -725,27 +920,61 @@ class RSL_Portal {
     }
 
     /**
+     * What this person has in each season open for sign-up besides the sign-up season (and, while
+     * two seasons overlap, the one being played): key => array('team', 'pending', 'fa') where
+     * they're on an active team, have an application waiting or are on the free agent list.
+     * Calendar order. At most three small queries a season, on the league page only.
+     */
+    private static function other_seasons($user_id, $open, $signup, $skip) {
+        $out = array();
+        foreach (array_keys($open) as $key) {
+            if ($key === $signup || $key === $skip) {
+                continue;
+            }
+            $team = RSL_Teams::current_team_for_user($user_id, $key);
+            $pending = $team ? null : RSL_Teams::pending_application_for_user($user_id, $key);
+            $fa = ($team || $pending) ? null : RSL_Free_Agents::get($user_id, $key);
+            if ($team || $pending || RSL_Free_Agents::is_open($fa)) {
+                $out[$key] = array('team' => $team, 'pending' => $pending, 'fa' => $fa);
+            }
+        }
+        return $out;
+    }
+
+    /** Their team application waiting for approval, with a way to withdraw it. */
+    private static function pending_card($pending) {
+        ob_start();
+        ?>
+        <div class="rsl-card">
+            <p><strong>Your application for <?php echo esc_html($pending->name); ?> is waiting for approval.</strong> We'll email you when it's approved — then you can invite your players.</p>
+            <form method="post" onsubmit="return confirm('Withdraw your application for <?php echo esc_js($pending->name); ?>?');"><?php echo self::fields('withdraw', array('team_id' => $pending->id)); ?><button type="submit" class="rsl-btn rsl-btn-secondary">Withdraw application</button></form>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
+    /**
      * One season's part of the page: their team, their application waiting,
      * or — with neither — the ways onto a team: the free agent list, an
-     * invite code, applying to captain.
+     * invite code, applying to captain. $pending: their application waiting in
+     * $season (or null); $fa_choices / $apply_choices: the seasons the Find me a
+     * team card and the application card offer (0.17.0: the seasons open for
+     * sign-up they aren't in yet; a card with nothing to offer isn't shown);
+     * $draft: what they typed into an application that failed (it opens the card).
      */
-    private function render_season($user_id, $season, $team, $player) {
-        $pending = RSL_Teams::pending_application_for_user($user_id, $season);
+    private function render_season($user_id, $season, $team, $player, $pending, $fa_choices, $apply_choices, $draft) {
         ?>
         <?php if ($team): ?>
             <?php $this->render_my_team($team, $user_id); ?>
         <?php elseif ($pending): ?>
-            <div class="rsl-card">
-                <p><strong>Your application for <?php echo esc_html($pending->name); ?> is waiting for approval.</strong> We'll email you when it's approved — then you can invite your players.</p>
-                <form method="post" onsubmit="return confirm('Withdraw your application for <?php echo esc_js($pending->name); ?>?');"><?php echo self::fields('withdraw', array('team_id' => $pending->id)); ?><button type="submit" class="rsl-btn rsl-btn-secondary">Withdraw application</button></form>
-            </div>
+            <?php echo self::pending_card($pending); ?>
         <?php else: ?>
             <?php $declined = RSL_Teams::last_decided_application($user_id, $season); ?>
             <?php if ($declined): ?>
                 <div class="rsl-flash rsl-flash-error">Your application for <?php echo esc_html($declined->name); ?> wasn't approved<?php echo $declined->decision_note !== '' ? ': ' . esc_html($declined->decision_note) : '.'; ?></div>
             <?php endif; ?>
             <?php if (class_exists('RSL_Portal_FA')): ?>
-                <?php echo RSL_Portal_FA::dashboard($user_id, $season); ?>
+                <?php echo RSL_Portal_FA::dashboard($user_id, $season, $fa_choices); ?>
             <?php endif; ?>
             <div class="rsl-card">
                 <h3>Got an invite code?</h3>
@@ -758,27 +987,17 @@ class RSL_Portal {
                     </form>
                 <?php endif; ?>
             </div>
-            <details class="rsl-card" id="rsl-apply">
-                <summary><strong>Captaining a team? Apply for it here</strong></summary>
-                <form method="post" class="rsl-form">
-                    <?php echo self::fields('apply'); ?>
-                    <label class="rsl-field">Team name <input type="text" name="name" required maxlength="100"></label>
-                    <label class="rsl-field">Division
-                        <select name="division"><?php foreach (RSL_Teams::DIVISIONS as $key => $label): ?><option value="<?php echo esc_attr($key); ?>"><?php echo esc_html($label); ?></option><?php endforeach; ?></select>
-                    </label>
-                    <label class="rsl-field">Roughly what level does your team play at?
-                        <select name="level" required>
-                            <option value="">Choose…</option>
-                            <?php foreach (RSL_Teams::levels() as $key => $label): ?><option value="<?php echo esc_attr($key); ?>"><?php echo esc_html($label); ?></option><?php endforeach; ?>
-                        </select>
-                    </label>
-                    <p class="rsl-hint">Just a starting guess so your first games are even — it isn't shown anywhere, and your results take over after a couple of weeks.</p>
-                    <label class="rsl-field">Team colour <input type="color" name="colour" value="#1d3d6e"></label>
-                    <p class="rsl-hint">You'll be the captain. Once the league approves it you'll get an invite link for your players.</p>
-                    <button type="submit" class="rsl-btn">Send application</button>
-                </form>
-            </details>
-            <script>if (location.hash === '#rsl-apply') { document.getElementById('rsl-apply').open = true; }</script>
+            <?php if ($apply_choices): ?>
+                <details class="rsl-card" id="rsl-apply"<?php echo $draft ? ' open' : ''; ?>>
+                    <summary><strong>Captaining a team? Apply for it here</strong></summary>
+                    <form method="post" class="rsl-form">
+                        <?php echo self::fields('apply'); ?>
+                        <?php echo self::team_fields($draft, $apply_choices, true); ?>
+                        <button type="submit" class="rsl-btn">Send application</button>
+                    </form>
+                </details>
+                <script>if (location.hash === '#rsl-apply') { document.getElementById('rsl-apply').open = true; }</script>
+            <?php endif; ?>
         <?php endif; ?>
         <?php
     }

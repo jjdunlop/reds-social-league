@@ -42,11 +42,11 @@ class RSL_Seasons {
         return $year . ' ' . self::parts()[$part];
     }
 
-    /** Every season this year and next, in calendar order. */
+    /** Every season this year and the next two, in calendar order (the admin season pickers, and the candidates for open_for_signup()). */
     public static function choices() {
         $year = (int) current_time('Y');
         $out = array();
-        foreach (array($year, $year + 1) as $y) {
+        foreach (array($year, $year + 1, $year + 2) as $y) {
             foreach (array_keys(self::parts()) as $part) {
                 $out[$y . '-' . $part] = self::label($y . '-' . $part);
             }
@@ -273,7 +273,7 @@ class RSL_Seasons {
      */
     public static function open_for_signup() {
         $signup = self::signup();
-        // Tests add their far-future keys here (choices() is only this year and next).
+        // Tests add their far-future keys here (choices() is this year and the next two).
         $keys = (array) apply_filters('rsl_open_for_signup_candidates', array_keys(self::choices()));
         $spans = array();
         foreach (array_merge(array($signup), $keys) as $key) {
@@ -282,6 +282,59 @@ class RSL_Seasons {
             }
         }
         return self::open_from($signup, $keys, $spans, current_time('Y-m-d'));
+    }
+
+    /**
+     * The seasons a player may pick to join the free agent list or apply for a team (0.17.0):
+     * open_for_signup(), or, when nothing is open (the sign-up season has finished and no later
+     * season has dates yet), the sign-up season alone, as before 0.17.0, so the league page
+     * never dead-ends. key => label with dates, calendar order.
+     */
+    public static function signup_choices() {
+        $open = self::open_for_signup();
+        if ($open) {
+            return $open;
+        }
+        $signup = self::signup();
+        return array($signup => self::label_with_dates($signup, self::span($signup)));
+    }
+
+    /**
+     * The season a picker over $choices (key => label) starts on: the sign-up season when it's
+     * offered, else the first offered; '' with none. RSL_Portal::season_field() preselects it,
+     * pick_open('') returns it, and the words beside a picker name it (0.17.0).
+     */
+    public static function default_pick($choices) {
+        $choices = is_array($choices) ? $choices : array();
+        if (!$choices) {
+            return '';
+        }
+        $signup = self::signup();
+        if (isset($choices[$signup])) {
+            return $signup;
+        }
+        reset($choices);
+        return (string) key($choices);
+    }
+
+    /**
+     * The season a player picked on a form, checked against signup_choices(): the key, or
+     * WP_Error 'rsl_season_closed' with a sentence for them. Nothing picked ('' or not a
+     * string): default_pick(). Every player-facing route goes through this; admin screens may
+     * use choices().
+     */
+    public static function pick_open($raw) {
+        $choices = self::signup_choices();
+        $raw = is_string($raw) ? trim($raw) : '';
+        if ($raw === '') {
+            return self::default_pick($choices);
+        }
+        if (isset($choices[$raw])) {
+            return $raw;
+        }
+        return new WP_Error('rsl_season_closed', self::is_valid($raw)
+            ? self::short_label($raw) . ' isn\'t open for sign-up — pick one of the seasons listed.'
+            : 'Pick one of the seasons listed.');
     }
 
     /**

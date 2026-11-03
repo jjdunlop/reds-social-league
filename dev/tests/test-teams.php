@@ -1,7 +1,9 @@
 <?php
 /**
- * Teams and rosters: data rules, admin actions (nonce + capability), and the
- * public pages' privacy (teams public, rosters only for members and admins).
+ * Teams and rosters: data rules, admin actions (nonce + capability), the
+ * captain application card's season choice and later-season invite links
+ * (0.17.0), a team that couldn't be saved, and the public pages' privacy
+ * (teams public, rosters only for members and admins).
  *
  *   wp eval-file dev/tests/test-teams.php
  *
@@ -12,6 +14,7 @@ if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production'
     exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
+require_once dirname(__DIR__) . '/lib-profile.php';
 require_once dirname(__DIR__) . '/lib-mail-stop.php';
 global $wpdb;
 
@@ -25,6 +28,14 @@ $check = function ($label, $ok, $detail = '') use (&$fails, $hold) {
     echo ($ok ? "OK: $label\n" : "FAIL: $label" . ($detail !== '' ? " — $detail" : '') . "\n");
 };
 $saved_current = get_option(RSL_Seasons::CURRENT_OPTION, '__unset__');
+// Set before the try, so the cleanup can always run (the application card section, 0.17.0).
+$saved_signup = get_option(RSL_Seasons::SIGNUP_OPTION, '__unset__');
+$saved_courts = get_option(RSL_Courts::SETTINGS_OPTION, '__unset__');
+$saved_portal_sec = get_option(RSL_Portal::PAGE_OPTION, '__unset__');
+$made_portal = 0;
+$cands_sec = null;
+$block_teams = null;
+$quiet = null;
 $users = array();
 $mk = function ($tag, $role = 'subscriber') use ($suffix, &$users) {
     $u = wp_insert_user(array('user_login' => "rslt-$tag-$suffix", 'user_email' => "rslt-$tag-$suffix@example.test", 'user_pass' => wp_generate_password(),
@@ -38,7 +49,7 @@ try {
 // --- Seasons ------------------------------------------------------------------------
 $check('season keys validate', RSL_Seasons::is_valid('2027-pre') && RSL_Seasons::is_valid('2027-mid2') && !RSL_Seasons::is_valid('2027-xmas') && !RSL_Seasons::is_valid('27-pre'));
 $check('season labels', RSL_Seasons::label('2027-post') === '2027 Post-season (Spring)');
-$check('four seasons a year offered, this year and next', count(RSL_Seasons::choices()) === 8);
+$check('four seasons a year offered, this year and the next two', count(RSL_Seasons::choices()) === 12);
 $check('season for a date', RSL_Seasons::for_date('2027-02-10') === '2027-pre' && RSL_Seasons::for_date('2027-05-01') === '2027-mid1'
     && RSL_Seasons::for_date('2027-09-30') === '2027-mid2' && RSL_Seasons::for_date('2027-10-01') === '2027-post');
 delete_option(RSL_Seasons::CURRENT_OPTION);
@@ -102,6 +113,81 @@ wp_set_current_user($admin);
 $post(array('do' => 'set_season'));
 $check('admin: set the current season', RSL_Seasons::current() === $season);
 
+// --- The captain application card picks the season (0.17.0) ------------------------------------
+// The current season is $season (2090-pre, undated); signing up 2090-mid1, with 2090-mid2 open
+// too (both dated from today). Far-future seasons only, through the candidates filter.
+$today = current_time('Y-m-d');
+$day = function ($n) use ($today) { return date('Y-m-d', strtotime($today . ' ' . ($n < 0 ? '' : '+') . intval($n) . ' days')); };
+RSL_Courts::save_settings('2090-mid1', array('start' => $day(5), 'end' => $day(60)));
+RSL_Courts::save_settings('2090-mid2', array('start' => $day(70), 'end' => $day(130)));
+RSL_Seasons::set_signup('2090-mid1');
+$cands_sec = function ($keys) { return array('2090-mid1', '2090-mid2', '2090-pre'); };
+add_filter('rsl_open_for_signup_candidates', $cands_sec);
+$had = intval(get_option(RSL_Portal::PAGE_OPTION));
+$portal_id = intval(RSL_Portal::ensure_page()); // the existing page when there is one
+$made_portal = $portal_id !== $had ? $portal_id : 0;
+$cp = $mk('cp'); $cq = $mk('cq');
+foreach (array($cp, $cq) as $u) { rsl_dev_profile($u); RSL_Players::register($u, array('level' => 'social', 'years' => '1to3')); }
+$portal = new RSL_Portal();
+$view = function ($as) use ($portal) { wp_set_current_user($as); $_GET = array(); return $portal->render(); };
+$front = function ($as, $fields) {
+    wp_set_current_user($as);
+    delete_transient(RSL_Portal::FLASH_PREFIX . $as);
+    $to = RSL_Portal::process(array_merge(array('rsl_nonce' => wp_create_nonce('rsl_front')), $fields));
+    $f = get_transient(RSL_Portal::FLASH_PREFIX . $as);
+    return array((string) $to, is_array($f) ? (string) $f['message'] : '');
+};
+$team_select = function ($html) {
+    $a = strpos($html, '<select name="team_season">');
+    if ($a === false) { return ''; }
+    $b = strpos($html, '</select>', $a);
+    return (string) substr($html, $a, $b === false ? strlen($html) - $a : $b - $a);
+};
+$v = $view($cp);
+$sel = $team_select($v);
+$check('the application card asks which season: the sign-up season chosen, the later open one offered, an earlier one not', strpos($v, 'id="rsl-apply"') !== false
+    && $sel !== '' && strpos($sel, 'value="2090-mid1" selected=\'selected\'') !== false && strpos($sel, 'value="2090-mid2"') !== false && strpos($sel, '2090-pre') === false, $sel);
+list($to, $msg) = $front($cp, array('do' => 'apply', 'team_name' => "Card Team $suffix", 'team_level' => 'social', 'team_season' => '2090-mid2'));
+$card_team = RSL_Teams::pending_application_for_user($cp, '2090-mid2');
+$check('applying for the later season: pending there, and the flash names the season', $card_team && $card_team->name === "Card Team $suffix"
+    && $msg === "Application sent for Card Team $suffix (2090 Mid-season 2). We'll email you when it's approved.", $msg);
+$v = $view($cp);
+$check('...the page shows it under Later season, and the card offers only the season left (named, not a choice)', strpos($v, 'Later season') !== false
+    && strpos($v, "Your application for Card Team $suffix is waiting for approval") !== false
+    && strpos($v, 'name="team_season" value="2090-mid1"') !== false && strpos($v, '<select name="team_season">') === false);
+list($to, $msg) = $front($cp, array('do' => 'apply', 'team_name' => "Too Early $suffix", 'team_level' => 'social', 'team_season' => '2090-pre'));
+$check('a season that isn\'t open for sign-up is refused, back to the card', $msg === '2090 Pre-season isn\'t open for sign-up — pick one of the seasons listed.'
+    && substr($to, -strlen('#rsl-apply')) === '#rsl-apply' && !RSL_Teams::pending_application_for_user($cp, '2090-pre'), $msg . ' / ' . $to);
+$v = $view($cp);
+$check('...and the card opens with what was typed', strpos($v, 'id="rsl-apply" open') !== false && strpos($v, 'value="Too Early ' . $suffix . '"') !== false);
+wp_set_current_user($admin);
+$approved = $card_team ? RSL_Teams::approve($card_team->id) : null;
+$code_team = ($approved && !is_wp_error($approved)) ? RSL_Teams::get_by_code($approved->invite_code) : null;
+$joined = $code_team ? RSL_Teams::join_by_code($cq, $approved->invite_code) : null;
+$check('the approved later-season team\'s invite link works at once', $code_team && intval($code_team->id) === intval($card_team->id)
+    && $joined && !is_wp_error($joined) && RSL_Teams::is_member($card_team->id, $cq) && in_array('2090-mid2', RSL_Teams::joinable_seasons(), true));
+$old_team = RSL_Teams::create('2089-post', array('name' => "Old Post $suffix", 'status' => 'active'));
+$check('a team in a season the league page doesn\'t show isn\'t joinable by its code', $old_team && !is_wp_error($old_team)
+    && RSL_Teams::get_by_code($old_team->invite_code) === null && !in_array('2089-post', RSL_Teams::joinable_seasons(), true));
+// A team that couldn't be saved (its INSERT sent to a table that doesn't exist): an error, and nobody becomes a captain.
+$members_before = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . RSL_Database::table('team_members') . " WHERE user_id = %d", $cp));
+$block_teams = function ($q) {
+    $t = '`' . RSL_Database::table('teams') . '`';
+    return stripos(ltrim((string) $q), 'INSERT INTO ' . $t) === 0 ? str_replace($t, '`' . RSL_Database::table('teams') . '_unsaved`', $q) : $q;
+};
+$quiet = $wpdb->suppress_errors(true);
+add_filter('query', $block_teams);
+$unsaved = RSL_Teams::apply('2090-mid1', $cp, array('name' => "Unsaved $suffix", 'level' => 'social'));
+remove_filter('query', $block_teams);
+$block_teams = null;
+$wpdb->suppress_errors($quiet);
+$quiet = null;
+$check('a team that couldn\'t be saved is an error (rsl_save), and no membership is added', is_wp_error($unsaved) && $unsaved->get_error_code() === 'rsl_save'
+    && (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . RSL_Database::table('team_members') . " WHERE user_id = %d", $cp)) === $members_before
+    && !$wpdb->get_var($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE name = %s", "Unsaved $suffix")), is_wp_error($unsaved) ? $unsaved->get_error_code() : wp_json_encode($unsaved));
+wp_set_current_user($admin);
+$_GET = array();
+
 // --- Public pages ------------------------------------------------------------------------
 $public = new RSL_Public();
 RSL_Public::ensure_pages();
@@ -142,9 +228,37 @@ if ($saved_portal === '__unset__') { delete_option(RSL_Portal::PAGE_OPTION); } e
 // --- Cleanup (runs after a failure too) ----------------------------------------------------
 wp_set_current_user(0);
 set_query_var(RSL_Public::QUERY_VAR, '');
-foreach (RSL_Teams::list_for_season($season) as $t) { $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $t->id)); }
-$wpdb->delete(RSL_Database::table('teams'), array('season' => $season));
-foreach ($users as $u) { if (is_int($u) && $u > 0) { $wpdb->delete(RSL_Database::table('team_members'), array('user_id' => $u)); } }
+$_GET = array();
+if ($block_teams) {
+    remove_filter('query', $block_teams);
+}
+if ($quiet !== null) {
+    $wpdb->suppress_errors($quiet);
+}
+if ($cands_sec) {
+    remove_filter('rsl_open_for_signup_candidates', $cands_sec);
+}
+foreach (array($season, '2090-mid1', '2090-mid2', '2089-post') as $s_key) {
+    foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $s_key)) as $tid) {
+        $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $tid));
+        $wpdb->delete(RSL_Database::table('invites'), array('team_id' => $tid));
+    }
+    $wpdb->delete(RSL_Database::table('teams'), array('season' => $s_key));
+}
+foreach ($users as $u) {
+    if (is_int($u) && $u > 0) {
+        $wpdb->delete(RSL_Database::table('team_members'), array('user_id' => $u));
+        $wpdb->delete(RSL_Database::table('players'), array('user_id' => $u));
+        $wpdb->delete(RSL_Database::table('free_agents'), array('user_id' => $u));
+    }
+}
+if ($made_portal) {
+    wp_delete_post($made_portal, true);
+    if ($saved_portal_sec === '__unset__') { delete_option(RSL_Portal::PAGE_OPTION); } else { update_option(RSL_Portal::PAGE_OPTION, $saved_portal_sec, false); }
+}
+foreach (array(RSL_Seasons::SIGNUP_OPTION => $saved_signup, RSL_Courts::SETTINGS_OPTION => $saved_courts) as $opt => $was) {
+    if ($was === '__unset__') { delete_option($opt); } else { update_option($opt, $was); }
+}
 // Removing a player queues them a "no longer on" email; it goes with the test users.
 $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('outbox') . " WHERE to_email LIKE %s", '%-' . $suffix . '@example.test'));
 if (isset($admin) && is_int($admin)) { delete_transient(RSL_Admin::NOTICE_PREFIX . $admin); }

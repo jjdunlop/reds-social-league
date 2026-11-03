@@ -165,7 +165,7 @@ class RSL_Admin {
                     self::notice('success', '12-month rego added for ' . $user->display_name . '.');
                     return $back_reg;
                 }
-                // Any season this year or next (finished ones too, to record a payment after the
+                // Any season from this year to two years ahead (finished ones too, to record a payment after the
                 // fact), as well as the seasons open for sign-up. No "already covered" refusal:
                 // the league may be recording something it knows about.
                 $allowed = RSL_Seasons::open_for_signup() + RSL_Seasons::choices();

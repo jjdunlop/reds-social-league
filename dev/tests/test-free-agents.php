@@ -59,6 +59,7 @@ $set_building = function ($season, $changes) {
 };
 $today = current_time('Y-m-d');
 $days = function ($n) use ($today) { return date('Y-m-d', strtotime($today . ' ' . ($n >= 0 ? '+' : '') . $n . ' days')); };
+$cands_fa = null; // the season choice section's candidates filter (0.17.0), removed in the cleanup
 
 try {
 
@@ -461,6 +462,45 @@ $wpdb->update(RSL_Database::table('join_requests'), array('expires_at' => date('
 RSL_Free_Agents::expire_stale();
 $check('stale requests are marked expired', $wpdb->get_var($wpdb->prepare("SELECT status FROM " . RSL_Database::table('join_requests') . " WHERE id = %d", $er)) === 'expired');
 
+// --- Find me a team picks the season (0.17.0) ----------------------------------------------------------------------
+// Current 2087-post, signing up $season (2088-pre, unpinned, its window open); 2088-mid1 dated
+// and offered through the candidates filter.
+$set_start('2088-mid1', $days(100));
+$cands_fa = function ($keys) { return array('2088-mid1'); };
+add_filter('rsl_open_for_signup_candidates', $cands_fa);
+$cs = $mk('cs');
+$row_of = function ($s) use ($cs) { return RSL_Free_Agents::get($cs, $s); };
+$html = RSL_Portal_FA::dashboard($cs, $season);
+$a = strpos($html, '<select name="fa_season">');
+$fa_select = $a === false ? '' : (string) substr($html, $a, (int) strpos($html, '</select>', $a) - $a);
+$check('the Find me a team card asks which season: the sign-up season chosen, the later open one offered', $fa_select !== ''
+    && strpos($fa_select, 'value="2088-pre" selected=\'selected\'') !== false && strpos($fa_select, 'value="2088-mid1"') !== false, $fa_select);
+$r = RSL_Portal_FA::process('fa_join', array('fa_season' => '2088-mid1', 'division_pref' => 'either', 'browsable' => '1'), $cs);
+$check('joining for the later season: on that season\'s list, not the sign-up season\'s', is_array($r) && $r['type'] === 'success'
+    && strpos($r['message'], RSL_Seasons::label('2088-mid1')) !== false && RSL_Free_Agents::is_open($row_of('2088-mid1')) && !RSL_Free_Agents::is_open($row_of($season)), wp_json_encode($r));
+$html = RSL_Portal_FA::dashboard($cs, '2088-mid1', array(), false);
+$check('the later season\'s cards: their own ids, and their forms carry the season', strpos($html, 'id="rsl-fa-edit-2088-mid1"') !== false
+    && strpos($html, 'name="season" value="2088-mid1"') !== false);
+$html = RSL_Portal_FA::dashboard($cs, $season, array('2088-pre' => 'x'));
+$check('a card narrowed to one season names it in a hidden field', strpos($html, 'name="fa_season" value="2088-pre"') !== false && strpos($html, '<select name="fa_season">') === false);
+$r = RSL_Portal_FA::process('fa_update', array('season' => '2088-mid1', 'time_pref' => 'late', 'division_pref' => 'either', 'browsable' => '1'), $cs);
+$check('updating that season\'s row', is_array($r) && $r['type'] === 'success' && $row_of('2088-mid1')->time_pref === 'late', wp_json_encode($r));
+$r = RSL_Portal_FA::process('fa_leave', array('season' => '2088-mid1'), $cs);
+$check('leaving that season\'s list', is_array($r) && $r['type'] === 'success' && $row_of('2088-mid1')->status === 'withdrawn', wp_json_encode($r));
+$r = RSL_Portal_FA::process('fa_join', array('fa_season' => '2087-post'), $cs);
+$check('a season that isn\'t open for sign-up is refused', is_array($r) && $r['type'] === 'error' && strpos($r['message'], 'isn\'t open for sign-up') !== false, wp_json_encode($r));
+$r = RSL_Portal_FA::process('fa_join', array('fa_season' => $season, 'division_pref' => 'either', 'browsable' => '1'), $cs);
+$check('(on the sign-up season\'s list)', is_array($r) && $r['type'] === 'success' && $row_of($season) && $row_of($season)->status === 'looking', wp_json_encode($r));
+$time_was = $row_of($season)->time_pref;
+$r = RSL_Portal_FA::process('fa_leave', array('season' => '1999-pre'), $cs);
+$check('a form for a season the page no longer shows is refused, never swapped for the sign-up season', is_array($r) && $r['type'] === 'error'
+    && $r['message'] === 'That season isn\'t open any more — reload the page.' && $row_of($season)->status === 'looking', wp_json_encode($r));
+$r = RSL_Portal_FA::process('fa_update', array('season' => '1999-pre', 'time_pref' => 'early', 'division_pref' => 'either'), $cs);
+$check('...the same for saving details', is_array($r) && $r['type'] === 'error' && $r['message'] === 'That season isn\'t open any more — reload the page.'
+    && $row_of($season)->time_pref === $time_was, wp_json_encode($r));
+$r = RSL_Portal_FA::process('fa_leave', array(), $cs);
+$check('a form from before 0.17.0 (no season) still acts on the sign-up season', is_array($r) && $r['type'] === 'success' && $row_of($season)->status === 'withdrawn', wp_json_encode($r));
+
 } catch (Throwable $t) {
     $fails++;
     echo 'FAIL: threw ' . get_class($t) . ': ' . $t->getMessage() . ' (line ' . $t->getLine() . ")\n";
@@ -474,6 +514,11 @@ foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('
 $wpdb->delete(RSL_Database::table('teams'), array('season' => $season));
 $wpdb->delete(RSL_Database::table('free_agents'), array('season' => $season));
 $wpdb->delete(RSL_Database::table('join_requests'), array('season' => $season));
+if ($cands_fa) {
+    remove_filter('rsl_open_for_signup_candidates', $cands_fa);
+}
+$set_start('2088-mid1', '');
+$wpdb->delete(RSL_Database::table('free_agents'), array('season' => '2088-mid1'));
 foreach (isset($nights) ? $nights : array() as $n) { $wpdb->delete(RSL_Database::table('nights'), array('id' => $n->id)); }
 $set_start($season, '');
 $all = get_option(RSL_Free_Agents::BUILDING_OPTION, array());

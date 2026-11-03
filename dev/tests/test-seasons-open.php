@@ -3,7 +3,9 @@
  * The seasons open for sign-up (0.15.0): RSL_Seasons::open_for_signup()
  * and its pure core open_from(), the date labels (label_with_dates(),
  * dates_words(), day_words()), quarters, calendar order (ordinal()),
- * span() and the rsl_open_for_signup_candidates filter. Pure checks first,
+ * span() and the rsl_open_for_signup_candidates filter; and (0.17.0) the
+ * choices() span, signup_choices(), pick_open() (the one check of a season a
+ * player picks) and default_pick(). Pure checks first,
  * with made-up keys and a made-up today; then the wrapper with far-future
  * (and far-past) seasons only. The site's real seasons are only read.
  *
@@ -24,6 +26,7 @@ $day = function ($n) use ($today) { return date('Y-m-d', strtotime($today . ' ' 
 $saved = array();
 foreach (array(RSL_Seasons::SIGNUP_OPTION, RSL_Courts::SETTINGS_OPTION) as $opt) { $saved[$opt] = get_option($opt, '__unset__'); }
 $cands = null;
+$swap = null;
 
 try {
     // --- Pure helpers ------------------------------------------------------------------------
@@ -86,6 +89,15 @@ try {
         && RSL_Seasons::quarter_span('2093-mid1') === array('start' => '2093-04-01', 'end' => '2093-06-30', 'dated' => false)
         && RSL_Seasons::quarter_span('bogus') === null);
 
+    // --- choices(): the admin pickers and open_for_signup()'s candidates (0.17.0) -----------------
+    $ch = RSL_Seasons::choices();
+    $y = (int) current_time('Y');
+    $keys = array_keys($ch);
+    $ordered = true;
+    for ($i = 1; $i < count($keys); $i++) { $ordered = $ordered && RSL_Seasons::ordinal($keys[$i]) === RSL_Seasons::ordinal($keys[$i - 1]) + 1; }
+    $check('choices(): every season this year and the next two, in calendar order', count($ch) === 12 && $keys[0] === $y . '-pre'
+        && $keys[11] === ($y + 2) . '-post' && $ordered && $ch[$y . '-mid1'] === RSL_Seasons::label($y . '-mid1'), wp_json_encode($keys));
+
     // --- span() and the wrapper ------------------------------------------------------------------
     RSL_Courts::save_settings('2093-mid1', array('start' => $day(70), 'end' => $day(130)));
     $s = RSL_Seasons::span('2093-mid1');
@@ -101,10 +113,35 @@ try {
     $labels_ok = true;
     foreach ($open as $k => $label) { $labels_ok = $labels_ok && $label === RSL_Seasons::label_with_dates($k, RSL_Seasons::span($k)); }
     $check('open_for_signup(): the sign-up season, then later candidates with dates (the filter adds them)', array_keys($open) === array('2093-pre', '2093-mid1') && $labels_ok, wp_json_encode($open));
+
+    // The one check of a season a player picks (0.17.0).
+    $check('signup_choices(): the open list while something is open', RSL_Seasons::signup_choices() === $open, wp_json_encode(RSL_Seasons::signup_choices()));
+    $check('pick_open(): nothing picked is the sign-up season; an open season is itself', RSL_Seasons::pick_open('') === '2093-pre' && RSL_Seasons::pick_open('2093-mid1') === '2093-mid1');
+    $closed = RSL_Seasons::pick_open('1990-pre');
+    $check('pick_open(): a season that isn\'t open is refused, naming it', is_wp_error($closed) && $closed->get_error_code() === 'rsl_season_closed'
+        && $closed->get_error_message() === '1990 Pre-season isn\'t open for sign-up — pick one of the seasons listed.', is_wp_error($closed) ? $closed->get_error_message() : wp_json_encode($closed));
+    $check('pick_open(): a later season with no dates isn\'t offered, so it\'s refused', is_wp_error(RSL_Seasons::pick_open('2093-mid2')));
+    $bogus = RSL_Seasons::pick_open('bogus');
+    $check('pick_open(): a key that isn\'t a season is refused without naming it', is_wp_error($bogus) && $bogus->get_error_message() === 'Pick one of the seasons listed.');
+    $check('default_pick(): the sign-up season when offered, else the first offered, else nothing', RSL_Seasons::default_pick($open) === '2093-pre'
+        && RSL_Seasons::default_pick(array('2093-mid1' => 'x', '2093-mid2' => 'y')) === '2093-mid1' && RSL_Seasons::default_pick(array()) === '');
     remove_filter('rsl_open_for_signup_candidates', $cands);
     $cands = null;
 
     RSL_Seasons::set_signup('1990-pre');
+    // A stale pin (the sign-up season finished, a later one open): the season offered, not the finished one.
+    $swap = function ($keys) { return array('2093-mid1'); };
+    add_filter('rsl_open_for_signup_candidates', $swap);
+    $check('a stale sign-up pin: nothing picked is the later season on offer, and the pickers start on it', RSL_Seasons::pick_open('') === '2093-mid1'
+        && RSL_Seasons::default_pick(RSL_Seasons::signup_choices()) === '2093-mid1', wp_json_encode(RSL_Seasons::signup_choices()));
+    remove_filter('rsl_open_for_signup_candidates', $swap);
+    $swap = function ($keys) { return array(); };
+    add_filter('rsl_open_for_signup_candidates', $swap);
+    $check('nothing open at all: the sign-up season alone, as before (the page never dead-ends)',
+        RSL_Seasons::signup_choices() === array('1990-pre' => RSL_Seasons::label_with_dates('1990-pre', RSL_Seasons::span('1990-pre'))) && RSL_Seasons::pick_open('') === '1990-pre',
+        wp_json_encode(RSL_Seasons::signup_choices()));
+    remove_filter('rsl_open_for_signup_candidates', $swap);
+    $swap = null;
     $open = RSL_Seasons::open_for_signup();
     $generic = !isset($open['1990-pre']);
     foreach (array_keys($open) as $k) {
@@ -125,6 +162,9 @@ try {
 } finally {
     if ($cands) {
         remove_filter('rsl_open_for_signup_candidates', $cands);
+    }
+    if ($swap) {
+        remove_filter('rsl_open_for_signup_candidates', $swap);
     }
     foreach ($saved as $opt => $value) {
         if ($value === '__unset__') { delete_option($opt); } else { update_option($opt, $value); }

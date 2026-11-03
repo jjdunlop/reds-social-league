@@ -115,7 +115,7 @@ class RSL_Teams {
             return new WP_Error('rsl_duplicate', 'There\'s already a team called "' . $name . '" this season.');
         }
 
-        $wpdb->insert(RSL_Database::table('teams'), array(
+        $saved = $wpdb->insert(RSL_Database::table('teams'), array(
             'season' => $season,
             'name' => $name,
             'slug' => self::unique_slug($season, $name),
@@ -128,8 +128,13 @@ class RSL_Teams {
             'applied_at' => isset($args['applied_by']) ? current_time('mysql') : null,
             'created_at' => current_time('mysql'),
         ));
+        // A failed insert (two same-name applications at once taking one slug, a value the
+        // table refuses, a database error) is an error, never a missing team taken for one.
+        if (!$saved) {
+            return new WP_Error('rsl_save', 'That team couldn\'t be saved — please try again.');
+        }
 
-        return self::get($wpdb->insert_id);
+        return self::get((int) $wpdb->insert_id);
     }
 
     // ------------------------------------------------------------------
@@ -147,6 +152,11 @@ class RSL_Teams {
         if ($blocked = self::why_cant_join($user_id, $season)) {
             return $blocked;
         }
+        // The name first (the form's first field), with create()'s own sentence (0.17.0).
+        $name = trim(sanitize_text_field(isset($args['name']) ? (string) $args['name'] : ''));
+        if ($name === '') {
+            return new WP_Error('rsl_name', 'A team needs a name.');
+        }
         if (!isset($args['level']) || !isset(self::levels()[$args['level']])) {
             return new WP_Error('rsl_level', 'Pick roughly what level your team plays at — it helps us give you even games from week one.');
         }
@@ -158,6 +168,9 @@ class RSL_Teams {
         $team = self::create($season, $args);
         if (is_wp_error($team)) {
             return $team;
+        }
+        if (!$team) {
+            return new WP_Error('rsl_save', 'That team couldn\'t be saved — please try again.');
         }
         self::add_member($team->id, $user_id, 'captain', true, array('how' => 'apply'));
         return self::get($team->id);
@@ -316,9 +329,16 @@ class RSL_Teams {
         return $code;
     }
 
-    /** Seasons people can still join teams in: the one being played and the one signing up. */
+    /**
+     * Seasons people can join teams in (invite codes and invites): the one being played, the one
+     * signing up, and (0.17.0) every later season open for sign-up, since a captain can apply for
+     * one of those. Never a finished season, so last season's links still stop working.
+     */
     public static function joinable_seasons() {
-        return array_values(array_unique(array(RSL_Seasons::current(), RSL_Seasons::signup())));
+        return array_values(array_unique(array_merge(
+            array(RSL_Seasons::current(), RSL_Seasons::signup()),
+            array_keys(RSL_Seasons::open_for_signup())
+        )));
     }
 
     /** The active team with this code in a season people can join, or null (last season's links stop working). */
