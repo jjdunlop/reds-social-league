@@ -265,6 +265,24 @@ class RSL_Rego {
         return $from <= $s['end'] && self::covered_through($user_id, $from, $s['end']);
     }
 
+    /**
+     * Paid ahead past the cover the league page shows for $season ($clear = clearance_for($user_id,
+     * $season)): that cover runs to the season's last night and the season after it
+     * (RSL_Seasons::next()) is already covered (season_covered(): its own season rego, or cover
+     * for all its nights). The runs-out-soon nudge stays quiet then (0.17.0). Cover that ends
+     * part-way through $season never counts: they still need the rest of it.
+     */
+    public static function paid_ahead($user_id, $clear, $season) {
+        if (empty($clear['cleared']) || !RSL_Seasons::is_valid($season)) {
+            return false;
+        }
+        $s = RSL_Seasons::span($season);
+        if (!$s || (string) $clear['until'] < $s['end']) {
+            return false;
+        }
+        return self::season_covered($user_id, RSL_Seasons::next($season));
+    }
+
     /** The seasons open for sign-up that this player isn't already covered for: what the league page offers. */
     public static function season_choices($user_id) {
         $out = array();
@@ -362,7 +380,7 @@ class RSL_Rego {
             'source' => $source,
             'order_id' => isset($args['order_id']) ? intval($args['order_id']) : null,
             'order_item_id' => $order_item_id ?: null,
-            'note' => substr($note, 0, 255),
+            'note' => self::note_fit($note),
             'season' => $season,
             'granted_end' => $end,
             'created_by' => get_current_user_id() ?: null,
@@ -374,6 +392,46 @@ class RSL_Rego {
     /** A season rego row's note: "Season rego: 2027 Pre-season (24 Jan to 21 Mar)". Never an em dash (restore_cancelled() reads the note's last "— " part). */
     public static function season_note($season, $span) {
         return 'Season rego: ' . RSL_Seasons::label_with_dates($season, $span);
+    }
+
+    const NOTE_BYTES = 255; // the note column: cut by bytes, so it fits whatever the table's character set
+
+    /** $text cut to at most $bytes, never part of a UTF-8 character. */
+    private static function note_fit_to($text, $bytes) {
+        $text = (string) $text;
+        if (strlen($text) <= $bytes) {
+            return $text;
+        }
+        if (function_exists('mb_strcut')) {
+            return mb_strcut($text, 0, $bytes, 'UTF-8');
+        }
+        // No mbstring: cut by bytes, then drop a trailing lead byte and its continuation bytes
+        // (at worst one whole character too).
+        return (string) preg_replace('/[\xC0-\xF7][\x80-\xBF]*$/', '', substr($text, 0, $bytes));
+    }
+
+    /** A rego note that fits the column (0.17.0: on a character boundary, never a byte cut). */
+    private static function note_fit($note) {
+        return self::note_fit_to($note, self::NOTE_BYTES);
+    }
+
+    /**
+     * $note with $add after it (" — " between when $note has text), cut to fit: $add, the newest
+     * reason, is always kept whole (restore_cancelled() reads the note's last "— " part); the older
+     * text loses its end, marked "…" (never an em dash).
+     */
+    private static function note_add($note, $add) {
+        $note = trim((string) $note);
+        $add = trim((string) $add);
+        $tail = ($note !== '' ? ' — ' : '') . $add;
+        if (strlen($note . $tail) <= self::NOTE_BYTES) {
+            return $note . $tail;
+        }
+        $room = self::NOTE_BYTES - strlen($tail) - strlen('…');
+        if ($room < 1) {
+            return self::note_fit($add);
+        }
+        return rtrim(self::note_fit_to($note, $room)) . '…' . $tail;
     }
 
     public static function get($grant_id) {
@@ -412,8 +470,8 @@ class RSL_Rego {
         if ($end >= $g->end_date) {
             return true; // already over
         }
-        $note = trim($g->note . ($g->note !== '' ? ' — ' : '') . $why . ' ' . date('j M Y', strtotime($today)));
-        $wpdb->update(RSL_Database::table('regos'), array('end_date' => $end, 'note' => substr($note, 0, 255)), array('id' => $g->id));
+        $note = self::note_add($g->note, $why . ' ' . date('j M Y', strtotime($today)));
+        $wpdb->update(RSL_Database::table('regos'), array('end_date' => $end, 'note' => $note), array('id' => $g->id));
         return true;
     }
 
@@ -857,8 +915,8 @@ class RSL_Rego {
         if ($g->end_date >= $end) {
             return;
         }
-        $note = trim($g->note . ' — Order paid again ' . date('j M Y', strtotime(current_time('Y-m-d'))));
-        $wpdb->update(RSL_Database::table('regos'), array('end_date' => $end, 'note' => substr($note, 0, 255)), array('id' => $g->id));
+        $note = self::note_add($g->note, 'Order paid again ' . date('j M Y', strtotime(current_time('Y-m-d'))));
+        $wpdb->update(RSL_Database::table('regos'), array('end_date' => $end, 'note' => $note), array('id' => $g->id));
         RSL_Payments::order_note($order, 'Social League: social rego given back (the order is paid again) — ' . date('j M Y', strtotime($g->start_date)) . ' – ' . date('j M Y', strtotime($end)) . '.');
     }
 

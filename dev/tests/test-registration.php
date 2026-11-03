@@ -70,6 +70,8 @@ $cands = null;
 $cand_keys = array();
 $test_seasons = array();
 $cart_test = false;
+$block_rego_insert = null; // section 26's blocked rego INSERT (0.17.0): the cleanup takes it off if it's still on
+$quiet_rego = null;
 // League mail this test queues must never go out from another request (wp-cron on a page load, the
 // hourly job, the Free Agents screen), where the mail stop above isn't in place: the send run is
 // held off a day (queue() schedules one only when none is), and so is the hourly job (it drains
@@ -885,6 +887,61 @@ $check('26.10 a later season\'s approved team: its invite link works straight aw
 $check('...while a season that\'s neither played nor open still isn\'t joinable', RSL_Teams::get_by_code($rteam->invite_code) === null && !in_array($RUN, RSL_Teams::joinable_seasons(), true));
 wp_set_current_user($admin);
 
+// 11: no runs-out-soon nudge when the next season is already paid for.
+RSL_Seasons::set_current($RUN);
+$sq = $mk('sq'); $sr = $mk('sr');
+$reg($sq);
+$reg($sr);
+$nteam = RSL_Teams::create($RUN, array('name' => "Nudge Team $suffix", 'division' => 'ranked'));
+RSL_Teams::add_member($nteam->id, $sq, 'captain');
+RSL_Teams::add_member($nteam->id, $sr);
+foreach (array($sq, $sr) as $u) { RSL_Rego::grant($u, array('start' => $today, 'source' => 'manual', 'season' => $RUN)); }
+RSL_Rego::grant($sq, array('source' => 'manual', 'season' => RSL_Seasons::next($RUN))); // = $season, undated: its quarter
+$vq = $page($sq);
+$vr = $page($sr);
+$check('26.11 a season rego running out with the next season already paid: cleared, no nudge; without it, the nudge', RSL_Seasons::next($RUN) === $season
+    && strpos($vq, 'You\'re cleared to play') !== false && strpos($vq, 'It runs out soon.') === false && strpos($vr, 'It runs out soon.') !== false
+    && RSL_Rego::paid_ahead($sq, RSL_Rego::clearance_for($sq, $RUN), $RUN) === true && RSL_Rego::paid_ahead($sr, RSL_Rego::clearance_for($sr, $RUN), $RUN) === false,
+    wp_json_encode(RSL_Rego::clearance_for($sq, $RUN)));
+RSL_Seasons::set_current($season);
+
+// 12: waiting for a team with nothing to pay online: the card says why.
+$sw = $mk('sw');
+$reg($sw);
+RSL_Seasons::set_signup($OLD);
+$cand_keys = array($OLD);
+RSL_Free_Agents::join($sw, $OLD, array('division_pref' => 'either'), true);
+update_option(RSL_Rego::PRODUCT_OPTION, 0);
+$v = $page($sw);
+$check('26.12 waiting for a team, no season open and no yearly product: no rush, and why it can\'t be paid online', strpos($v, 'no rush') !== false
+    && strpos($v, 'No season is open for sign-up yet. Contact the league to pay.') !== false && strpos($v, 'add-to-cart=') === false);
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, 0);
+$v = $page($sw);
+$check('...with no product at all: online payment isn\'t set up yet', strpos($v, 'no rush') !== false && strpos($v, 'Online payment isn\'t set up yet') !== false);
+update_option(RSL_Rego::PRODUCT_OPTION, $year_id);
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, $season_id);
+RSL_Seasons::set_signup($S1);
+$cand_keys = array($S1, $S2, $S3, $RUN, $GONE, $OLD);
+
+// 13: the admin's 12-month rego says so only once it's saved, with its dates.
+$sy = $mk('sy'); $sz = $mk('sz');
+wp_set_current_user($admin);
+$msg = $admin_do(array('do' => 'grant_rego', 'who' => "rslr-sy-$suffix@example.test", 'kind' => 'year', 'start' => $today));
+$want = '12-month rego added for RSLR sy ' . $suffix . ' (' . date('j M Y', strtotime($today)) . ' – ' . date('j M Y', strtotime($today . ' +1 year -1 day')) . ').';
+$check('26.13 the admin\'s 12-month rego: added, naming its dates', $msg === $want && count($rows_for($sy)) === 1, $msg);
+$block_rego_insert = function ($q) {
+    $t = '`' . RSL_Database::table('regos') . '`';
+    return stripos(ltrim((string) $q), 'INSERT INTO ' . $t) === 0 ? str_replace($t, '`' . RSL_Database::table('regos') . '_unsaved`', $q) : $q;
+};
+$quiet_rego = $wpdb->suppress_errors(true);
+add_filter('query', $block_rego_insert);
+$msg = $admin_do(array('do' => 'grant_rego', 'who' => "rslr-sz-$suffix@example.test", 'kind' => 'year', 'start' => $today));
+remove_filter('query', $block_rego_insert);
+$block_rego_insert = null;
+$wpdb->suppress_errors($quiet_rego);
+$quiet_rego = null;
+$check('...one that couldn\'t be saved says so, and adds nothing', $msg === 'That 12-month rego couldn\'t be added — please try again.' && count($rows_for($sz)) === 0, $msg);
+
 } catch (Throwable $t) {
     $fails++;
     echo 'FAIL: threw ' . get_class($t) . ': ' . $t->getMessage() . ' (line ' . $t->getLine() . ")\n";
@@ -897,6 +954,12 @@ if ($cart_test && function_exists('WC') && WC()->cart) {
 wp_set_current_user(0);
 $_GET = array();
 $_REQUEST = array();
+if ($block_rego_insert) {
+    remove_filter('query', $block_rego_insert);
+}
+if ($quiet_rego !== null) {
+    $wpdb->suppress_errors($quiet_rego);
+}
 // The mail stop ($mail) stays on to the very end: deleting the accounts below must send nothing.
 if ($cands) {
     remove_filter('rsl_open_for_signup_candidates', $cands);

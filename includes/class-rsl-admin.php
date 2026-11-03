@@ -161,8 +161,14 @@ class RSL_Admin {
                     return $back_reg;
                 }
                 if ($kind === '' || $kind === 'year') {
-                    RSL_Rego::grant($user->ID, array('start' => $start, 'source' => 'manual', 'note' => $note));
-                    self::notice('success', '12-month rego added for ' . $user->display_name . '.');
+                    $id = RSL_Rego::grant($user->ID, array('start' => $start, 'source' => 'manual', 'note' => $note));
+                    $g = $id ? RSL_Rego::get($id) : null;
+                    if (!$g) {
+                        self::notice('error', 'That 12-month rego couldn\'t be added — please try again.');
+                    } else {
+                        self::notice('success', '12-month rego added for ' . $user->display_name
+                            . ' (' . date('j M Y', strtotime($g->start_date)) . ' – ' . date('j M Y', strtotime($g->end_date)) . ').');
+                    }
                     return $back_reg;
                 }
                 // Any season from this year to two years ahead (finished ones too, to record a payment after the

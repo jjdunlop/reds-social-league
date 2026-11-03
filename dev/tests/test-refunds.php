@@ -11,7 +11,9 @@
  * after its season ended stays ended when the dates move; the past-order
  * scan never guesses a season; a rego that can't be saved leaves an order
  * note; while the schema upgrade runs, the rego reads leave out the season
- * column and still count every row by its dates.
+ * column and still count every row by its dates. Rego notes (0.17.0) are
+ * cut on a whole character with the newest reason kept, so a long note's
+ * cancelled order paid again still gets its rego back.
  *
  *   wp eval-file dev/tests/test-refunds.php
  */
@@ -214,6 +216,28 @@ wc_get_order($ro2->get_id())->update_status('processing');
 $check('...set back to paid, the rego is given back, with a note', RSL_Rego::clearance($p2)['cleared'] && $notes(wc_get_order($ro2->get_id()), 'social rego given back') === 1);
 wc_get_order($ro2->get_id())->update_status('cancelled');
 $check('...and cancelling it again ends it again', !RSL_Rego::clearance($p2)['cleared']);
+// A long note (0.17.0): notes are cut on a whole character with the newest reason kept whole,
+// so the cancellation is still read when the order is paid again (a byte cut used to lose it).
+$p8 = $mk('p8');
+$ro8 = $make_order($rego, $p8, 55);
+$ro8->update_status('completed');
+$i8 = $item_of($ro8);
+$wpdb->update(RSL_Database::table('regos'), array('note' => str_repeat('ü', 120)), array('order_item_id' => $i8->get_id())); // 240 bytes
+$note_of = function ($item_id) use ($wpdb) { return (string) $wpdb->get_var($wpdb->prepare("SELECT note FROM " . RSL_Database::table('regos') . " WHERE order_item_id = %d", $item_id)); };
+$when = date('j M Y', strtotime($today));
+wc_get_order($ro8->get_id())->update_status('cancelled');
+$note8 = $note_of($i8->get_id());
+$check('a long note, cancelled: within 255 bytes, cut on a character (marked …), ending with the cancellation', strlen($note8) <= 255 && preg_match('//u', $note8) === 1
+    && substr($note8, -strlen('— Order cancelled ' . $when)) === '— Order cancelled ' . $when && strpos($note8, '…') !== false && !RSL_Rego::clearance($p8)['cleared'],
+    $note8 . ' (' . strlen($note8) . ' bytes)');
+wc_get_order($ro8->get_id())->update_status('processing');
+$note8 = $note_of($i8->get_id());
+$check('...paid again: the rego is back, the note still within 255 bytes and ending with the newest reason', RSL_Rego::clearance($p8)['cleared'] && strlen($note8) <= 255
+    && preg_match('//u', $note8) === 1 && substr($note8, -strlen('Order paid again ' . $when)) === 'Order paid again ' . $when, $note8 . ' (' . strlen($note8) . ' bytes)');
+$p8b = $mk('p8b');
+$g8 = RSL_Rego::grant($p8b, array('source' => 'manual', 'note' => str_repeat('é', 150))); // 300 bytes
+$n8 = (string) $wpdb->get_var($wpdb->prepare("SELECT note FROM " . RSL_Database::table('regos') . " WHERE id = %d", $g8));
+$check('a rego granted with a 300-byte note keeps at most 255 bytes, on a character', $g8 > 0 && $n8 !== '' && strlen($n8) <= 255 && preg_match('//u', $n8) === 1, strlen($n8) . ' bytes');
 $p5 = $mk('p5');
 $ro5 = $make_order($rego, $p5, 55);
 $ro5->update_status('processing');

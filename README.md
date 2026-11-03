@@ -6,6 +6,57 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## Start a team in one step, pick the season, and a menu that knows you (0.17.0)
+
+- **Start a team at registration in one go.** Choosing *Start a team* when
+  registering shows the team's details right there: which season, team
+  name, division, roughly what level and colour. One *Register* sends the
+  registration and the captain application together: "You're registered
+  and your application for TEAM is in. Once the league approves it you'll
+  get an invite link for your players."
+- If the application can't go in (no name, a name already taken that
+  season, already on a team that season…), the registration still stands
+  and the page says why. Where sending it again can work, it also opens
+  the team application with what was typed. Pressing *Register* twice
+  never reports an error for an application that went in.
+- **Pick the season.** *Find me a team* (when registering and on the league
+  page) and the captain application ask which season, from the seasons
+  open for sign-up with their dates; the season signing up now is chosen
+  already. Joining with an invite code keeps the team's own season.
+- The league page shows what you've signed up for in a later season too
+  (your team, your application waiting, or your place on the free agent
+  list) under *Later season*, and the season choices leave out seasons
+  you're already in. A later season's team's invite link works as soon as
+  the team is approved.
+- **The league page's menu item follows the player** (logged in only):
+  *Register for 2027* (the year of the season signing up now) until they've
+  registered, *My team* once they're on a team or have a team application
+  waiting, *My league* when they're registered without a team. Logged-out
+  visitors see the menu as it's set up, and so does a menu item that heads
+  a dropdown.
+- Admin season lists (Teams, Free Agents, Courts & Nights, Add a rego by
+  hand) now run from this year to two years ahead.
+- Fixes: rego notes are cut on a whole character and always keep the
+  newest reason, so a cancelled order paid again gets its rego back even
+  when the note was long; adding a 12-month rego by hand says so only once
+  it's saved, with its dates; the "runs out soon" note doesn't show when
+  the next season is already paid for; a free agent waiting for a team who
+  can't pay online is told why and to contact the league; a team that
+  couldn't be saved is reported as an error, never as sent; a free agent
+  form from a season the page no longer shows asks for a reload instead of
+  changing another season's entry.
+- Dev: `RSL_Seasons::signup_choices()` and `pick_open()` (the one check of
+  a season a player picks) and `default_pick()` (the season a picker
+  starts on); `RSL_Portal::season_field()`, `team_fields()`,
+  `apply_from_post()`, `apply_retry()` and the apply draft
+  (`APPLY_DRAFT_PREFIX`, a minute, like the flash);
+  `RSL_Portal::menu_labels()` on `wp_nav_menu_objects` (`menu_state()`,
+  `flush_menu_state()`; a dropdown heading keeps its words);
+  `RSL_Teams::joinable_seasons()` includes the later seasons open for
+  sign-up; `RSL_Teams::create()` reports a team it couldn't save;
+  `RSL_Rego::paid_ahead()`; `dev/lib-mail-stop.php`, used by every test
+  that makes accounts; `dev/tests/test-menu-label.php`.
+
 ## League emails in the club look (0.16.0)
 
 - **Every league email now has the club's email look**, the same as the

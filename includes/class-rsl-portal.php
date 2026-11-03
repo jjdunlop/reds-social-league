@@ -862,11 +862,18 @@ class RSL_Portal {
             $pay = self::rego_pay($user_id, 'rsl-btn', $card_season);
             return $pay !== '' ? '<p>' . $pay . '</p>' : '';
         }
-        $why = $open ? 'A season rego for ' . esc_html(RSL_Seasons::short_label($card_season)) . ' can\'t be bought online now.' : 'No season is open for sign-up yet.';
+        $why = self::rego_why($card_season);
         if (!$has_year) {
             return '<p>' . $why . ' Contact the league to pay.</p>';
         }
         return '<p>' . $why . ' Pay the yearly rego, or contact the league.</p><p>' . self::rego_pay($user_id, 'rsl-btn', $card_season, false) . '</p>';
+    }
+
+    /** Why no season rego can be bought for $card_season now (rego_pay_needed() and the waiting card). Escaped HTML. */
+    private static function rego_why($card_season) {
+        return RSL_Seasons::open_for_signup()
+            ? 'A season rego for ' . esc_html(RSL_Seasons::short_label($card_season)) . ' can\'t be bought online now.'
+            : 'No season is open for sign-up yet.';
     }
 
     private function render_dashboard($user_id, $code, $invited_to) {
@@ -944,9 +951,12 @@ class RSL_Portal {
                 <p><strong>Social rego:</strong> you'll need one (<?php echo esc_html(RSL_Rego::cost_words()); ?>) before your first game — pay once you're on a team, no rush. Full and life club members don't need one.</p>
                 <?php if (RSL_Rego::season_product_id()): ?>
                     <?php $pay = self::rego_pay($user_id, 'rsl-btn rsl-btn-secondary', $card_season); ?>
-                    <?php if ($pay !== ''): ?><p><?php echo $pay; ?></p><?php endif; ?>
+                    <?php if ($pay !== ''): ?><p><?php echo $pay; ?></p>
+                    <?php else: ?><p><?php echo self::rego_why($card_season); ?> Contact the league to pay.</p><?php endif; ?>
                 <?php elseif (RSL_Rego::pay_url('year')): ?>
                     <p><a class="rsl-btn rsl-btn-secondary" href="<?php echo esc_url(RSL_Rego::pay_url('year')); ?>">Pay the rego now</a></p>
+                <?php else: ?>
+                    <p class="rsl-hint">Online payment isn't set up yet — contact the league to pay.</p>
                 <?php endif; ?>
             </div>
         <?php else: ?>
@@ -958,7 +968,7 @@ class RSL_Portal {
                 ?>
                 <p><strong>&#10003; You're cleared to play<?php echo $from_later ? ' from ' . esc_html(RSL_Seasons::day_words($clear['from'], $words_year)) : ''; ?>.</strong>
                     <?php echo esc_html(RSL_Rego::cover_words($clear)); ?>.</p>
-                <?php if ($clear['by'] === 'rego' && $clear['until'] < date('Y-m-d', strtotime($today . ' +' . RSL_Rego::RENEW_DAYS . ' days'))): ?>
+                <?php if ($clear['by'] === 'rego' && $clear['until'] < date('Y-m-d', strtotime($today . ' +' . RSL_Rego::RENEW_DAYS . ' days')) && !RSL_Rego::paid_ahead($user_id, $clear, $card_season)): ?>
                     <?php
                     // A yearly rego starts after the run of regos covering the day it's paid
                     // (grant()), so "when this one ends" only while the run on this card covers
