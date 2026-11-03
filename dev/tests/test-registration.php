@@ -2,10 +2,13 @@
 /**
  * Registration, social rego and team-building paths:
  *  - registering (free) vs being cleared to play (full/life member, or a
- *    12-month rego bought through WooCommerce or added by an admin);
+ *    season or 12-month rego bought through WooCommerce or added by an admin);
  *  - captain applications: pending until an admin approves or declines;
  *  - joining with the invite code (instant) or by email invite (must accept);
- *  - privacy: captains see ✓/✗ only, never why; invitees aren't shown.
+ *  - privacy: captains see ✓/✗ only, never why; invitees aren't shown;
+ *  - the season rego (0.15.0): the season chosen, carried through the cart
+ *    and the order, its cover, the refusals, the league page, the rosters and
+ *    the admin screen. Throwaway products, orders, seasons and players only.
  *
  *   wp eval-file dev/tests/test-registration.php
  */
@@ -25,7 +28,10 @@ $check = function ($label, $ok, $detail = '') use (&$fails) {
     echo ($ok ? "OK: $label\n" : "FAIL: $label" . ($detail !== '' ? " — $detail" : '') . "\n");
 };
 $saved = array();
-foreach (array(RSL_Seasons::CURRENT_OPTION, RSL_Seasons::SIGNUP_OPTION, RSL_Rego::PRODUCT_OPTION) as $opt) { $saved[$opt] = get_option($opt, '__unset__'); }
+foreach (array(RSL_Seasons::CURRENT_OPTION, RSL_Seasons::SIGNUP_OPTION, RSL_Rego::PRODUCT_OPTION, RSL_Rego::SEASON_PRODUCT_OPTION, RSL_Courts::SETTINGS_OPTION,
+    RSL_Payments::PRODUCT_OPTION, 'woocommerce_prices_include_tax') as $opt) { $saved[$opt] = get_option($opt, '__unset__'); }
+// The yearly-only checks below mean what they say whatever the site has set.
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, 0);
 // Regos made during this test are removed at the end — including any the
 // past-order scan picks up for other (real, local) accounts.
 $rego_id_before = (int) $wpdb->get_var("SELECT COALESCE(MAX(id), 0) FROM " . RSL_Database::table('regos'));
@@ -45,6 +51,19 @@ $mk = function ($tag, $role = 'subscriber') use ($suffix, &$users) {
 };
 $reg = function ($u) { return RSL_Players::register($u, array('level' => 'social', 'years' => '1to3', 'positions' => array('setter', 'bogus'))); };
 $today = current_time('Y-m-d');
+// Every new date is worked out from the site's today, never the server clock.
+$day = function ($n) use ($today) { return date('Y-m-d', strtotime($today . ' ' . ($n < 0 ? '' : '+') . intval($n) . ' days')); };
+// Set before the try, so the cleanup can always run.
+$mem = $wpdb->prefix . 'team_memberships';
+$order = null;
+$orders = array();
+$products = array();
+$cands = null;
+$cand_keys = array();
+$test_seasons = array();
+$cart_test = false;
+
+try {
 
 // --- Registering ------------------------------------------------------------------
 $cap = $mk('cap'); $p1 = $mk('p1'); $p2 = $mk('p2'); $p3 = $mk('p3'); $out = $mk('out'); $admin = $mk('admin', 'administrator');
@@ -269,19 +288,445 @@ $free_view = $page($free);
 $check('a free agent who\'s already cleared isn\'t asked to pay in their season steps', strpos($free_view, 'Your season') !== false && strpos($free_view, 'Cleared to play') !== false && strpos($free_view, 'Pay your rego') === false);
 wp_set_current_user($admin);
 
-// --- Cleanup ---------------------------------------------------------------------------------------
+// --- Season rego (0.15.0) -------------------------------------------------------------------------
+// Far-past and far-future seasons only; the candidates filter lets open_for_signup() see them
+// (choices() is only this year and next). Every date from $today.
+$S1 = '2091-mid1';   // the sign-up season: today+7 to today+60
+$S2 = '2091-mid2';   // a later season: today+70 to today+130
+$S3 = '2091-post';   // no dates (covers its quarter)
+$RUN = '2090-post';  // running now: today-10 to today+20, earlier than the sign-up season
+$GONE = '2090-mid2'; // finished: today-70 to today-5
+$OLD = '1991-pre';   // long gone
+$test_seasons = array($S1, $S2, $S3, $RUN, $GONE, $OLD);
+RSL_Courts::save_settings($S1, array('start' => $day(7), 'end' => $day(60)));
+RSL_Courts::save_settings($S2, array('start' => $day(70), 'end' => $day(130)));
+RSL_Courts::save_settings($RUN, array('start' => $day(-10), 'end' => $day(20)));
+RSL_Courts::save_settings($GONE, array('start' => $day(-70), 'end' => $day(-5)));
+RSL_Courts::save_settings($OLD, array('start' => '1991-01-20', 'end' => '1991-03-17'));
+RSL_Seasons::set_signup($S1);
+$cand_keys = array($S1, $S2, $S3, $RUN, $GONE, $OLD);
+$cands = function ($keys) use (&$cand_keys) { return $cand_keys; };
+add_filter('rsl_open_for_signup_candidates', $cands);
+update_option('woocommerce_prices_include_tax', 'yes');
+$make_product = function ($name, $price) use (&$products) {
+    $p = new WC_Product_Simple();
+    $p->set_name($name);
+    $p->set_regular_price((string) $price);
+    $p->set_virtual(true);
+    $p->set_status('publish');
+    $p->save();
+    $products[] = $p;
+    return $p;
+};
+$yearly = $make_product("Yearly rego test $suffix", 40);
+$season_p = $make_product("Season rego test $suffix", 15);
+$topup_p = $make_product("Top-up test $suffix", 1);
+$year_id = $yearly->get_id();
+$season_id = $season_p->get_id();
+update_option(RSL_Rego::PRODUCT_OPTION, $year_id);
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, $season_id);
+update_option(RSL_Payments::PRODUCT_OPTION, $topup_p->get_id());
+$make_order = function ($product, $customer, $meta = array()) use (&$orders) {
+    $o = wc_create_order(array('customer_id' => $customer));
+    $item = new WC_Order_Item_Product();
+    $item->set_product($product);
+    $item->set_quantity(1);
+    $item->set_subtotal((float) $product->get_price());
+    $item->set_total((float) $product->get_price());
+    foreach ($meta as $k => $v) { $item->add_meta_data($k, $v, true); }
+    $o->add_item($item);
+    $o->calculate_totals();
+    $o->save();
+    $orders[] = $o;
+    return $o;
+};
+$pay = function ($o) { wc_get_order($o->get_id())->update_status('processing'); };
+$item_of = function ($o) { $items = wc_get_order($o->get_id())->get_items(); return reset($items); };
+$notes = function ($o, $text) {
+    return count(array_filter(wc_get_order_notes(array('order_id' => $o->get_id())), function ($n) use ($text) { return strpos($n->content, $text) !== false; }));
+};
+$rows_of = function ($o) use ($wpdb) { return $wpdb->get_results($wpdb->prepare("SELECT * FROM " . RSL_Database::table('regos') . " WHERE order_id = %d", $o->get_id())); };
+$rows_for = function ($u) use ($wpdb) { return $wpdb->get_results($wpdb->prepare("SELECT * FROM " . RSL_Database::table('regos') . " WHERE user_id = %d", $u)); };
+$sp = array();
+foreach (array('sa', 'sb', 'sc', 'sd', 'se', 'sf', 'sg', 'sh', 'si', 'sj', 'sk', 'sl', 'sm', 'sn') as $tag) { $sp[$tag] = $mk($tag); $reg($sp[$tag]); }
+$sa = $sp['sa']; $sb = $sp['sb']; $sc = $sp['sc']; $sd = $sp['sd']; $se = $sp['se']; $sf = $sp['sf']; $sg = $sp['sg'];
+$sh = $sp['sh']; $si = $sp['si']; $sj = $sp['sj']; $sk = $sp['sk']; $sl = $sp['sl']; $sm = $sp['sm']; $sn = $sp['sn'];
+$s1_label = RSL_Seasons::label_with_dates($S1, RSL_Seasons::span($S1));
+
+// 1-2: what's on offer, and the words and links.
+$open = RSL_Seasons::open_for_signup();
+$check('season rego: open for sign-up are the sign-up season and the later one with dates (none undated, earlier or finished)', array_keys($open) === array($S1, $S2), wp_json_encode($open));
+$check('prices from the products: $15 a season, $40 a year', RSL_Rego::price_label('season') === '$15' && RSL_Rego::price_label() === '$40', RSL_Rego::price_label('season') . ' / ' . RSL_Rego::price_label());
+$both = array(RSL_Rego::cost_words(), RSL_Rego::cost_sentence(), RSL_Rego::pay_url());
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, 0);
+$year_only = array(RSL_Rego::cost_words(), RSL_Rego::cost_sentence(), RSL_Rego::pay_url());
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, $season_id);
+update_option(RSL_Rego::PRODUCT_OPTION, 0);
+$season_only = array(RSL_Rego::cost_words(), RSL_Rego::cost_sentence(), RSL_Rego::pay_url());
+update_option(RSL_Rego::PRODUCT_OPTION, $year_id);
+$check('the wording follows the products set', $both[0] === '$15 a season or $40 a year' && $both[1] === 'It\'s $15 for a season or $40 for a year.'
+    && $year_only[0] === '$40, 12 months' && $year_only[1] === 'It\'s $40 and lasts 12 months.'
+    && $season_only[0] === '$15 a season' && $season_only[1] === 'It\'s $15 for a season.', wp_json_encode(array($both, $year_only, $season_only)));
+$check('emails link straight to checkout only while the yearly rego is the only one (else the league page, where the player picks the season)',
+    $both[2] === '' && $season_only[2] === '' && strpos($year_only[2], 'add-to-cart=' . $year_id) !== false);
+$check('pay links: the season one names its season; the yearly one never carries one', strpos(RSL_Rego::pay_url('season', $S2), 'add-to-cart=' . $season_id) !== false
+    && strpos(RSL_Rego::pay_url('season', $S2), RSL_Rego::SEASON_ARG . '=' . $S2) !== false
+    && strpos(RSL_Rego::pay_url('year'), 'add-to-cart=' . $year_id) !== false && strpos(RSL_Rego::pay_url('year'), RSL_Rego::SEASON_ARG) === false);
+
+// 3-9: paying.
+$oa = $make_order($season_p, $sa, array(RSL_Rego::SEASON_META => $S2));
+$pay($oa);
+$rows = $rows_of($oa);
+$check('a paid season rego covers its season, from its first night to its last, with a note on the order', count($rows) === 1 && $rows[0]->season === $S2
+    && $rows[0]->start_date === $day(70) && $rows[0]->end_date === $day(130) && $rows[0]->granted_end === $day(130) && $notes($oa, 'season rego given for') === 1, wp_json_encode($rows));
+$c = RSL_Rego::clearance_for($sa, $S2);
+$check('paid ahead: not cleared today, cleared for that season (judged on its first night)', !RSL_Rego::clearance($sa)['cleared'] && RSL_Rego::check_date($S2) === $day(70)
+    && $c['cleared'] && $c['by'] === 'rego' && $c['from'] === $day(70) && $c['season'] === $S2, wp_json_encode($c));
+wc_get_order($oa->get_id())->update_status('completed');
+RSL_Rego::scan_orders();
+$check('processing then completed, and the past-order scan: still one rego', count($rows_of($oa)) === 1);
+$ob = $make_order($season_p, $sb);
+$pay($ob);
+$rows = $rows_of($ob);
+$check('a season line that doesn\'t say its season, paid now: the sign-up season', count($rows) === 1 && $rows[0]->season === $S1 && $rows[0]->start_date === $day(7) && $rows[0]->end_date === $day(60), wp_json_encode($rows));
+$oc = $make_order($season_p, $sc, array(RSL_Rego::SEASON_META => $RUN));
+$pay($oc);
+$rows = $rows_of($oc);
+$check('bought while its season is running: from the payment date to its last night', count($rows) === 1 && $rows[0]->start_date === $today && $rows[0]->end_date === $day(20), wp_json_encode($rows));
+RSL_Rego::grant($sd, array('start' => $today, 'source' => 'manual', 'note' => 'cash'));
+$od = $make_order($season_p, $sd, array(RSL_Rego::SEASON_META => $S1));
+$pay($od);
+$rows = $rows_of($od);
+$check('a season rego never chains: it starts on its first night inside a running yearly rego, and the order says they were covered', count($rows) === 1
+    && $rows[0]->start_date === $day(7) && $rows[0]->end_date === $day(60) && $notes($od, 'already covered for every game night') === 1, wp_json_encode($rows));
+$oe = $make_order($season_p, $se, array(RSL_Rego::SEASON_META => $S3));
+$pay($oe);
+$rows = $rows_of($oe);
+$check('a season with no dates covers its quarter, and the rego and the order say so', count($rows) === 1 && $rows[0]->start_date === '2091-10-01'
+    && $rows[0]->end_date === '2091-12-31' && strpos($rows[0]->note, 'dates to come') !== false && $notes($oe, 'no game nights set yet') === 1, wp_json_encode($rows));
+$c = RSL_Rego::clearance_for($se, $S3);
+$check('...and it counts for that season now (judged on today, through the paid row)', $c['cleared'] && $c['from'] === '2091-10-01' && $c['season'] === $S3, wp_json_encode($c));
+$o9 = $make_order($season_p, $sk, array(RSL_Rego::SEASON_META => $OLD));
+$pay($o9);
+RSL_Rego::on_order_paid($o9->get_id());
+$check('a season that finished before the order was paid: no rego, one note', count($rows_of($o9)) === 0 && $notes($o9, 'which finished on') === 1);
+
+// 10: the season on the order line, on order screens, and Order again.
+$yl = new WC_Order_Item_Product();
+RSL_Rego::tag_order_item($yl, 'k', array('product_id' => $year_id, 'variation_id' => 0, RSL_Rego::CART_SEASON => $S1));
+$sl_item = new WC_Order_Item_Product();
+RSL_Rego::tag_order_item($sl_item, 'k', array('product_id' => $season_id, 'variation_id' => 0, RSL_Rego::CART_SEASON => $S1));
+$check('the order line keeps the season; a yearly line never gets one', $yl->get_meta(RSL_Rego::SEASON_META) === '' && $sl_item->get_meta(RSL_Rego::SEASON_META) === $S1);
+$oy = $make_order($yearly, $sk);
+$pay($oy);
+$rows = $rows_of($oy);
+$check('a paid yearly rego has no season', count($rows) === 1 && $rows[0]->season === '' && $rows[0]->granted_end === $rows[0]->end_date, wp_json_encode($rows));
+$o10 = $make_order($season_p, $sk, array(RSL_Rego::SEASON_META => $S1));
+$i10 = $item_of($o10);
+$season_entries = function ($formatted) {
+    $n = 0;
+    $value = '';
+    $raw = false;
+    foreach ((array) $formatted as $m) {
+        if ($m->display_key === 'Season') { $n++; $value = $m->display_value; }
+        if ($m->display_key === RSL_Rego::SEASON_META) { $raw = true; }
+    }
+    return array($n, $value, $raw);
+};
+$admin_meta = $season_entries($i10->get_formatted_meta_data(''));
+$receipt_meta = $season_entries($i10->get_formatted_meta_data());
+$check('the admin order screen and the receipt show the season once, by its short label', $admin_meta === array(1, '2091 Mid-season 1', false)
+    && $receipt_meta === array(1, '2091 Mid-season 1', false), wp_json_encode(array($admin_meta, $receipt_meta)));
+$o10 = wc_get_order($o10->get_id());
+$again = apply_filters('woocommerce_order_again_cart_item_data', array(), $i10, $o10);
+$old_line = new WC_Order_Item_Product();
+$old_line->set_product($season_p);
+$old_line->add_meta_data(RSL_Rego::SEASON_META, $OLD, true);
+$again_old = apply_filters('woocommerce_order_again_cart_item_data', array(), $old_line, $o10);
+$year_line = new WC_Order_Item_Product();
+$year_line->set_product($yearly);
+$again_year = apply_filters('woocommerce_order_again_cart_item_data', array(), $year_line, $o10);
+$check('Order again keeps the season while it\'s open, else the sign-up season; a yearly line gets none',
+    isset($again[RSL_Rego::CART_SEASON]) && $again[RSL_Rego::CART_SEASON] === $S1 && isset($again_old[RSL_Rego::CART_SEASON]) && $again_old[RSL_Rego::CART_SEASON] === $S1
+    && !isset($again_year[RSL_Rego::CART_SEASON]), wp_json_encode(array($again, $again_old, $again_year)));
+
+// 11: refused before payment.
+$check('a season that isn\'t open for sign-up is refused', strpos(RSL_Rego::season_add_error($sa, $OLD), 'isn\'t open for sign-up') !== false
+    && strpos(RSL_Rego::season_add_error($sa, $S3), 'isn\'t open for sign-up') !== false);
+$check('a season already paid for is refused, saying so; another season is fine', strpos(RSL_Rego::season_add_error($sa, $S2), 'already covered for every game night of 2091 Mid-season 2') !== false
+    && RSL_Rego::season_add_error($sa, $S1) === '', RSL_Rego::season_add_error($sa, $S2));
+if (RSL_Rego::membership_source_available()) {
+    $wpdb->insert($mem, array('user_id' => $sf, 'tier' => 'full-member', 'start_date' => $day(-30), 'end_date' => $day(60), 'source' => 'manual'));
+    $covered = RSL_Rego::season_add_error($sf, $S1);
+    $wpdb->update($mem, array('end_date' => $day(30)), array('user_id' => $sf));
+    $short = RSL_Rego::season_add_error($sf, $S1);
+    RSL_Rego::grant($sf, array('start' => $day(31), 'source' => 'manual'));
+    $mixed = RSL_Rego::season_add_error($sf, $S1);
+    $check('membership through the season: covered; ending part way: not; membership then a rego, end to end: covered',
+        strpos($covered, 'already covered') !== false && $short === '' && strpos($mixed, 'already covered') !== false, wp_json_encode(array($covered, $short, $mixed)));
+} else {
+    echo "SKIP: membership checks for the season rego need the Club Manager\n";
+}
+
+// 12-13: through WooCommerce's add-to-cart and cart, as throwaway players only, with
+// WooCommerce's shutdown saves removed so nothing from this cart reaches a session or customer.
+if (!function_exists('WC') || !WC()->session || !WC()->cart) {
+    echo "SKIP: no WooCommerce session or cart under WP-CLI\n";
+} else {
+    $cart_test = true;
+    remove_action('shutdown', array(WC()->session, 'save_data'), 20);
+    if (WC()->customer) {
+        remove_action('shutdown', array(WC()->customer, 'save'), 10);
+    }
+    $was = get_current_user_id();
+    $holding = function ($type, $text) {
+        return count(array_filter(wc_get_notices($type), function ($n) use ($text) { return strpos(is_array($n) ? (string) $n['notice'] : (string) $n, $text) !== false; }));
+    };
+    $ask = function ($s) { $_GET = $_REQUEST = $s === null ? array() : array(RSL_Rego::SEASON_ARG => $s); };
+    $rego_lines = function () use ($year_id, $season_id) {
+        return array_values(array_filter(WC()->cart->get_cart(), function ($line) use ($year_id, $season_id) {
+            return in_array(intval($line['product_id']), array($year_id, $season_id), true);
+        }));
+    };
+
+    wp_set_current_user($sa);
+    WC()->cart->empty_cart();
+    wc_clear_notices();
+    $ask($S2);
+    $refused = apply_filters('woocommerce_add_to_cart_validation', true, $season_id, 1);
+    $check('add to cart: a season the player is already covered for is refused, with one sentence', $refused === false && wc_notice_count('error') === 1
+        && $holding('error', 'already covered') === 1, wp_json_encode(wc_get_notices('error')));
+    wc_clear_notices();
+    $ask($S1);
+    $check('...another season can go in', apply_filters('woocommerce_add_to_cart_validation', true, $season_id, 1) === true && wc_notice_count('error') === 0);
+    $check('...and the yearly rego is unchanged (no covered check)', apply_filters('woocommerce_add_to_cart_validation', true, $year_id, 1) === true);
+    $ask(null);
+    $check('Order again: the season it passes is the one checked', apply_filters('woocommerce_add_to_cart_validation', true, $season_id, 1, 0, array(), array(RSL_Rego::CART_SEASON => $S2)) === false);
+    WC()->cart->empty_cart();
+    wc_clear_notices();
+
+    wp_set_current_user($sg);
+    WC()->cart->empty_cart();
+    wc_clear_notices();
+    $ask($S1);
+    WC()->cart->add_to_cart($season_id);
+    $lines = $rego_lines();
+    $shown = $lines ? (array) apply_filters('woocommerce_get_item_data', array(), $lines[0]) : array();
+    $shows = (bool) array_filter($shown, function ($d) use ($s1_label) { return isset($d['key'], $d['value']) && $d['key'] === 'Season' && $d['value'] === $s1_label; });
+    $check('cart: the season rego line carries the season chosen, and shows it with its dates', count($lines) === 1 && isset($lines[0][RSL_Rego::CART_SEASON])
+        && $lines[0][RSL_Rego::CART_SEASON] === $S1 && $shows, wp_json_encode($shown));
+    $before = wc_notice_count('error');
+    $check('...the same season again is refused quietly (a refreshed pay link)', apply_filters('woocommerce_add_to_cart_validation', true, $season_id, 1) === false && wc_notice_count('error') === $before);
+    $ask($S2);
+    $passes = apply_filters('woocommerce_add_to_cart_validation', true, $season_id, 1);
+    WC()->cart->add_to_cart($season_id);
+    $lines = $rego_lines();
+    $check('...another season replaces it: one rego line', $passes === true && count($lines) === 1 && isset($lines[0][RSL_Rego::CART_SEASON]) && $lines[0][RSL_Rego::CART_SEASON] === $S2);
+    WC()->cart->add_to_cart($year_id);
+    $lines = $rego_lines();
+    $check('...so does the yearly rego, which carries no season', count($lines) === 1 && intval($lines[0]['product_id']) === $year_id && !isset($lines[0][RSL_Rego::CART_SEASON]));
+    remove_action('woocommerce_add_to_cart', array('RSL_Rego', 'keep_one_rego'), 10);
+    $ask($S1);
+    WC()->cart->add_to_cart($season_id);
+    add_action('woocommerce_add_to_cart', array('RSL_Rego', 'keep_one_rego'), 10, 4);
+    $two = count($rego_lines());
+    wc_clear_notices();
+    RSL_Rego::check_cart();
+    $check('two rego lines (as a saved cart merged at login leaves them): checkout is stopped', $two === 2 && $holding('error', 'Only one social rego can be bought at a time') === 1);
+    do_action('woocommerce_cart_loaded_from_session', WC()->cart);
+    $lines = $rego_lines();
+    $check('...and tidied when the cart loads: the last one chosen stays, with a notice', count($lines) === 1 && isset($lines[0][RSL_Rego::CART_SEASON])
+        && $lines[0][RSL_Rego::CART_SEASON] === $S1 && $holding('notice', 'Only one social rego can be in the cart') === 1);
+    $before = wc_notice_count('error');
+    RSL_Rego::check_cart();
+    $check('...then checkout goes ahead', wc_notice_count('error') === $before);
+    WC()->cart->empty_cart();
+    wc_clear_notices();
+    $ask(null);
+    wp_set_current_user($was);
+}
+
+// 14-17: the league page.
+$v = $page($sg);
+$at_season = strpos($v, 'Pay the $15 season rego');
+$at_year = strpos($v, 'Pay the $40 yearly rego');
+$check('league page, both products: the price, the season form (the sign-up season chosen, the later one offered), then the yearly rego',
+    strpos($v, 'It\'s $15 for a season or $40 for a year.') !== false && strpos($v, 'name="add-to-cart" value="' . $season_id . '"') !== false
+    && strpos($v, '<select name="rsl_season"') !== false && strpos($v, 'value="' . $S1 . '" selected=\'selected\'') !== false && strpos($v, 'value="' . $S2 . '"') !== false
+    && strpos($v, esc_html($s1_label)) !== false && $at_season !== false && $at_year !== false && $at_season < $at_year && strpos($v, 'add-to-cart=' . $year_id) !== false);
+update_option(RSL_Rego::PRODUCT_OPTION, 0);
+$v = $page($sg);
+$check('season only: the season form, no yearly rego', strpos($v, 'name="rsl_season"') !== false && strpos($v, 'yearly rego') === false);
+update_option(RSL_Rego::PRODUCT_OPTION, $year_id);
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, 0);
+$v = $page($sg);
+$check('yearly only: as before', strpos($v, 'It\'s $40 and lasts 12 months.') !== false && strpos($v, 'Pay the $40 rego') !== false && strpos($v, 'rsl_season') === false);
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, $season_id);
+$v = $page($sa);
+$check('paid for the later season: only the sign-up season is offered, named beside the button', strpos($v, 'type="hidden" name="rsl_season" value="' . $S1 . '"') !== false
+    && strpos($v, esc_html($s1_label)) !== false && strpos($v, '<select name="rsl_season"') === false && strpos($v, 'value="' . $S2 . '"') === false);
+$v = $page($sb);
+$check('paid ahead for the season: cleared from its first night, saying by what; nothing to pay', strpos($v, 'You\'re cleared to play from ' . RSL_Seasons::day_words($day(7), 2091)) !== false
+    && strpos($v, 'Season rego, 2091 Mid-season 1, until') !== false && strpos($v, 'name="rsl_season"') === false);
+$v = $page($sc);
+$check('a rego that runs out before the season ends: it runs out soon, offering the seasons to come', strpos($v, 'It runs out soon.') !== false
+    && strpos($v, '<select name="rsl_season"') !== false && strpos($v, 'value="' . $S1 . '"') !== false && strpos($v, 'value="' . $S2 . '"') !== false);
+
+// 18-19: rosters, judged for the team's season.
+$steam = RSL_Teams::create($S1, array('name' => "Season Team $suffix", 'division' => 'ranked'));
+RSL_Teams::add_member($steam->id, $sb, 'captain');
+RSL_Teams::add_member($steam->id, $sn);
+$v = $page($sb);
+$roster = (string) substr($v, (int) strpos($v, '<h4>Players'), (int) strpos($v, '<h4>Add players') - (int) strpos($v, '<h4>Players'));
+$check('captain\'s roster for the team\'s season: the captain who paid ahead is cleared, the other player isn\'t (both judged on its first night)',
+    strpos($roster, '&#10003; Cleared') !== false && strpos($roster, '&#10007; Needs rego') !== false && !RSL_Rego::clearance($sb)['cleared'], $roster);
+$described = RSL_Rego::describe(RSL_Rego::clearance_for($sb, $S1));
+$check('admin wording for a season rego', $described === 'Rego paid (2091 Mid-season 1, until ' . date('j M Y', strtotime($day(60))) . ')', $described);
+
+// 20: the admin's Registration screen.
+wp_set_current_user($admin);
+$nonce = wp_create_nonce('rsl_team_action');
+$admin_do = function ($fields) use ($nonce, $admin, $season) {
+    delete_transient(RSL_Admin::NOTICE_PREFIX . $admin);
+    RSL_Admin::process(array_merge(array('rsl_nonce' => $nonce, 'season' => $season), $fields));
+    $n = get_transient(RSL_Admin::NOTICE_PREFIX . $admin);
+    return is_array($n) ? $n['message'] : '';
+};
+update_option(RSL_Rego::PRODUCT_OPTION, 0);
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, 0);
+$admin_do(array('do' => 'save_rego_product', 'product_id' => $year_id, 'season_product_id' => $season_id));
+$check('admin saves both rego products', RSL_Rego::product_id() === $year_id && RSL_Rego::season_product_id() === $season_id);
+$msg = $admin_do(array('do' => 'save_rego_product', 'product_id' => $season_id, 'season_product_id' => $season_id));
+$check('...one product for both is refused, changing neither', strpos($msg, 'need different products') !== false && RSL_Rego::product_id() === $year_id && RSL_Rego::season_product_id() === $season_id, $msg);
+$m1 = $admin_do(array('do' => 'save_rego_product', 'product_id' => $topup_p->get_id(), 'season_product_id' => $season_id));
+$m2 = $admin_do(array('do' => 'save_rego_product', 'product_id' => $year_id, 'season_product_id' => $topup_p->get_id()));
+$check('...and the team top-up product can\'t be either one', strpos($m1, 'can\'t be a rego product') !== false && strpos($m2, 'can\'t be a rego product') !== false
+    && RSL_Rego::product_id() === $year_id && RSL_Rego::season_product_id() === $season_id, $m1 . ' / ' . $m2);
+$_GET = array('page' => RSL_Admin::REG_PAGE);
+ob_start(); (new RSL_Admin())->render_registration(); $rp = ob_get_clean();
+$season_select = (string) substr($rp, (int) strpos($rp, 'name="season_product_id"'));
+$season_select = (string) substr($season_select, 0, (int) strpos($season_select, '</select>'));
+$open_group = (string) substr($rp, (int) strpos($rp, '<optgroup label="Seasons open for sign-up">'));
+$open_group = (string) substr($open_group, 0, (int) strpos($open_group, '</optgroup>'));
+$check('the Registration page: both product choices, and the kind of rego (the open seasons, then the others)', strpos($rp, 'name="product_id"') !== false
+    && strpos($season_select, 'value="' . $season_id . '"  selected=\'selected\'') !== false && strpos($rp, 'name="kind"') !== false
+    && strpos($open_group, 'value="' . $S1 . '"') !== false && strpos($open_group, 'value="' . $S2 . '"') !== false && strpos($rp, '<optgroup label="Other seasons">') !== false);
+$msg = $admin_do(array('do' => 'grant_rego', 'who' => "rslr-sl-$suffix@example.test", 'kind' => $S1, 'start' => $today));
+$rows = $rows_for($sl);
+$check('admin adds a season rego by hand: that season\'s dates', count($rows) === 1 && $rows[0]->season === $S1 && $rows[0]->start_date === $day(7) && $rows[0]->end_date === $day(60)
+    && strpos($msg, 'Season rego for 2091 Mid-season 1 added') !== false, $msg);
+$msg = $admin_do(array('do' => 'grant_rego', 'who' => "rslr-sm-$suffix@example.test", 'kind' => $S1, 'start' => 'abc'));
+$rows = $rows_for($sm);
+$check('...a start date that isn\'t a date reads as today', count($rows) === 1 && $rows[0]->start_date === $day(7) && $rows[0]->end_date === $day(60), $msg);
+$msg = $admin_do(array('do' => 'grant_rego', 'who' => "rslr-sn-$suffix@example.test", 'kind' => $OLD, 'start' => $today));
+$check('...a season outside this year and next is refused', $msg === 'Pick 12 months or a season.' && count($rows_for($sn)) === 0, $msg);
+$finished = '';
+foreach (array_keys(RSL_Seasons::choices()) as $k) {
+    $ks = RSL_Seasons::span($k);
+    if ($ks && $ks['end'] < $today) { $finished = $k; break; }
+}
+if ($finished === '') {
+    echo "SKIP: no season this year or next has finished yet\n";
+} else {
+    $msg = $admin_do(array('do' => 'grant_rego', 'who' => "rslr-sn-$suffix@example.test", 'kind' => $finished, 'start' => $today));
+    $check('...a season that ended before the start date is refused', strpos($msg, 'before the start date') !== false && count($rows_for($sn)) === 0, $msg);
+}
+$_GET = array('page' => RSL_Admin::REG_PAGE);
+ob_start(); (new RSL_Admin())->render_registration(); $rp = ob_get_clean();
+$check('the regos list shows the season', strpos($rp, 'Season: 2091 Mid-season 1') !== false);
+
+// 21: the gap between seasons (the current season pinned to one that has finished).
+RSL_Seasons::set_current($GONE);
+$gteam = RSL_Teams::create($GONE, array('name' => "Gone Team $suffix", 'division' => 'ranked'));
+RSL_Teams::add_member($gteam->id, $sh, 'captain');
+RSL_Rego::grant($sh, array('source' => 'manual', 'season' => $S1));
+$v = $page($sh);
+$check('the gap: on a team in the season just finished, paid for the next: judged for the next, so cleared from its first night',
+    RSL_Seasons::playing_season($GONE, $S1, true) === $S1 && strpos($v, 'You\'re cleared to play from ' . RSL_Seasons::day_words($day(7), 2091)) !== false
+    && strpos($v, 'You need a social rego') === false && strpos($v, 'name="rsl_season"') === false);
+RSL_Seasons::set_signup($GONE);
+$first_open = array_keys(RSL_Seasons::open_for_signup());
+$check('...with the sign-up season pinned to the finished one too: the first season open for sign-up', RSL_Seasons::playing_season(RSL_Seasons::current(), RSL_Seasons::signup(), true) === $RUN
+    && $first_open && $first_open[0] === $RUN, wp_json_encode($first_open));
+RSL_Seasons::set_signup($S1);
+RSL_Seasons::set_current($season);
+
+// 22: the overlap (a running season that isn't open for sign-up).
+RSL_Seasons::set_current($RUN);
+$rteam = RSL_Teams::create($RUN, array('name' => "Run Team $suffix", 'division' => 'ranked'));
+RSL_Teams::add_member($rteam->id, $si, 'captain');
+$v = $page($si);
+$check('the overlap: on a team in a running season that can\'t be bought: the yearly rego only, and why', RSL_Seasons::playing_season($RUN, $S1, true) === $RUN
+    && strpos($v, 'You need a social rego') !== false && strpos($v, 'A season rego for 2090 Post-season can\'t be bought online now. Pay the yearly rego, or contact the league.') !== false
+    && strpos($v, 'Pay the $40 yearly rego') !== false && strpos($v, 'name="rsl_season"') === false && strpos($v, 'isn\'t set up yet') === false);
+update_option(RSL_Rego::PRODUCT_OPTION, 0);
+$v = $page($si);
+$check('...with no yearly product: contact the league', strpos($v, 'can\'t be bought online now. Contact the league to pay.') !== false
+    && strpos($v, 'add-to-cart=') === false && strpos($v, 'isn\'t set up yet') === false);
+update_option(RSL_Rego::PRODUCT_OPTION, $year_id);
+RSL_Seasons::set_current($season);
+
+// 23: no season open for sign-up at all.
+RSL_Seasons::set_signup($OLD);
+$cand_keys = array($OLD);
+$v = $page($sj);
+$check('no season open for sign-up: says so, and offers the yearly rego', RSL_Seasons::open_for_signup() === array()
+    && strpos($v, 'No season is open for sign-up yet. Pay the yearly rego, or contact the league.') !== false && strpos($v, 'add-to-cart=' . $year_id) !== false);
+update_option(RSL_Rego::PRODUCT_OPTION, 0);
+$v = $page($sj);
+$check('...with no yearly product: contact the league', strpos($v, 'No season is open for sign-up yet. Contact the league to pay.') !== false && strpos($v, 'isn\'t set up yet') === false);
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, 0);
+$v = $page($sj);
+$check('...with neither product: online payment isn\'t set up', strpos($v, 'Online payment isn\'t set up yet') !== false);
+update_option(RSL_Rego::PRODUCT_OPTION, $year_id);
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, $season_id);
+RSL_Seasons::set_signup($S1);
+$cand_keys = array($S1, $S2, $S3, $RUN, $GONE, $OLD);
+
+// 24: a paid season rego keeps counting for its season when the dates move.
+RSL_Courts::save_settings($S1, array('start' => $day(-1), 'end' => $day(60)));
+$c = RSL_Rego::clearance_for($sb, $S1);
+$check('the first night moved earlier after the sale: the paid row still counts for its season (and isn\'t sold again)', !RSL_Rego::clearance($sb)['cleared']
+    && $c['cleared'] && $c['by'] === 'rego' && $c['until'] === $day(60) && RSL_Rego::season_covered($sb, $S1)
+    && strpos(RSL_Rego::season_add_error($sb, $S1), 'already covered') !== false && !isset(RSL_Rego::season_choices($sb)[$S1]), wp_json_encode($c));
+RSL_Courts::save_settings($S1, array('start' => $day(7), 'end' => $day(60)));
+
+} catch (Throwable $t) {
+    $fails++;
+    echo 'FAIL: threw ' . get_class($t) . ': ' . $t->getMessage() . ' (line ' . $t->getLine() . ")\n";
+} finally {
+// --- Cleanup (runs after a failure too) --------------------------------------------------------------
+if ($cart_test && function_exists('WC') && WC()->cart) {
+    WC()->cart->empty_cart(false); // in memory only: the shutdown saves were removed, and no one's saved cart is touched
+    wc_clear_notices();
+}
 wp_set_current_user(0);
 $_GET = array();
+$_REQUEST = array();
 remove_filter('pre_wp_mail', $mail, 10);
-foreach (array($order->get_id()) as $oid) { $o = wc_get_order($oid); if ($o) { $o->delete(true); } }
-$team_ids = $wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $season));
-foreach ($team_ids as $tid) {
-    $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $tid));
-    $wpdb->delete(RSL_Database::table('invites'), array('team_id' => $tid));
+if ($cands) {
+    remove_filter('rsl_open_for_signup_candidates', $cands);
 }
-$wpdb->delete(RSL_Database::table('teams'), array('season' => $season));
-$wpdb->delete(RSL_Database::table('free_agents'), array('season' => $season));
-$wpdb->delete(RSL_Database::table('join_requests'), array('season' => $season));
+foreach (array_merge($order ? array($order) : array(), $orders) as $o) {
+    $o = wc_get_order($o->get_id());
+    if (!$o) {
+        continue;
+    }
+    foreach ($o->get_refunds() as $refund) { $refund->delete(true); }
+    $wpdb->delete(RSL_Database::table('regos'), array('order_id' => $o->get_id()));
+    $o->delete(true);
+}
+foreach ($products as $p) { $p->delete(true); }
+foreach (array_unique(array_merge(array($season), $test_seasons)) as $s_key) {
+    $team_ids = $wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $s_key));
+    foreach ($team_ids as $tid) {
+        $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $tid));
+        $wpdb->delete(RSL_Database::table('invites'), array('team_id' => $tid));
+    }
+    $wpdb->delete(RSL_Database::table('teams'), array('season' => $s_key));
+    $wpdb->delete(RSL_Database::table('free_agents'), array('season' => $s_key));
+    $wpdb->delete(RSL_Database::table('join_requests'), array('season' => $s_key));
+}
 $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('outbox') . " WHERE to_email LIKE %s", '%-' . $suffix . '@example.test'));
 $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('regos') . " WHERE id > %d", $rego_id_before));
 foreach ($users as $u) {
@@ -292,4 +737,5 @@ foreach ($users as $u) {
     wp_delete_user($u);
 }
 foreach ($saved as $opt => $value) { if ($value === '__unset__') { delete_option($opt); } else { update_option($opt, $value); } }
+}
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

@@ -5,7 +5,10 @@
  * cancelled rego ends it, a cancelled order paid again puts either back,
  * admins can remove a rego, order notes. Also the
  * rego product (one at a time, its price label) and the "can't check
- * memberships" state.
+ * memberships" state. Season regos (0.15.0): refunds, cancellations and an
+ * order paid again restore the end they were granted with; a row kept
+ * counting by its season's moved dates can still be ended; the past-order
+ * scan never guesses a season.
  *
  *   wp eval-file dev/tests/test-refunds.php
  */
@@ -26,8 +29,18 @@ $check = function ($label, $ok, $detail = '') use (&$fails) {
 $saved = array(
     RSL_Payments::PRODUCT_OPTION => get_option(RSL_Payments::PRODUCT_OPTION, '__unset__'),
     RSL_Rego::PRODUCT_OPTION => get_option(RSL_Rego::PRODUCT_OPTION, '__unset__'),
+    RSL_Rego::SEASON_PRODUCT_OPTION => get_option(RSL_Rego::SEASON_PRODUCT_OPTION, '__unset__'),
+    RSL_Seasons::SIGNUP_OPTION => get_option(RSL_Seasons::SIGNUP_OPTION, '__unset__'),
+    RSL_Courts::SETTINGS_OPTION => get_option(RSL_Courts::SETTINGS_OPTION, '__unset__'),
     'woocommerce_prices_include_tax' => get_option('woocommerce_prices_include_tax', '__unset__'),
 );
+// Before anything runs: the past-order scans below must only ever see this file's products
+// (a real season product's paid orders would otherwise be granted to real accounts).
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, 0);
+// Regos made during this test are removed at the end, whatever made them.
+$rego_id_before = (int) $wpdb->get_var("SELECT COALESCE(MAX(id), 0) FROM " . RSL_Database::table('regos'));
+$today = current_time('Y-m-d');
+$day = function ($n) use ($today) { return date('Y-m-d', strtotime($today . ' ' . ($n < 0 ? '' : '+') . intval($n) . ' days')); };
 add_filter('pre_wp_mail', '__return_true');
 
 $users = array();
@@ -77,6 +90,8 @@ $line_refund = function ($order, $item, $amount, $qty = 0) {
     return wc_create_refund(array('order_id' => $order->get_id(), 'amount' => $amount, 'reason' => 'Test',
         'line_items' => array($item->get_id() => array('qty' => $qty, 'refund_total' => $amount, 'refund_tax' => array()))));
 };
+
+try {
 
 // --- Top-ups ---------------------------------------------------------------------------------------------
 $topup = $make_product("Top-up test $suffix", 1);
@@ -201,6 +216,138 @@ RSL_Admin::process(array('rsl_nonce' => wp_create_nonce('rsl_team_action'), 'do'
 $check('admin removes it: no longer cleared', !RSL_Rego::clearance($p3)['cleared'] && RSL_Rego::revoke($g3) === true);
 $check('removing one that isn\'t there says so', is_wp_error(RSL_Rego::revoke(0)));
 
+// --- Season regos (0.15.0) --------------------------------------------------------------------------------
+// Far-future seasons, every date from $today.
+$AHEAD = '2094-mid1';  // today+5 to today+50
+$NOW = '2093-post';    // today-10 to today+40
+$MOVE = '2093-mid2';   // today-30 to today-2 (its dates move later below)
+$SHRINK = '2094-mid2'; // today+5 to today+50 (shortened below)
+RSL_Courts::save_settings($AHEAD, array('start' => $day(5), 'end' => $day(50)));
+RSL_Courts::save_settings($NOW, array('start' => $day(-10), 'end' => $day(40)));
+RSL_Courts::save_settings($MOVE, array('start' => $day(-30), 'end' => $day(-2)));
+RSL_Courts::save_settings($SHRINK, array('start' => $day(5), 'end' => $day(50)));
+$season_rego = $make_product("Season rego test $suffix", 15);
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, $season_rego->get_id());
+$row_for = function ($item) use ($wpdb) { return $wpdb->get_row($wpdb->prepare("SELECT * FROM " . RSL_Database::table('regos') . " WHERE order_item_id = %d", $item->get_id())); };
+$rows_of = function ($order) use ($wpdb) { return $wpdb->get_results($wpdb->prepare("SELECT * FROM " . RSL_Database::table('regos') . " WHERE order_id = %d", $order->get_id())); };
+$full = function ($item) { return round((float) $item->get_total() + (float) $item->get_total_tax(), 2); };
+
+$check('the season rego is sold one at a time, at its own price', wc_get_product($season_rego->get_id())->is_sold_individually() && RSL_Rego::price_label('season') === '$15', RSL_Rego::price_label('season'));
+
+$p6 = $mk('p6');
+$so = $make_order($season_rego, $p6, 15, array(RSL_Rego::SEASON_META => $AHEAD));
+$si = $item_of($so);
+$so->update_status('processing');
+$g = $row_for($si);
+$check('set-up: a season rego bought ahead', $g && $g->season === $AHEAD && $g->start_date === $day(5) && $g->end_date === $day(50), wp_json_encode($g));
+$line_refund($so, $si, $full($si), 1);
+$g = $row_for($si);
+$check('refunding a season rego bought ahead ends it whole (it hadn\'t started), noted on the order', $g && RSL_Rego::is_removed($g) && strpos($g->note, 'Refunded') !== false
+    && $notes(wc_get_order($so->get_id()), 'social rego ended') === 1 && !RSL_Rego::clearance_for($p6, $AHEAD)['cleared'], wp_json_encode($g));
+
+$p7 = $mk('p7');
+$so = $make_order($season_rego, $p7, 15, array(RSL_Rego::SEASON_META => $NOW));
+$si = $item_of($so);
+$so->update_status('processing');
+$g = $row_for($si);
+$check('set-up: a running season rego, from today to its last night', $g && $g->start_date === $today && $g->end_date === $day(40) && RSL_Rego::clearance($p7)['cleared'], wp_json_encode($g));
+wc_get_order($so->get_id())->update_status('cancelled');
+$g = $row_for($si);
+$check('cancelled: it ends before today, not cleared', $g->end_date < $today && !RSL_Rego::clearance($p7)['cleared'] && !RSL_Rego::clearance_for($p7, $NOW)['cleared'], wp_json_encode($g));
+wc_get_order($so->get_id())->update_status('processing');
+$g = $row_for($si);
+$check('paid again: the end it was granted comes back (not 12 months), with a note', $g->end_date === $day(40) && $g->granted_end === $day(40) && RSL_Rego::clearance($p7)['cleared']
+    && $notes(wc_get_order($so->get_id()), 'social rego given back') === 1, wp_json_encode($g));
+wc_get_order($so->get_id())->update_status('cancelled');
+$check('...and cancelled again, it ends again', !RSL_Rego::clearance($p7)['cleared']);
+
+$p8 = $mk('p8');
+$so = $make_order($rego, $p8, 55);
+$sline = new WC_Order_Item_Product();
+$sline->set_product($season_rego);
+$sline->set_quantity(1);
+$sline->set_subtotal(15);
+$sline->set_total(15);
+$sline->add_meta_data(RSL_Rego::SEASON_META, $AHEAD, true);
+$so->add_item($sline);
+$so->calculate_totals();
+$so->save();
+$yi = $item_of($so);
+$so->update_status('processing');
+$gy = $row_for($yi);
+$gs = $row_for($sline);
+$check('one order, a yearly and a season line: two regos, the yearly from today for 12 months, the season from its first night (no chaining)',
+    $gy && $gs && $gy->season === '' && $gy->start_date === $today && $gy->end_date === date('Y-m-d', strtotime($today . ' +1 year -1 day'))
+    && $gs->season === $AHEAD && $gs->start_date === $day(5) && $gs->end_date === $day(50), wp_json_encode(array($gy, $gs)));
+$line_refund($so, $sline, $full($sline), 1);
+$check('refunding the season line ends only that rego', RSL_Rego::is_removed($row_for($sline)) && !RSL_Rego::is_removed($row_for($yi))
+    && $row_for($yi)->end_date === $gy->end_date && RSL_Rego::clearance($p8)['cleared']);
+
+$p9 = $mk('p9');
+$so = $make_order($rego, $p9, 55);
+$si = $item_of($so);
+$so->update_status('processing');
+$g = $row_for($si);
+$wpdb->update(RSL_Database::table('regos'), array('granted_end' => null), array('id' => $g->id)); // as on a row from before schema 11
+wc_get_order($so->get_id())->update_status('cancelled');
+wc_get_order($so->get_id())->update_status('processing');
+$g = $row_for($si);
+$check('a yearly rego from before schema 11 (no granted end), cancelled and paid again: 12 months back', $g->granted_end === null
+    && $g->end_date === date('Y-m-d', strtotime($g->start_date . ' +1 year -1 day')), wp_json_encode($g));
+
+// A row kept counting by its season's moved dates can still be ended (and given back).
+$p10 = $mk('p10');
+$so = $make_order($season_rego, $p10, 15, array(RSL_Rego::SEASON_META => $MOVE));
+$si = $item_of($so);
+$so = wc_get_order($so->get_id());
+$so->set_date_paid($day(-20) . ' 12:00:00'); // site time
+$so->save();
+$so->update_status('processing');
+$g = $row_for($si);
+$check('set-up: a season rego paid during a season that is now over', $g && $g->start_date === $day(-20) && $g->end_date === $day(-2) && $g->granted_end === $day(-2)
+    && !RSL_Rego::clearance_for($p10, $MOVE)['cleared'], wp_json_encode($g));
+RSL_Courts::save_settings($MOVE, array('start' => $day(-30), 'end' => $day(10)));
+$c = RSL_Rego::clearance_for($p10, $MOVE);
+$check('a later last night set after the sale: the paid row counts until the season\'s new last night', $c['cleared'] && $c['until'] === $day(10)
+    && RSL_Rego::row_counts($row_for($si)), wp_json_encode($c));
+wc_get_order($so->get_id())->update_status('cancelled');
+$g = $row_for($si);
+$check('cancelled: ended by moving its end back a day (below its granted end), not cleared, noted', $g->end_date === $day(-3) && $g->granted_end === $day(-2)
+    && !RSL_Rego::clearance_for($p10, $MOVE)['cleared'] && $notes(wc_get_order($so->get_id()), 'social rego ended') === 1, wp_json_encode($g));
+wc_get_order($so->get_id())->update_status('processing');
+$g = $row_for($si);
+$check('paid again: its granted end back, cleared again, noted', $g->end_date === $day(-2) && $g->granted_end === $day(-2) && RSL_Rego::clearance_for($p10, $MOVE)['cleared']
+    && $notes(wc_get_order($so->get_id()), 'social rego given back') === 1, wp_json_encode($g));
+
+// No false "no rego was given" when the dates shrink after the sale.
+$p11 = $mk('p11');
+$so = $make_order($season_rego, $p11, 15, array(RSL_Rego::SEASON_META => $SHRINK));
+$si = $item_of($so);
+$so->update_status('processing');
+$was = $row_for($si);
+RSL_Courts::save_settings($SHRINK, array('start' => $day(-20), 'end' => $day(-1)));
+wc_get_order($so->get_id())->update_status('completed');
+$g = $row_for($si);
+$check('dates shortened after the sale: completing the order changes nothing and notes nothing', $was && $was->start_date === $day(5) && $was->end_date === $day(50)
+    && count($rows_of($so)) === 1 && $g->start_date === $was->start_date && $g->end_date === $was->end_date && $notes(wc_get_order($so->get_id()), 'which finished on') === 0);
+
+// The past-order scan never guesses a season; a live payment uses the sign-up season.
+update_option(RSL_Seasons::SIGNUP_OPTION, $AHEAD);
+$p12 = $mk('p12');
+$so = $make_order($season_rego, $p12, 15);
+remove_action('woocommerce_order_status_processing', array('RSL_Rego', 'on_order_paid'));
+wc_get_order($so->get_id())->update_status('processing');
+add_action('woocommerce_order_status_processing', array('RSL_Rego', 'on_order_paid'));
+RSL_Rego::on_order_paid($so->get_id(), true);
+RSL_Rego::on_order_paid($so->get_id(), true);
+$check('a season line that doesn\'t say its season, from the scan: no rego, one note', count($rows_of($so)) === 0 && $notes(wc_get_order($so->get_id()), 'say which season') === 1);
+RSL_Rego::scan_orders();
+$check('...and the scan itself gives none', count($rows_of($so)) === 0);
+RSL_Rego::on_order_paid($so->get_id());
+$rows = $rows_of($so);
+$check('...while a live payment uses the sign-up season', count($rows) === 1 && $rows[0]->season === $AHEAD && $rows[0]->start_date === $day(5), wp_json_encode($rows));
+wp_set_current_user($admin);
+
 // --- Memberships can't be checked ---------------------------------------------------------------------------
 $p4 = $mk('p4');
 $check('normally the state is known when memberships can be checked', RSL_Rego::clearance($p4)['unknown'] === !RSL_Rego::membership_source_available());
@@ -214,26 +361,42 @@ ob_start(); (new RSL_Admin())->render_registration(); $html = ob_get_clean();
 $check('the Registration page warns that memberships can\'t be checked', strpos($html, 'Club memberships can\'t be checked') !== false);
 remove_filter('rsl_membership_source_available', '__return_false');
 
-// --- Cleanup ---------------------------------------------------------------------------------------------
+} catch (Throwable $t) {
+    $fails++;
+    echo 'FAIL: threw ' . get_class($t) . ': ' . $t->getMessage() . ' (line ' . $t->getLine() . ")\n";
+} finally {
+// --- Cleanup (runs after a failure too) ----------------------------------------------------------------------
 $_GET = array();
 wp_set_current_user(0);
 remove_filter('pre_wp_mail', '__return_true');
+remove_filter('rsl_membership_source_available', '__return_false');
+if (!has_action('woocommerce_order_status_processing', array('RSL_Rego', 'on_order_paid'))) {
+    add_action('woocommerce_order_status_processing', array('RSL_Rego', 'on_order_paid'));
+}
 foreach ($orders as $o) {
-    foreach (wc_get_order($o->get_id())->get_refunds() as $refund) { $refund->delete(true); }
+    $o = wc_get_order($o->get_id());
+    if (!$o) {
+        continue;
+    }
+    foreach ($o->get_refunds() as $refund) { $refund->delete(true); }
     $wpdb->delete(RSL_Database::table('regos'), array('order_id' => $o->get_id()));
-    wc_get_order($o->get_id())->delete(true);
+    $o->delete(true);
 }
 foreach ($products as $p) { $p->delete(true); }
-$wpdb->delete(RSL_Database::table('ledger'), array('team_id' => $team->id));
-$wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $team->id));
-$wpdb->delete(RSL_Database::table('teams'), array('id' => $team->id));
+if ($team && !is_wp_error($team)) {
+    $wpdb->delete(RSL_Database::table('ledger'), array('team_id' => $team->id));
+    $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $team->id));
+    $wpdb->delete(RSL_Database::table('teams'), array('id' => $team->id));
+}
 foreach ($users as $u) {
     $wpdb->delete(RSL_Database::table('regos'), array('user_id' => $u));
     delete_transient(RSL_Portal::FLASH_PREFIX . $u);
     delete_transient(RSL_Admin::NOTICE_PREFIX . $u);
     wp_delete_user($u);
 }
+$wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('regos') . " WHERE id > %d", $rego_id_before));
 foreach ($saved as $opt => $value) {
     if ($value === '__unset__') { delete_option($opt); } else { update_option($opt, $value); }
+}
 }
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

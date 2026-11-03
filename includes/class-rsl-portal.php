@@ -463,7 +463,7 @@ class RSL_Portal {
             <div class="rsl-card rsl-card-accent"><p><strong>You've been invited to join <?php echo esc_html($invited_to->name); ?>.</strong> Register below and you'll go straight onto the team.</p></div>
         <?php endif; ?>
         <h2>Register for the Reds Social League</h2>
-        <p>Registering is free and takes a minute. To play you'll also need a current social rego (<?php echo esc_html(self::rego_price()); ?>, lasts 12 months) before your first game — unless you're a full or life club member.</p>
+        <p>Registering is free and takes a minute. To play you'll also need a current social rego (<?php echo esc_html(RSL_Rego::cost_words()); ?>) before your first game — unless you're a full or life club member.</p>
         <?php if ($profile['missing']): ?>
             <div class="rsl-card rsl-card-warn">
                 <p><strong>First, finish your club profile.</strong> It's missing your <?php echo esc_html(RSL_Players::list_words(array_map('strtolower', $profile['missing']))); ?>. The league uses the same profile as VVL trials, so we can reach you and place you on the right team.</p>
@@ -538,9 +538,75 @@ class RSL_Portal {
         return ob_get_clean();
     }
 
-    /** The rego price as the shop has it (falls back to the usual price). */
-    private static function rego_price() {
-        return method_exists('RSL_Rego', 'price_label') ? RSL_Rego::price_label() : RSL_Rego::PRICE_LABEL;
+    /**
+     * The pay buttons: the season rego as a small GET form to checkout (a choice of the
+     * seasons open for sign-up that this player isn't covered for, $card_season preselected;
+     * one choice is named beside the button), then the yearly rego as a plain link. $season_form
+     * false: the yearly button alone. '' when there's nothing to offer.
+     */
+    private static function rego_pay($user_id, $first_class, $card_season, $season_form = true) {
+        $html = '';
+        $form = false;
+        $season_id = RSL_Rego::season_product_id();
+        if ($season_form && $season_id) {
+            $choices = RSL_Rego::season_choices($user_id);
+            if ($choices) {
+                reset($choices);
+                $selected = isset($choices[$card_season]) ? $card_season : (string) key($choices);
+                $target = RSL_Rego::checkout_form_target();
+                $html .= '<form method="get" action="' . esc_url($target['action']) . '" class="rsl-rego-season">';
+                foreach ($target['fields'] as $name => $value) {
+                    if (is_scalar($value) && $name !== 'add-to-cart' && $name !== RSL_Rego::SEASON_ARG) {
+                        $html .= '<input type="hidden" name="' . esc_attr($name) . '" value="' . esc_attr($value) . '">';
+                    }
+                }
+                $html .= '<input type="hidden" name="add-to-cart" value="' . intval($season_id) . '">';
+                if (count($choices) > 1) {
+                    $html .= '<label class="rsl-season-pick">Season <select name="' . esc_attr(RSL_Rego::SEASON_ARG) . '">';
+                    foreach ($choices as $key => $label) {
+                        $html .= '<option value="' . esc_attr($key) . '"' . selected($key, $selected, false) . '>' . esc_html($label) . '</option>';
+                    }
+                    $html .= '</select></label>';
+                } else {
+                    $html .= '<input type="hidden" name="' . esc_attr(RSL_Rego::SEASON_ARG) . '" value="' . esc_attr($selected) . '">'
+                        . '<span class="rsl-season-pick">' . esc_html($choices[$selected]) . '</span>';
+                }
+                $html .= '<button type="submit" class="' . esc_attr($first_class) . '">Pay the ' . esc_html(RSL_Rego::price_label('season')) . ' season rego</button></form>';
+                $form = true;
+            }
+        }
+        if (RSL_Rego::product_id()) {
+            $label = $season_id ? 'Pay the ' . RSL_Rego::price_label() . ' yearly rego' : 'Pay the ' . RSL_Rego::price_label() . ' rego';
+            $html .= '<a class="' . esc_attr($form ? 'rsl-btn rsl-btn-secondary' : $first_class) . '" href="' . esc_url(RSL_Rego::pay_url('year')) . '">' . esc_html($label) . '</a>';
+        }
+        return $html;
+    }
+
+    /**
+     * The not-cleared card's pay part for $card_season: no product set; yearly only; the season
+     * form (with the yearly as second choice) when the card's season is open for sign-up; else
+     * no season form (paying another season wouldn't clear them for this one), only the
+     * yearly button with why.
+     */
+    private static function rego_pay_needed($user_id, $card_season) {
+        $has_season = (bool) RSL_Rego::season_product_id();
+        $has_year = (bool) RSL_Rego::product_id();
+        if (!$has_season && !$has_year) {
+            return '<p class="rsl-hint">Online payment isn\'t set up yet — contact the league to pay.</p>';
+        }
+        if (!$has_season) {
+            return '<p>' . self::rego_pay($user_id, 'rsl-btn', $card_season) . '</p>';
+        }
+        $open = RSL_Seasons::open_for_signup();
+        if (isset($open[$card_season])) {
+            $pay = self::rego_pay($user_id, 'rsl-btn', $card_season);
+            return $pay !== '' ? '<p>' . $pay . '</p>' : '';
+        }
+        $why = $open ? 'A season rego for ' . esc_html(RSL_Seasons::short_label($card_season)) . ' can\'t be bought online now.' : 'No season is open for sign-up yet.';
+        if (!$has_year) {
+            return '<p>' . $why . ' Contact the league to pay.</p>';
+        }
+        return '<p>' . $why . ' Pay the yearly rego, or contact the league.</p><p>' . self::rego_pay($user_id, 'rsl-btn', $card_season, false) . '</p>';
     }
 
     private function render_dashboard($user_id, $code, $invited_to) {
@@ -550,7 +616,11 @@ class RSL_Portal {
         $now_team = RSL_Teams::current_team_for_user($user_id, $current);
         $next_team = $signup === $current ? $now_team : RSL_Teams::current_team_for_user($user_id, $signup);
         $invites = RSL_Teams::pending_invites_for_user($user_id);
-        $clear = RSL_Rego::clearance($user_id);
+        // The season they play in next: a rego paid ahead for it counts, and a finished
+        // current season is never the one judged.
+        $card_season = RSL_Seasons::playing_season($current, $signup, (bool) $now_team);
+        $clear = RSL_Rego::clearance_for($user_id, $card_season);
+        $today = current_time('Y-m-d');
         $fa_row = class_exists('RSL_Free_Agents') ? RSL_Free_Agents::get($user_id, $signup) : null;
         // Only someone on no team at all can leave the rego until they're placed.
         $waiting_for_team = !$now_team && !$next_team && RSL_Free_Agents::is_open($fa_row);
@@ -582,29 +652,48 @@ class RSL_Portal {
 
         <?php if (!$clear['cleared'] && !empty($clear['unknown'])): ?>
             <div class="rsl-card rsl-card-warn">
-                <p><strong>We can't check club memberships right now.</strong> If you're a full or life member you don't need a social rego — don't pay; the league will sort it out. Otherwise you'll need one (<?php echo esc_html(self::rego_price()); ?>, 12 months) before your first game.</p>
+                <p><strong>We can't check club memberships right now.</strong> If you're a full or life member you don't need a social rego — don't pay; the league will sort it out. Otherwise you'll need one (<?php echo esc_html(RSL_Rego::cost_words()); ?>) before your first game.</p>
             </div>
         <?php elseif (!$clear['cleared'] && $waiting_for_team): ?>
             <div class="rsl-card">
-                <p><strong>Social rego:</strong> you'll need one (<?php echo esc_html(self::rego_price()); ?>, 12 months) before your first game — pay once you're on a team, no rush. Full and life club members don't need one.</p>
-                <?php if (RSL_Rego::pay_url()): ?><p><a class="rsl-btn rsl-btn-secondary" href="<?php echo esc_url(RSL_Rego::pay_url()); ?>">Pay the rego now</a></p><?php endif; ?>
+                <p><strong>Social rego:</strong> you'll need one (<?php echo esc_html(RSL_Rego::cost_words()); ?>) before your first game — pay once you're on a team, no rush. Full and life club members don't need one.</p>
+                <?php if (RSL_Rego::season_product_id()): ?>
+                    <?php $pay = self::rego_pay($user_id, 'rsl-btn rsl-btn-secondary', $card_season); ?>
+                    <?php if ($pay !== ''): ?><p><?php echo $pay; ?></p><?php endif; ?>
+                <?php elseif (RSL_Rego::pay_url('year')): ?>
+                    <p><a class="rsl-btn rsl-btn-secondary" href="<?php echo esc_url(RSL_Rego::pay_url('year')); ?>">Pay the rego now</a></p>
+                <?php endif; ?>
             </div>
         <?php else: ?>
         <div class="rsl-card <?php echo $clear['cleared'] ? 'rsl-card-good' : 'rsl-card-warn'; ?>">
             <?php if ($clear['cleared']): ?>
-                <p><strong>&#10003; You're cleared to play.</strong>
-                    <?php if ($clear['by'] === 'member'): ?>Your full or life club membership covers the social rego<?php echo $clear['until'] < '2099-01-01' ? ' until ' . esc_html(date('j M Y', strtotime($clear['until']))) : ''; ?>.
-                    <?php else: ?>Your social rego is paid until <?php echo esc_html(date('j M Y', strtotime($clear['until']))); ?>.<?php endif; ?></p>
-                <?php if ($clear['by'] === 'rego' && strtotime($clear['until']) < strtotime('+30 days') && RSL_Rego::pay_url()): ?>
-                    <p>It runs out soon — <a href="<?php echo esc_url(RSL_Rego::pay_url()); ?>">renew now</a> (a new 12 months starts when this one ends).</p>
+                <?php
+                $from_later = !empty($clear['from']) && $clear['from'] > $today;
+                $words_year = (int) substr(RSL_Seasons::is_valid($clear['season']) ? $clear['season'] : $card_season, 0, 4);
+                ?>
+                <p><strong>&#10003; You're cleared to play<?php echo $from_later ? ' from ' . esc_html(RSL_Seasons::day_words($clear['from'], $words_year)) : ''; ?>.</strong>
+                    <?php echo esc_html(RSL_Rego::cover_words($clear)); ?>.</p>
+                <?php if ($clear['by'] === 'rego' && $clear['until'] < date('Y-m-d', strtotime($today . ' +' . RSL_Rego::RENEW_DAYS . ' days'))): ?>
+                    <?php if (!RSL_Rego::season_product_id()): ?>
+                        <?php if (RSL_Rego::pay_url('year')): ?>
+                            <p>It runs out soon — <a href="<?php echo esc_url(RSL_Rego::pay_url('year')); ?>">renew now</a> (a new 12 months starts when this one ends).</p>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <?php $pay = self::rego_pay($user_id, 'rsl-btn rsl-btn-secondary', $card_season); ?>
+                        <?php if ($pay !== ''): ?>
+                            <p>It runs out soon. <?php echo RSL_Rego::product_id() ? 'Pay for another season, or for a year (a yearly rego starts when this one ends):' : 'Pay for another season:'; ?></p>
+                            <p><?php echo $pay; ?></p>
+                        <?php endif; ?>
+                    <?php endif; ?>
                 <?php endif; ?>
             <?php else: ?>
-                <p><strong>You need a social rego before your first game.</strong> It's <?php echo esc_html(self::rego_price()); ?> and lasts 12 months. Full and life club members don't need one.</p>
-                <?php if (RSL_Rego::pay_url()): ?>
-                    <p><a class="rsl-btn" href="<?php echo esc_url(RSL_Rego::pay_url()); ?>">Pay the <?php echo esc_html(self::rego_price()); ?> rego</a></p>
-                <?php else: ?>
-                    <p class="rsl-hint">Online payment isn't set up yet — contact the league to pay.</p>
+                <p><strong>You need a social rego before your first game.</strong> <?php echo wp_kses_post(RSL_Rego::cost_sentence()); ?> Full and life club members don't need one.</p>
+                <?php $now_clear = RSL_Rego::clearance($user_id); ?>
+                <?php if ($now_clear['cleared'] && RSL_Seasons::is_valid($card_season)): ?>
+                    <?php $card_span = RSL_Seasons::span($card_season); ?>
+                    <p>What covers you now (<?php echo esc_html(RSL_Rego::cover_words($now_clear)); ?>) ends before <?php echo esc_html(RSL_Seasons::short_label($card_season)); ?>'s first game night (<?php echo esc_html(RSL_Seasons::day_words($card_span['start'], (int) substr($card_season, 0, 4))); ?>).</p>
                 <?php endif; ?>
+                <?php echo self::rego_pay_needed($user_id, $card_season); ?>
             <?php endif; ?>
         </div>
         <?php endif; ?>
@@ -707,7 +796,7 @@ class RSL_Portal {
             <h4>Players (<?php echo count($members); ?>)</h4>
             <ul class="rsl-roster">
                 <?php foreach ($members as $m): ?>
-                    <?php $c = RSL_Rego::clearance($m->user_id); ?>
+                    <?php $c = RSL_Rego::clearance_for($m->user_id, $team->season); // judged for the team's season: a rego paid ahead counts ?>
                     <li>
                         <span><?php echo esc_html($m->display_name); ?><?php if ($m->role === 'captain'): ?> <span class="rsl-chip">Captain</span><?php endif; ?></span>
                         <?php if ($is_captain): ?>
@@ -832,6 +921,9 @@ class RSL_Portal {
             .rsl-portal h4 { margin: 16px 0 6px; }
             .rsl-portal .rsl-season-head { margin: 22px 0 4px; }
             .rsl-portal .rsl-leave { margin: 8px 0 0; text-align: right; }
+            .rsl-rego-season { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 6px 6px 0; }
+            .rsl-season-pick { font-weight: 600; }
+            .rsl-season-pick select { margin-left: 4px; max-width: 100%; }
         </style>' . (class_exists('RSL_Portal_FA') ? RSL_Portal_FA::styles() : '');
     }
 }

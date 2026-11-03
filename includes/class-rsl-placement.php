@@ -2851,12 +2851,13 @@ class RSL_Placement {
         return 'First night: ' . self::day($d['first_night']) . ($venue !== '' ? ' at ' . $venue : '') . ".\n";
     }
 
-    private static function rego_line($user_id) {
-        $clear = RSL_Rego::clearance($user_id);
+    /** The rego line for someone placed into $season ('' when they're cleared to play in it, a rego paid ahead included). */
+    private static function rego_line($user_id, $season) {
+        $clear = RSL_Rego::clearance_for($user_id, $season);
         if (!empty($clear['cleared'])) {
             return '';
         }
-        return 'Before your first game, pay your social rego (' . RSL_Rego::price_label() . ", 12 months) unless you're a full or life club member:\n" . (RSL_Rego::pay_url() ?: RSL_Portal::url()) . "\n";
+        return 'Before your first game, pay your social rego (' . RSL_Rego::cost_words() . ") unless you're a full or life club member:\n" . (RSL_Rego::pay_url() ?: RSL_Portal::url()) . "\n";
     }
 
     private static function fee_words() {
@@ -2878,7 +2879,7 @@ class RSL_Placement {
             . ($captain ? "Your captain is {$captain->display_name} — {$captain->user_email}. Say hi, and they'll add you to the team chat.\n" : '')
             . ($mates ? 'Your teammates: ' . implode(', ', $mates) . ".\n" : '')
             . "\n" . self::first_night_line($season, $team->division)
-            . self::rego_line($uid)
+            . self::rego_line($uid, $season)
             . 'Your team pays the game fee (' . self::fee_words() . " a game) from its team balance — chip in with \"Pay my share\" on your league page.\n\n"
             . 'Not for you? You can step back at no cost until ' . self::day($optout) . " on your league page:\n" . RSL_Portal::url() . "\n\n"
             . 'Your team page: ' . RSL_Public::team_url($team);
@@ -2926,7 +2927,7 @@ class RSL_Placement {
             . "1. Start a group chat and add everyone.\n"
             . "2. Make sure everyone is cleared to play (social rego or full/life club membership) — your league page shows who still needs it.\n"
             . '3. Top up the team balance. Games are ' . RSL_Payments::money($fee) . ' each, paid from the balance — about ' . RSL_Payments::money(ceil($fee / $n)) . " each a game with $n players. Everyone can chip in with \"Pay my share\".\n\n"
-            . self::rego_line($captain->user_id) . ($d ? '' : '')
+            . self::rego_line($captain->user_id, $season) . ($d ? '' : '')
             . "Want to bring someone else? Share your team's invite link:\n" . RSL_Portal::invite_url($team) . "\n\n"
             . 'Your league page: ' . RSL_Portal::url() . "\nYour team page: " . RSL_Public::team_url($team);
         return self::queued(RSL_Free_Agents::mail($captain->user_id, 'You\'re captain of ' . $team->name, $text, 'newcap:' . $team->id));

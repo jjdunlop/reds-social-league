@@ -1451,7 +1451,7 @@ class RSL_Free_Agents {
             $lines .= "What happens next:\n"
                 . "- Until " . self::date_words($d['deadline']) . ": teams looking for players can invite you, and you can ask up to " . self::settings()['max_requests'] . " teams yourself.\n"
                 . "- By " . self::date_words($d['confirm_by']) . ": we place everyone else on a team and email you your team and captain.\n"
-                . "- Before your first game (" . self::date_words($d['first_night']) . "): pay your social rego (" . RSL_Rego::price_label() . ", 12 months) unless you're a full or life club member.\n\n";
+                . "- Before your first game (" . self::date_words($d['first_night']) . "): pay your social rego (" . RSL_Rego::cost_words() . ") unless you're a full or life club member.\n\n";
         }
         $lines .= "Your league page:\n" . RSL_Portal::url();
         self::mail($user_id, 'You\'re on the free agent list', $lines, 'fa-joined:' . $season . ':' . $user_id . ':' . current_time('Y-m-d'));
@@ -1513,11 +1513,11 @@ class RSL_Free_Agents {
                 continue;
             }
             $names[] = $u->display_name . ' <' . $u->user_email . '>';
-            $clear = RSL_Rego::clearance($uid);
+            $clear = RSL_Rego::clearance_for($uid, $team->season);
             self::mail($uid, 'You\'re on ' . $team->name,
                 "You're on {$team->name} (" . RSL_Teams::DIVISIONS[$team->division] . ") in the Reds Social League." . $first . "\n\n"
                     . ($captain && intval($captain->user_id) !== intval($uid) ? "Your captain is {$captain->display_name} — {$captain->user_email}. Say hi, and they'll add you to the team chat.\n\n" : '')
-                    . ($clear['cleared'] ? '' : "Before your first game, pay your social rego (" . RSL_Rego::price_label() . ", 12 months) unless you're a full or life club member:\n" . (RSL_Rego::pay_url() ?: RSL_Portal::url()) . "\n\n")
+                    . ($clear['cleared'] ? '' : "Before your first game, pay your social rego (" . RSL_Rego::cost_words() . ") unless you're a full or life club member:\n" . (RSL_Rego::pay_url() ?: RSL_Portal::url()) . "\n\n")
                     . "Your team page: " . RSL_Public::team_url($team),
                 $dedupe_base . ':' . $uid);
         }

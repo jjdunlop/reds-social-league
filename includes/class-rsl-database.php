@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 class RSL_Database {
 
     /** Bump when the schema changes; maybe_upgrade() re-runs install(). */
-    const SCHEMA_VERSION = '10';
+    const SCHEMA_VERSION = '11';
     const SCHEMA_OPTION = 'rsl_schema_version';
     const UPGRADE_LOCK = 'rsl_upgrade_lock';
 
@@ -80,9 +80,14 @@ class RSL_Database {
             PRIMARY KEY  (user_id)
         ) $charset;");
 
-        // Social rego: 12-month grants. One per paid order item (UNIQUE —
-        // an insert failure there is the dedupe working), or added by an
-        // admin (manual, no order).
+        // Social rego: a yearly rego (season '': 12 months) or a season rego
+        // (season = its key, e.g. 2027-pre: from that season's first game
+        // night, or the payment date if later, to its last game night). One
+        // per paid order item (UNIQUE — an insert failure there is the dedupe
+        // working), or added by an admin (manual, no order). granted_end is
+        // the end it was granted with: revoke() shortens end_date and never
+        // this, and a cancelled order paid again puts end_date back to it
+        // (NULL on rows from before schema 11 = start + 1 year - 1 day).
         dbDelta("CREATE TABLE " . self::table('regos') . " (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             user_id bigint(20) unsigned NOT NULL,
@@ -92,6 +97,8 @@ class RSL_Database {
             order_id bigint(20) unsigned DEFAULT NULL,
             order_item_id bigint(20) unsigned DEFAULT NULL,
             note varchar(255) NOT NULL DEFAULT '',
+            season varchar(16) NOT NULL DEFAULT '',
+            granted_end date DEFAULT NULL,
             created_by bigint(20) unsigned DEFAULT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY  (id),
@@ -438,7 +445,7 @@ class RSL_Database {
         // Options read on every request were once saved non-autoloaded.
         $hot = array(self::SCHEMA_OPTION, 'rsl_current_season', 'rsl_signup_season', 'rsl_portal_page_id', 'rsl_teams_page_id',
             'rsl_fixtures_page_id', 'rsl_ladder_page_id', 'rsl_refs_page_id', 'rsl_payment_settings', 'rsl_officials_settings',
-            'rsl_topup_product_id', 'rsl_rego_product_id', 'rsl_free_agent_settings');
+            'rsl_topup_product_id', 'rsl_rego_product_id', 'rsl_rego_season_product_id', 'rsl_free_agent_settings');
         if (function_exists('wp_set_option_autoload_values')) {
             wp_set_option_autoload_values(array_fill_keys($hot, true));
         }

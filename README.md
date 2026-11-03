@@ -6,6 +6,51 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## Season rego or yearly rego, the player picks the season (0.15.0)
+
+- **Players can pay for one season or for a year.** The league page offers
+  whichever the league has set up, season first: "Pay the $15 season rego"
+  with a choice of season, and "Pay the $40 yearly rego" (prices from the
+  shop).
+- **The player chooses the season** from the seasons open for sign-up, each
+  shown with its dates, e.g. "2027 Pre-season (24 Jan to 21 Mar)": the
+  season people are signing up for, plus later seasons whose dates are set.
+  Finished seasons are never offered. The season shows in the cart and on
+  the order.
+- **A season rego covers that season only**: from its first game night (or
+  the payment date, if later) to its last. A season with no game nights set
+  yet covers its quarter (January to March, and so on), and says so. If the
+  league moves the season's nights later on, a rego paid for it still
+  counts for that season.
+- **Already covered for every game night of a season** (by a rego or a full
+  or life membership)? That season can't be added to the cart, so nobody
+  pays twice.
+- **A yearly rego is unchanged**: 12 months from payment, or from when the
+  current rego ends.
+- The league page says what covers you ("Season rego, 2027 Pre-season,
+  until 21 Mar", "Yearly rego until 2 Nov 2027", "Club membership until …"),
+  counts a rego paid ahead for the season you're playing in, and 30 days
+  before a rego runs out offers the next one. Captains still see only ✓ / ✗,
+  judged for their team's season.
+- Emails that mention the rego say "$15 a season or $40 a year" and link to
+  the league page (straight to checkout when only the yearly rego is on
+  offer).
+- One rego in the cart at a time: choosing another season, or the other
+  kind, swaps it (also when a saved cart comes back at login).
+- Between seasons, or while next season's sign-ups overlap this season, the
+  league page asks about the season you play in next, and never sells a
+  season rego that wouldn't clear you for it.
+- Refunds, cancellations, an order paid again (the rego comes back with the
+  same end) and an admin's Remove work the same for both kinds.
+- **Admin** (Social League → Registration): a *Season rego product* beside
+  the yearly one (both optional; they can't be the same product, and
+  neither can be the team top-up product); *Add a rego by hand* takes 12
+  months or a season (any season this year or next, finished ones too, to
+  record a payment made another way); the regos list shows the season.
+- Dev: `rsl_regos` gains `season` ('' = 12 months) and `granted_end`
+  (schema 11); `RSL_Seasons::open_for_signup()`;
+  `dev/tests/test-seasons-open.php`.
+
 ## Duplicate accounts: an account in use in the league isn't merged away (0.14.0)
 
 - **The Club Manager's merge tool (Duplicate accounts) refuses to merge

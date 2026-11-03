@@ -120,8 +120,23 @@ class RSL_Admin {
                 return $back;
 
             case 'save_rego_product':
-                update_option(RSL_Rego::PRODUCT_OPTION, isset($post['product_id']) ? intval($post['product_id']) : 0, true);
-                self::notice('success', 'Rego product saved.');
+                $year_id = isset($post['product_id']) ? intval($post['product_id']) : 0;
+                // Only when posted: a page opened before 0.15.0 doesn't clear it.
+                $season_posted = isset($post['season_product_id']);
+                $season_id = $season_posted ? intval($post['season_product_id']) : RSL_Rego::season_product_id();
+                $topup_id = RSL_Payments::product_id();
+                if ($year_id && $year_id === $season_id) {
+                    self::notice('error', 'The season and yearly regos need different products.');
+                } elseif ($topup_id && ($year_id === $topup_id || $season_id === $topup_id)) {
+                    // Its past orders would be read as regos by the scan.
+                    self::notice('error', 'The team top-up product can\'t be a rego product.');
+                } else {
+                    update_option(RSL_Rego::PRODUCT_OPTION, $year_id, true);
+                    if ($season_posted) {
+                        update_option(RSL_Rego::SEASON_PRODUCT_OPTION, $season_id, true);
+                    }
+                    self::notice('success', 'Rego products saved.');
+                }
                 return admin_url('admin.php?page=' . self::REG_PAGE);
 
             case 'scan_regos':
@@ -132,14 +147,46 @@ class RSL_Admin {
             case 'grant_rego':
                 $who = isset($post['who']) ? trim(sanitize_text_field(wp_unslash($post['who']))) : '';
                 $user = is_email($who) ? get_user_by('email', $who) : get_user_by('login', $who);
+                // Normalised as grant() reads it: a Y-m-d, else today (never a string compared with dates).
                 $start = isset($post['start']) ? sanitize_text_field(wp_unslash($post['start'])) : '';
+                if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $start)) {
+                    $start = current_time('Y-m-d');
+                }
+                // 'kind', not 'season': fields() already posts the screen's season.
+                $kind = isset($post['kind']) ? sanitize_key(wp_unslash($post['kind'])) : '';
+                $note = isset($post['note']) ? sanitize_text_field(wp_unslash($post['note'])) : '';
+                $back_reg = admin_url('admin.php?page=' . self::REG_PAGE);
                 if (!$user) {
                     self::notice('error', 'No account found for "' . $who . '".');
-                } else {
-                    RSL_Rego::grant($user->ID, array('start' => $start, 'source' => 'manual', 'note' => isset($post['note']) ? sanitize_text_field(wp_unslash($post['note'])) : ''));
-                    self::notice('success', '12-month rego added for ' . $user->display_name . '.');
+                    return $back_reg;
                 }
-                return admin_url('admin.php?page=' . self::REG_PAGE);
+                if ($kind === '' || $kind === 'year') {
+                    RSL_Rego::grant($user->ID, array('start' => $start, 'source' => 'manual', 'note' => $note));
+                    self::notice('success', '12-month rego added for ' . $user->display_name . '.');
+                    return $back_reg;
+                }
+                // Any season this year or next (finished ones too, to record a payment after the
+                // fact), as well as the seasons open for sign-up. No "already covered" refusal:
+                // the league may be recording something it knows about.
+                $allowed = RSL_Seasons::open_for_signup() + RSL_Seasons::choices();
+                if (!RSL_Seasons::is_valid($kind) || !isset($allowed[$kind])) {
+                    self::notice('error', 'Pick 12 months or a season.');
+                    return $back_reg;
+                }
+                $span = RSL_Seasons::span($kind);
+                if (max($start, $span['start']) > $span['end']) {
+                    self::notice('error', RSL_Seasons::short_label($kind) . ' ended on ' . date('j M Y', strtotime($span['end'])) . ', before the start date. Give an earlier start date or pick another season.');
+                    return $back_reg;
+                }
+                $id = RSL_Rego::grant($user->ID, array('start' => $start, 'source' => 'manual', 'season' => $kind, 'note' => $note));
+                $g = $id ? RSL_Rego::get($id) : null;
+                if (!$g) {
+                    self::notice('error', 'That season rego couldn\'t be added — please try again.');
+                } else {
+                    self::notice('success', 'Season rego for ' . RSL_Seasons::short_label($kind) . ' added for ' . $user->display_name
+                        . ' (' . date('j M Y', strtotime($g->start_date)) . ' – ' . date('j M Y', strtotime($g->end_date)) . ').');
+                }
+                return $back_reg;
 
             case 'remove_rego':
                 $result = RSL_Rego::revoke(isset($post['grant_id']) ? intval($post['grant_id']) : 0, 'Removed by the league');
@@ -347,7 +394,7 @@ class RSL_Admin {
                 <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Cleared to play</th><th>Joined</th><th></th></tr></thead>
                 <tbody>
                     <?php foreach ($members as $m): ?>
-                        <?php $clear = RSL_Rego::clearance($m->user_id); ?>
+                        <?php $clear = RSL_Rego::clearance_for($m->user_id, $team->season); // for the team's season: a rego paid ahead counts ?>
                         <tr>
                             <td><?php echo esc_html($m->display_name); ?></td>
                             <td><?php echo esc_html($m->user_email); ?></td>
@@ -391,7 +438,7 @@ class RSL_Admin {
         <?php
     }
 
-    /** Social League → Registration: the rego product, past-order scan, manual regos. */
+    /** Social League → Registration: the rego products, past-order scan, manual regos. */
     public function render_registration() {
         if (!current_user_can('manage_options')) {
             return;
@@ -399,6 +446,9 @@ class RSL_Admin {
         $post_url = admin_url('admin-post.php');
         $season = RSL_Seasons::current();
         $product_id = RSL_Rego::product_id();
+        $season_product_id = RSL_Rego::season_product_id();
+        $today = current_time('Y-m-d');
+        $open = RSL_Seasons::open_for_signup();
         $products = function_exists('wc_get_products') ? wc_get_products(array('status' => 'publish', 'limit' => 300, 'orderby' => 'title', 'order' => 'ASC')) : array();
         echo '<div class="wrap"><h1>Social League — Registration</h1>' . self::take_notice();
         ?>
@@ -407,19 +457,30 @@ class RSL_Admin {
             <div class="notice notice-warning inline"><p><strong>Club memberships can't be checked</strong> — the MURVC Club Manager (or its membership check) isn't active. Players without a rego are shown as "can't check" rather than asked to pay, and nobody counts as covered by membership until it's back.</p></div>
         <?php endif; ?>
 
-        <h2>Rego product</h2>
-        <p class="description">The WooCommerce product players buy for the <?php echo esc_html(RSL_Rego::price_label()); ?> social rego. Each paid order gives the buyer 12 months from the payment date (renewing early starts when the current rego ends). Use a simple product with no extra required options, so the league page can send players straight to checkout. It's sold one at a time; a refunded or cancelled order ends its rego.</p>
+        <h2>Rego products</h2>
+        <p class="description">The WooCommerce products players buy. A season rego (<?php echo esc_html(RSL_Rego::price_label('season')); ?>) covers one season, which the player chooses on the league page from the seasons open for sign-up: from its first game night (or the payment date, if later) to its last. A season with no game nights set yet covers its quarter (January to March, and so on). A player already covered for every game night of a season can't buy it. A yearly rego (<?php echo esc_html(RSL_Rego::price_label()); ?>) gives 12 months from the payment date; renewing early starts when the current rego ends. Choose either or both: the league page offers whichever are set, season first. Use simple products with no extra required options. One rego goes in the cart at a time; a refunded or cancelled order ends its rego.</p>
         <form method="post" action="<?php echo esc_url($post_url); ?>" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
             <?php echo self::fields('save_rego_product', $season); ?>
+            <label>Yearly rego product
             <select name="product_id" style="max-width: 420px;">
-                <option value="0">— Not set: players can't pay online —</option>
+                <option value="0">— Not set —</option>
                 <?php foreach ($products as $product): ?>
                     <option value="<?php echo intval($product->get_id()); ?>" <?php selected($product_id, $product->get_id()); ?>><?php echo esc_html($product->get_name() . ' (#' . $product->get_id() . ')'); ?></option>
                 <?php endforeach; ?>
-            </select>
+            </select></label>
+            <label>Season rego product
+            <select name="season_product_id" style="max-width: 420px;">
+                <option value="0">— Not set —</option>
+                <?php foreach ($products as $product): ?>
+                    <option value="<?php echo intval($product->get_id()); ?>" <?php selected($season_product_id, $product->get_id()); ?>><?php echo esc_html($product->get_name() . ' (#' . $product->get_id() . ')'); ?></option>
+                <?php endforeach; ?>
+            </select></label>
             <button type="submit" class="button button-primary">Save</button>
         </form>
-        <?php if ($product_id): ?>
+        <?php if (!$product_id && !$season_product_id): ?>
+            <p class="description">Neither is set: players can't pay online.</p>
+        <?php endif; ?>
+        <?php if ($product_id || $season_product_id): ?>
             <form method="post" action="<?php echo esc_url($post_url); ?>" style="margin-top: 10px;">
                 <?php echo self::fields('scan_regos', $season); ?>
                 <button type="submit" class="button">Pick up rego purchases from the last 13 months</button>
@@ -428,10 +489,29 @@ class RSL_Admin {
         <?php endif; ?>
 
         <h2>Add a rego by hand</h2>
-        <p class="description">For a rego paid another way (cash, bank transfer). It lasts 12 months from the start date.</p>
+        <p class="description">For a rego paid another way (cash, bank transfer): 12 months from the start date, or one season: from its first game night (or the start date, if later) to its last.</p>
         <form method="post" action="<?php echo esc_url($post_url); ?>" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
             <?php echo self::fields('grant_rego', $season); ?>
             <input type="text" name="who" placeholder="Account email or username" required class="regular-text">
+            <select name="kind" style="max-width: 420px;">
+                <option value="year">12 months from the start date</option>
+                <?php if ($open): ?>
+                    <optgroup label="Seasons open for sign-up">
+                        <?php foreach ($open as $key => $label): ?>
+                            <option value="<?php echo esc_attr($key); ?>"><?php echo esc_html($label); ?></option>
+                        <?php endforeach; ?>
+                    </optgroup>
+                <?php endif; ?>
+                <?php $others = array_diff_key(RSL_Seasons::choices(), $open); ?>
+                <?php if ($others): ?>
+                    <optgroup label="Other seasons">
+                        <?php foreach (array_keys($others) as $key): ?>
+                            <?php $span = RSL_Seasons::span($key); ?>
+                            <option value="<?php echo esc_attr($key); ?>"><?php echo esc_html(RSL_Seasons::label_with_dates($key, $span) . ($span && $span['end'] < $today ? ', finished' : '')); ?></option>
+                        <?php endforeach; ?>
+                    </optgroup>
+                <?php endif; ?>
+            </select>
             <label>Starts <input type="date" name="start" value="<?php echo esc_attr(current_time('Y-m-d')); ?>" required></label>
             <input type="text" name="note" placeholder="Note (e.g. paid cash)" style="width: 220px;">
             <button type="submit" class="button">Add rego</button>
@@ -448,11 +528,12 @@ class RSL_Admin {
                     <?php foreach ($recent as $r): ?>
                         <tr>
                             <td><?php echo esc_html($r->display_name ?: 'Deleted account'); ?><br><span class="description"><?php echo esc_html($r->user_email); ?></span></td>
-                            <td><?php echo RSL_Rego::is_removed($r) ? '<em>Removed</em>' : esc_html(date('j M Y', strtotime($r->start_date)) . ' – ' . date('j M Y', strtotime($r->end_date))); ?></td>
+                            <td><?php echo RSL_Rego::is_removed($r) ? '<em>Removed</em>' : esc_html(date('j M Y', strtotime($r->start_date)) . ' – ' . date('j M Y', strtotime($r->end_date))); ?>
+                                <br><span class="description"><?php echo isset($r->season) && RSL_Seasons::is_valid($r->season) ? 'Season: ' . esc_html(RSL_Seasons::short_label($r->season)) : '12 months'; ?></span></td>
                             <td><?php echo $r->source === 'purchase' ? 'Order #' . intval($r->order_id) : 'Added by hand'; ?></td>
                             <td><?php echo esc_html($r->note); ?></td>
                             <td>
-                                <?php if ($r->end_date >= current_time('Y-m-d') && !RSL_Rego::is_removed($r)): ?>
+                                <?php if (RSL_Rego::row_counts($r)): // a season rego kept counting by its season's moved dates can still be removed ?>
                                     <form method="post" action="<?php echo esc_url($post_url); ?>" style="display: inline;" onsubmit="return confirm('Remove this rego? It stops covering <?php echo esc_js($r->display_name); ?> from today.');">
                                         <?php echo self::fields('remove_rego', $season); ?>
                                         <input type="hidden" name="grant_id" value="<?php echo intval($r->id); ?>">

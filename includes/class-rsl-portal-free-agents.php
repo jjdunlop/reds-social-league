@@ -358,7 +358,7 @@ class RSL_Portal_FA {
             <strong>What it costs</strong>
             <ul>
                 <li>Registering and the free agent list are free.</li>
-                <li>Once you're placed, pay your social rego (<?php echo esc_html(self::rego_price()); ?>, lasts 12 months) before your first game. Full and life club members don't need one.</li>
+                <li>Once you're placed, pay your social rego (<?php echo esc_html(self::rego_price()); ?>) before your first game. Full and life club members don't need one.</li>
                 <?php if ($fee > 0): ?>
                     <li>Your team pays <?php echo esc_html(RSL_Payments::money($fee)); ?> a game from its team balance — about <?php echo esc_html($share); ?> each with <?php echo intval($n); ?> players.</li>
                 <?php endif; ?>
@@ -418,8 +418,9 @@ class RSL_Portal_FA {
         } else {
             $ask = 'Ask up to ' . $s['max_requests'] . ' teams, or a captain invites you';
         }
-        // Already cleared for their first game (a rego still running, or a full/life membership): nothing to pay.
-        $clear = RSL_Rego::clearance(intval($row->user_id), $d && !$started ? $d['first_night'] : null);
+        // Already cleared for their first game (a rego still running or paid ahead for this
+        // season, or a full/life membership): nothing to pay. Judged on the first night until it comes.
+        $clear = RSL_Rego::clearance_for(intval($row->user_id), $season);
         $rego_step = !empty($clear['cleared'])
             ? array('Cleared to play', $clear['by'] === 'member' ? 'Your club membership covers the rego' : 'Your social rego is paid', 'done')
             : array('Pay your rego (' . self::rego_price() . ')', 'Once you\'re placed, before ' . ($d && !$started ? self::day($d['first_night']) : 'your first game'), '');
@@ -1050,11 +1051,11 @@ class RSL_Portal_FA {
         return $d && current_time('Y-m-d') >= $d['first_night'];
     }
 
-    /** The rego price as the shop sells it ("$40"), as the portal shows it; read once a page. */
+    /** What the rego costs ("$15 a season or $40 a year", or "$40, 12 months"), as the portal shows it; read once a page. */
     private static function rego_price() {
         static $label = null;
         if ($label === null) {
-            $label = RSL_Rego::price_label();
+            $label = RSL_Rego::cost_words();
         }
         return $label;
     }
