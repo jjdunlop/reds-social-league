@@ -68,12 +68,15 @@ $test_seasons = array();
 $cart_test = false;
 // League mail this test queues must never go out from another request (wp-cron on a page load, the
 // hourly job, the Free Agents screen), where the mail stop above isn't in place: the send run is
-// held off a day (queue() schedules one only when none is), and the test's rows are parked
+// held off a day (queue() schedules one only when none is), and so is the hourly job (it drains
+// the outbox too, and on a quiet copy is often overdue), and the test's rows are parked
 // (attempts at the maximum) as soon as they're queued. The cleanup deletes them and puts the
-// send run back.
+// send run and the hourly job back.
 $send_was = wp_next_scheduled(RSL_Mail::SEND_HOOK);
 wp_clear_scheduled_hook(RSL_Mail::SEND_HOOK);
 wp_schedule_single_event(time() + DAY_IN_SECONDS, RSL_Mail::SEND_HOOK);
+wp_clear_scheduled_hook('rsl_hourly');
+wp_schedule_event(time() + DAY_IN_SECONDS, 'hourly', 'rsl_hourly');
 $park = function () use ($wpdb, $suffix) {
     return (int) $wpdb->query($wpdb->prepare("UPDATE " . RSL_Database::table('outbox') . " SET attempts = %d WHERE sent_at IS NULL AND to_email LIKE %s",
         RSL_Mail::MAX_ATTEMPTS, '%-' . $suffix . '@example.test'));
@@ -791,6 +794,8 @@ wp_clear_scheduled_hook(RSL_Mail::SEND_HOOK);
 if ($send_was || RSL_Mail::counts()['queued'] > 0) {
     RSL_Mail::schedule_send();
 }
+wp_clear_scheduled_hook('rsl_hourly');
+wp_schedule_event(time() + 300, 'hourly', 'rsl_hourly'); // as rsl_schedule_cron() does
 $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('regos') . " WHERE id > %d", $rego_id_before));
 // Ultimate Member emails an account deleted notice from delete_user: not for throwaway accounts.
 if (function_exists('UM')) {
@@ -804,6 +809,7 @@ foreach ($users as $u) {
     $wpdb->delete($mem, array('user_id' => $u));
     delete_transient(RSL_Portal::FLASH_PREFIX . $u);
     delete_transient(RSL_Admin::NOTICE_PREFIX . $u);
+    delete_transient('rsl_mail_failed_' . $u); // approve() / decline() under a mail stop: the email "failed"
     wp_delete_user($u);
 }
 foreach ($saved as $opt => $value) { if ($value === '__unset__') { delete_option($opt); } else { update_option($opt, $value); } }

@@ -10,12 +10,15 @@ if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production'
     exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
+require_once dirname(__DIR__) . '/lib-mail-stop.php';
 global $wpdb;
 
 $season = '2091-pre';
 $suffix = time();
+$hold = rsl_dev_hold_mail($suffix);
 $fails = 0;
-$check = function ($label, $ok, $detail = '') use (&$fails) {
+$check = function ($label, $ok, $detail = '') use (&$fails, $hold) {
+    rsl_dev_park_mail($hold);
     if (!$ok) { $fails++; }
     echo ($ok ? "OK: $label\n" : "FAIL: $label" . ($detail !== '' ? " — $detail" : '') . "\n");
 };
@@ -161,10 +164,7 @@ update_option(RSL_Courts::SETTINGS_OPTION, $settings, false);
 $wpdb->delete(RSL_Database::table('courts'), array('venue_id' => $hall->id));
 $wpdb->delete(RSL_Database::table('venues'), array('id' => $hall->id));
 if ($parked) { $wpdb->query("UPDATE " . RSL_Database::table('venues') . " SET active = 1 WHERE id IN (" . implode(',', array_map('intval', $parked)) . ")"); }
-foreach ($users as $u) {
-    delete_transient(RSL_Portal::FLASH_PREFIX . $u);
-    delete_transient(RSL_Admin::NOTICE_PREFIX . $u);
-    wp_delete_user($u);
-}
+rsl_dev_delete_users($users);
 if ($saved_current === '__unset__') { delete_option(RSL_Seasons::CURRENT_OPTION); } else { update_option(RSL_Seasons::CURRENT_OPTION, $saved_current); }
+rsl_dev_release_mail($hold);
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

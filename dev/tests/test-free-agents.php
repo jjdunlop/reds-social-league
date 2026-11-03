@@ -16,12 +16,15 @@ if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production'
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
 require_once dirname(__DIR__) . '/lib-profile.php';
+require_once dirname(__DIR__) . '/lib-mail-stop.php';
 global $wpdb;
 
 $season = '2088-pre';
 $suffix = time();
+$hold = rsl_dev_hold_mail($suffix);
 $fails = 0;
-$check = function ($label, $ok, $detail = '') use (&$fails) {
+$check = function ($label, $ok, $detail = '') use (&$fails, $hold) {
+    rsl_dev_park_mail($hold);
     if (!$ok) { $fails++; }
     echo ($ok ? "OK: $label\n" : "FAIL: $label" . ($detail !== '' ? " — $detail" : '') . "\n");
 };
@@ -56,6 +59,8 @@ $set_building = function ($season, $changes) {
 };
 $today = current_time('Y-m-d');
 $days = function ($n) use ($today) { return date('Y-m-d', strtotime($today . ' ' . ($n >= 0 ? '+' : '') . $n . ' days')); };
+
+try {
 
 // --- Seasons: next and the sign-up season ---------------------------------------------
 $check('next season wraps the year', RSL_Seasons::next('2027-post') === '2028-pre' && RSL_Seasons::next('2027-pre') === '2027-mid1' && RSL_Seasons::next('2027-mid2') === '2027-post');
@@ -456,7 +461,12 @@ $wpdb->update(RSL_Database::table('join_requests'), array('expires_at' => date('
 RSL_Free_Agents::expire_stale();
 $check('stale requests are marked expired', $wpdb->get_var($wpdb->prepare("SELECT status FROM " . RSL_Database::table('join_requests') . " WHERE id = %d", $er)) === 'expired');
 
-// --- Cleanup -----------------------------------------------------------------------------------------------------------------
+} catch (Throwable $t) {
+    $fails++;
+    echo 'FAIL: threw ' . get_class($t) . ': ' . $t->getMessage() . ' (line ' . $t->getLine() . ")\n";
+} finally {
+// --- Cleanup (runs after a failure too) ------------------------------------------------------------------------------------------
+wp_set_current_user(0);
 foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $season)) as $tid) {
     $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $tid));
     $wpdb->delete(RSL_Database::table('invites'), array('team_id' => $tid));
@@ -464,21 +474,26 @@ foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('
 $wpdb->delete(RSL_Database::table('teams'), array('season' => $season));
 $wpdb->delete(RSL_Database::table('free_agents'), array('season' => $season));
 $wpdb->delete(RSL_Database::table('join_requests'), array('season' => $season));
-foreach ($nights as $n) { $wpdb->delete(RSL_Database::table('nights'), array('id' => $n->id)); }
+foreach (isset($nights) ? $nights : array() as $n) { $wpdb->delete(RSL_Database::table('nights'), array('id' => $n->id)); }
 $set_start($season, '');
 $all = get_option(RSL_Free_Agents::BUILDING_OPTION, array());
 unset($all[$season]);
 update_option(RSL_Free_Agents::BUILDING_OPTION, $all, false);
 foreach ($users as $u) {
+    if (!is_int($u) || $u <= 0) {
+        continue; // never a WP_Error: as a user_id it would match the rows with user_id 0
+    }
     $wpdb->delete(RSL_Database::table('team_members'), array('user_id' => $u));
     $wpdb->delete(RSL_Database::table('players'), array('user_id' => $u));
     $wpdb->delete(RSL_Database::table('free_agents'), array('user_id' => $u));
     $wpdb->delete(RSL_Database::table('invites'), array('user_id' => $u));
-    wp_delete_user($u);
 }
 // "Not for me" also tells the league contacts (not test addresses).
 $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('outbox') . " WHERE to_email LIKE %s OR dedupe LIKE %s", '%-' . $suffix . '@example.test', 'optout:' . $season . ':%'));
 foreach (array(RSL_Seasons::CURRENT_OPTION => $saved_current, RSL_Seasons::SIGNUP_OPTION => $saved_signup, RSL_Free_Agents::SETTINGS_OPTION => $saved_fa) as $opt => $v) {
     if ($v === '__unset__') { delete_option($opt); } else { update_option($opt, $v); }
+}
+rsl_dev_delete_users($users);
+rsl_dev_release_mail($hold);
 }
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

@@ -10,10 +10,14 @@ if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production'
     exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
+require_once dirname(__DIR__) . '/lib-mail-stop.php';
 global $wpdb;
 
+$suffix = time();
+$hold = rsl_dev_hold_mail($suffix);
 $fails = 0;
-$check = function ($label, $ok, $detail = '') use (&$fails) {
+$check = function ($label, $ok, $detail = '') use (&$fails, $hold) {
+    rsl_dev_park_mail($hold);
     if (!$ok) { $fails++; }
     echo ($ok ? "OK: $label\n" : "FAIL: $label" . ($detail !== '' ? " — $detail" : '') . "\n");
 };
@@ -117,7 +121,6 @@ $check('with a break means a slot in between', $starts === array('19:00', '21:00
 
 // --- A real night -------------------------------------------------------------------------------
 $season = '2092-pre';
-$suffix = time();
 $saved_current = get_option(RSL_Seasons::CURRENT_OPTION, '__unset__');
 update_option(RSL_Seasons::CURRENT_OPTION, $season);
 // Only our venues for this test: park any others for the duration.
@@ -262,7 +265,6 @@ $check('admin page shows set chances (not expected scores) and meetings', strpos
 $_GET = array();
 wp_set_current_user(0);
 delete_transient(RSL_Admin::NOTICE_PREFIX . $admin);
-wp_delete_user($admin);
 $wpdb->delete(RSL_Database::table('games'), array('season' => $season));
 $wpdb->delete(RSL_Database::table('ledger'), array('season' => $season));
 foreach (RSL_Courts::nights($season) as $n) {
@@ -282,5 +284,7 @@ if ($parked) { $wpdb->query("UPDATE " . RSL_Database::table('venues') . " SET ac
 foreach (array_merge($teams, $u) as $t) {
     $wpdb->delete(RSL_Database::table('teams'), array('id' => $t->id));
 }
+rsl_dev_delete_users(array($admin));
 if ($saved_current === '__unset__') { delete_option(RSL_Seasons::CURRENT_OPTION); } else { update_option(RSL_Seasons::CURRENT_OPTION, $saved_current); }
+rsl_dev_release_mail($hold);
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

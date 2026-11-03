@@ -12,12 +12,15 @@ if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production'
     exit("Local copy only: run with wp eval-file, with RSL_DEV=1 set (docker exec -e RSL_DEV=1 ...).\n");
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
+require_once dirname(__DIR__) . '/lib-mail-stop.php';
 global $wpdb;
 
 $season = '2090-pre';
 $suffix = time();
+$hold = rsl_dev_hold_mail($suffix);
 $fails = 0;
-$check = function ($label, $ok, $detail = '') use (&$fails) {
+$check = function ($label, $ok, $detail = '') use (&$fails, $hold) {
+    rsl_dev_park_mail($hold);
     if (!$ok) { $fails++; }
     echo ($ok ? "OK: $label\n" : "FAIL: $label" . ($detail !== '' ? " — $detail" : '') . "\n");
 };
@@ -29,6 +32,8 @@ $mk = function ($tag, $role = 'subscriber') use ($suffix, &$users) {
     $users[] = $u;
     return $u;
 };
+
+try {
 
 // --- Seasons ------------------------------------------------------------------------
 $check('season keys validate', RSL_Seasons::is_valid('2027-pre') && RSL_Seasons::is_valid('2027-mid2') && !RSL_Seasons::is_valid('2027-xmas') && !RSL_Seasons::is_valid('27-pre'));
@@ -130,14 +135,21 @@ wp_delete_post($stand_in, true);
 if ($remade && !is_wp_error($remade) && intval($remade) !== intval($stand_in)) { wp_delete_post($remade, true); }
 if ($saved_portal === '__unset__') { delete_option(RSL_Portal::PAGE_OPTION); } else { update_option(RSL_Portal::PAGE_OPTION, $saved_portal, false); }
 
-// --- Cleanup -----------------------------------------------------------------------------
+} catch (Throwable $t) {
+    $fails++;
+    echo 'FAIL: threw ' . get_class($t) . ': ' . $t->getMessage() . ' (line ' . $t->getLine() . ")\n";
+} finally {
+// --- Cleanup (runs after a failure too) ----------------------------------------------------
 wp_set_current_user(0);
 set_query_var(RSL_Public::QUERY_VAR, '');
 foreach (RSL_Teams::list_for_season($season) as $t) { $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $t->id)); }
 $wpdb->delete(RSL_Database::table('teams'), array('season' => $season));
-foreach ($users as $u) { $wpdb->delete(RSL_Database::table('team_members'), array('user_id' => $u)); wp_delete_user($u); }
+foreach ($users as $u) { if (is_int($u) && $u > 0) { $wpdb->delete(RSL_Database::table('team_members'), array('user_id' => $u)); } }
 // Removing a player queues them a "no longer on" email; it goes with the test users.
 $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('outbox') . " WHERE to_email LIKE %s", '%-' . $suffix . '@example.test'));
-delete_transient(RSL_Admin::NOTICE_PREFIX . $admin);
+if (isset($admin) && is_int($admin)) { delete_transient(RSL_Admin::NOTICE_PREFIX . $admin); }
 if ($saved_current === '__unset__') { delete_option(RSL_Seasons::CURRENT_OPTION); } else { update_option(RSL_Seasons::CURRENT_OPTION, $saved_current); }
+rsl_dev_delete_users($users);
+rsl_dev_release_mail($hold);
+}
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";

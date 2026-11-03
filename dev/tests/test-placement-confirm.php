@@ -24,12 +24,15 @@ if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production'
 }
 require_once ABSPATH . 'wp-admin/includes/user.php';
 require_once dirname(__DIR__) . '/lib-profile.php';
+require_once dirname(__DIR__) . '/lib-mail-stop.php';
 global $wpdb;
 
 $season = '2086-pre';
 $suffix = time();
+$hold = rsl_dev_hold_mail($suffix);
 $fails = 0;
-$check = function ($label, $ok, $detail = '') use (&$fails) {
+$check = function ($label, $ok, $detail = '') use (&$fails, $hold) {
+    rsl_dev_park_mail($hold);
     if (!$ok) { $fails++; }
     echo ($ok ? "OK: $label\n" : "FAIL: $label" . ($detail !== '' ? " — $detail" : '') . "\n");
 };
@@ -310,7 +313,6 @@ foreach ($users as $u) {
     $wpdb->delete(RSL_Database::table('players'), array('user_id' => $u));
     $wpdb->delete(RSL_Database::table('free_agents'), array('user_id' => $u));
     $wpdb->delete(RSL_Database::table('invites'), array('user_id' => $u));
-    wp_delete_user($u);
 }
 $wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('outbox') . " WHERE to_email LIKE %s OR dedupe LIKE %s", '%-' . $suffix . '@example.test', 'optout:' . $season . ':%'));
 if ($saved_fa === '__unset__') {
@@ -318,4 +320,6 @@ if ($saved_fa === '__unset__') {
 } else {
     update_option(RSL_Free_Agents::SETTINGS_OPTION, $saved_fa);
 }
+rsl_dev_delete_users($users);
+rsl_dev_release_mail($hold);
 echo $fails ? "$fails FAILED\n" : "ALL PASSED\n";
