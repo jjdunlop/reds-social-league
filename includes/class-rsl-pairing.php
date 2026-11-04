@@ -482,7 +482,10 @@ class RSL_Pairing {
                 }
             }
         }
-        $ratings = RSL_Ratings::compute($season, date('Y-m-d', strtotime($night->night_date . ' -1 day')));
+        // The FIXTURES rating (seeded by the captain's level), never the
+        // ladder's: week one is paired by level, and explain_night()'s set
+        // chances (admin only) come from the same numbers.
+        $ratings = RSL_Ratings::compute($season, date('Y-m-d', strtotime($night->night_date . ' -1 day')), 'fixtures');
         $ctx['ratings'] = array();
         foreach ($ratings as $id => $r) {
             $ctx['ratings'][$id] = array('rating' => $r['rating'], 'sd' => $r['sd']);

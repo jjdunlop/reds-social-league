@@ -163,6 +163,29 @@ sort($sorted);
 $check('every Ranked team gets one game', !is_wp_error($res) && count($ranked_games) === 3 && $in === $sorted);
 $top = $has_pair(array_map(function ($g) { return array($g->home_team_id, $g->away_team_id); }, $ranked_games), $ids[0], $ids[1]);
 $check('week one pairs by the level estimates (top two together)', $top);
+// 0.18.1: fixtures use the FIXTURES rating (seeded by level); the ladder rating, which starts every
+// team on the same number, would see six identical teams in week one.
+$ctx1 = RSL_Pairing::context($nights[0]);
+$seeded = true;
+foreach ($teams as $i => $t) {
+    $seeded = $seeded && isset($ctx1['ratings'][intval($t->id)]) && abs($ctx1['ratings'][intval($t->id)]['rating'] - RSL_Teams::level_seed_rating($levels[$i])) < 0.01;
+}
+$ladder1 = RSL_Ratings::compute($season, date('Y-m-d', strtotime($nights[0]->night_date . ' -1 day')), 'ladder');
+$flat = count($ladder1) === count($teams) && max(array_column($ladder1, 'rating')) - min(array_column($ladder1, 'rating')) < 0.01;
+$check('pairing uses the seeded rating in week one: each team at its level seed, while the ladder rating has every team on the same start', $seeded && $flat);
+$top_game = null;
+foreach ($ranked_games as $g) {
+    if (in_array(intval($g->home_team_id), array($ids[0], $ids[1]), true) && in_array(intval($g->away_team_id), array($ids[0], $ids[1]), true)) {
+        $top_game = $g;
+    }
+}
+$why1 = RSL_Pairing::explain_night($nights[0]->id);
+$p_adv = $top_game && isset($why1[intval($top_game->id)]) ? $why1[intval($top_game->id)]['p'] : null;
+if ($p_adv !== null && intval($top_game->home_team_id) !== $ids[0]) {
+    $p_adv = 1 - $p_adv; // the advanced team's chance, whichever side it's on
+}
+$check('...and the admin set chance comes from it (advanced over strong: above 50%, where the ladder rating would say 50/50)', $p_adv !== null && $p_adv > 0.55,
+    $p_adv === null ? 'no top game' : (string) round($p_adv, 3));
 $ug = array_values(array_filter($games, function ($g) { return $g->division === 'unranked'; }));
 $check('odd Unranked: the spare team gets a game against the double-header team', count($ug) === 2
     && count(array_filter($ug, function ($g) use ($u) { return in_array(intval($u[0]->id), array(intval($g->home_team_id), intval($g->away_team_id)), true); })) === 2);

@@ -448,7 +448,7 @@ class RSL_Public_Fixtures {
             <details class="rsl-how">
                 <summary>How the ladder works</summary>
                 <ul>
-                    <li><strong>Ranked</strong> is ordered by rating, from the points in every set plus a bonus for winning sets — beating a strong team counts for more.</li>
+                    <li><strong>Ranked</strong> is ordered by rating, from the points in every set plus a bonus for winning sets — beating a strong team counts for more. Every team starts on the same rating, so results alone set the order.</li>
                     <li><strong>Tiers:</strong> <?php echo esc_html(implode(' · ', array_map(function ($t) { return $t[1] . ($t[2] > 0 ? ' ' . $t[2] . '+' : ''); }, array_reverse(RSL_Stats::TIERS)))); ?>. <?php echo esc_html(self::tier_rule_words()); ?></li>
                     <li><strong>In placements:</strong> a team's first <?php echo intval(RSL_Ratings::PLACEMENT_GAMES); ?> games.</li>
                     <li><strong>Finals:</strong> <?php echo intval(RSL_Stats::finals_min_rounds()); ?> regular-season rounds played.</li>

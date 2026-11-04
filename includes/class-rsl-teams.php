@@ -19,7 +19,9 @@ class RSL_Teams {
      * (not the old A/B/C grades, which mean nothing to new players).
      * Admin-only after that (never public), and the seed for a Ranked team's
      * first-week matchmaking until results take over. Each maps to a
-     * starting rating on the ~1500-average scale.
+     * starting rating on the ~1500-average scale — for the fixtures rating
+     * only; the ladder rating starts every team on the same number
+     * (RSL_Ratings::common_start(), the mean of these seeds).
      */
     public static function levels() {
         return array(

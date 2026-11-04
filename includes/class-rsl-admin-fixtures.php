@@ -407,6 +407,7 @@ class RSL_Admin_Fixtures {
                 <li><strong>Slots:</strong> earlier/later preferences are honoured where possible (teams that missed out get priority next time), the last slot is shared around, and spare slots become double-headers for teams that opted in — back-to-back or with a break, as they asked.</li>
             </ul>
             <p><strong>Ratings</strong> come from the points in every set (each rally is a small contest between the teams) plus a small bonus for winning sets — so a timed game that ends 1–1, a third set to 15, or a set cut off by the hour all count fairly. Forfeits never count.</p>
+            <p><strong>Two ratings from the same results.</strong> Fixtures and the <em>Set chance</em> column use a rating that starts each Ranked team from its level, so week one is paired sensibly. The public ladder, tiers and everything players see use a second rating that starts every team on the same number, so a team's level never moves it up or down the ladder. The two numbers differ until results outweigh the levels.</p>
             <p class="description">Simulated over many 10-round seasons of timed games, this gives games about as close as pairing by ladder position, with no team meeting another more than twice.</p>
         </details>
         <?php

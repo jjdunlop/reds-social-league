@@ -1707,7 +1707,8 @@ class RSL_Placement {
         foreach ($list as $t) {
             $ranked = $ranked || $t->division === 'ranked';
         }
-        $ratings = $ranked && class_exists('RSL_Ratings') ? RSL_Ratings::compute($season) : array();
+        // The fixtures rating (admin-only placement), as fixtures are made with it.
+        $ratings = $ranked && class_exists('RSL_Ratings') ? RSL_Ratings::compute($season, null, 'fixtures') : array();
         $roster = array();
         foreach ($wpdb->get_results($wpdb->prepare("
             SELECT m.team_id, p.level, p.years, p.positions

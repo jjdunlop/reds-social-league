@@ -9,17 +9,33 @@
  * read, so beating a team that later proves strong counts for more after
  * the fact. On an Elo-style scale: 400 points apart = 10:1 odds per set.
  *
- * - Each team starts from a prior centred on its seed (the captain's level
- *   estimate, RSL_Teams::level_seed_rating), so week one isn't random and a
- *   team's first results can't fling it to the ends of the ladder.
+ * TWO RATINGS, one model and the same results (0.18.1, the club's
+ * decision: the captain's starting level must not shape the ladder). They
+ * differ only in where each team's prior is centred (priors()):
+ * - FIXTURES ('fixtures'): centred on each team's seed (the captain's level
+ *   estimate, RSL_Teams::level_seed_rating), so week one's fixtures aren't
+ *   random. Used only to make fixtures (RSL_Pairing), to place free agents
+ *   (RSL_Placement) and for the admin-only set chances on the Fixtures
+ *   screen. Never public, never shown to a player.
+ * - LADDER ('ladder', the default): every team centred on ONE common start
+ *   (common_start()), so results alone separate teams. Everything public
+ *   and everything a player sees: the ladder order, tiers and their buffer,
+ *   placements, rating changes, upsets, close games, hype, season leaders,
+ *   team pages and RSL_Stats. With a 200-point difference in seeds, the
+ *   seeded rating still kept ~59% of it after 3 games and ~32% after 9; the
+ *   ladder rating keeps none.
+ *
+ * Both:
+ * - The prior (PRIOR_SD) keeps a team's first results from flinging it to
+ *   the ends of the ladder.
  * - Recent sets weigh a little more (HALF_LIFE_WEEKS), so improving teams
  *   aren't held back by their first month.
  * - Each team gets an uncertainty; above PROVISIONAL_SD it's provisional.
  * - Forfeits and missing results aren't played games — they never count.
  * - Only published nights count (as on every public page), so unpublishing
  *   a night takes its results out of the ratings and ladders too.
- * - A team with no played games has no public rating (showing its seed
- *   would reveal the hidden estimate); it sits under the rated teams.
+ * - A team with no played games has no public rating (its ladder rating
+ *   would only be the common start); it sits under the rated teams.
  *
  * Fitted by maximum a posteriori (Newton steps team by team — the problem
  * is concave, so it always converges). Later: carry ratings across
@@ -33,7 +49,8 @@ if (!defined('ABSPATH')) {
 class RSL_Ratings {
 
     const SCALE = 400;            // rating points for 10:1 odds in a set
-    const PRIOR_SD = 200;         // how far results can comfortably move a team from its seed
+    const PRIOR_SD = 200;         // how far results can comfortably move a team from its prior centre (both ratings)
+    const DEFAULT_START = 1500;   // the ladder's common start with no Ranked teams (the middle of the level seeds)
     const HALF_LIFE_WEEKS = 8;    // a set this many weeks old counts half
     const PLACEMENT_GAMES = 3;    // a team is in placements (provisional) for its first games — a clear rule players can follow
     const PROVISIONAL_SD = 95;    // ...and stays provisional after that only if its rating is still unusually uncertain
@@ -66,19 +83,21 @@ class RSL_Ratings {
      * Ranked ratings for a season from games on or before $as_of (Y-m-d,
      * null = everything). team_id => array(rating, sd, provisional, games).
      * Only active Ranked teams, and only published nights.
+     *
+     * $kind: 'ladder' (the default — everything public and everything a
+     * player sees) or 'fixtures' (seeded by the captain's level: making
+     * fixtures, placing free agents, the admin set chances). Anything else
+     * is read as 'ladder', so a caller that forgets is public-safe. Each
+     * kind is memoised separately; flush() forgets both.
      */
-    public static function compute($season, $as_of = null) {
-        $key = $season . '|' . $as_of;
+    public static function compute($season, $as_of = null, $kind = 'ladder') {
+        $kind = self::kind($kind);
+        $key = $kind . '|' . $season . '|' . $as_of;
         if (isset(self::$memo[$key])) {
             return self::$memo[$key];
         }
         $data = self::season_data($season);
-        $seeds = array();
-        foreach ($data['teams'] as $t) {
-            if ($t->division === 'ranked') {
-                $seeds[intval($t->id)] = RSL_Teams::level_seed_rating($t->est_level);
-            }
-        }
+        $seeds = self::seeds($data['teams']);
         $played = array_filter($data['games'], function ($g) use ($as_of, $seeds) {
             return $g->division === 'ranked' && !empty($g->published_at) && $g->status === 'played' && ($as_of === null || $g->night_date <= $as_of)
                 && isset($seeds[intval($g->home_team_id)]) && isset($seeds[intval($g->away_team_id)]);
@@ -96,13 +115,72 @@ class RSL_Ratings {
             $weeks = max(0, (strtotime($latest) - strtotime($g->night_date)) / (7 * DAY_IN_SECONDS));
             $games[] = array(intval($g->home_team_id), intval($g->away_team_id), $sets, $weeks);
         }
-        return self::$memo[$key] = self::fit($seeds, $games);
+        return self::$memo[$key] = self::fit(self::priors($seeds, $kind), $games);
+    }
+
+    /** 'fixtures' or 'ladder' — anything that isn't 'fixtures' is the (public-safe) ladder. */
+    public static function kind($kind) {
+        return $kind === 'fixtures' ? 'fixtures' : 'ladder';
+    }
+
+    /** Level seeds of a list of teams' Ranked ones: team_id => RSL_Teams::level_seed_rating(est_level). Pure. */
+    public static function seeds($teams) {
+        $seeds = array();
+        foreach ($teams as $t) {
+            if ($t->division === 'ranked') {
+                $seeds[intval($t->id)] = RSL_Teams::level_seed_rating($t->est_level);
+            }
+        }
+        return $seeds;
     }
 
     /**
-     * The model itself, no database: $seeds = team_id => starting rating;
-     * $games = list of array(home_id, away_id, sets (array of [home, away]),
-     * weeks_ago). Returns team_id => array(rating, sd, provisional, games).
+     * Where each team's prior is centred for one kind of rating (pure):
+     * 'fixtures' = its own level seed; 'ladder' = common_start($seeds) for
+     * every team. team_id => rating.
+     */
+    public static function priors($seeds, $kind = 'ladder') {
+        if (self::kind($kind) === 'fixtures') {
+            return $seeds;
+        }
+        $start = self::common_start($seeds);
+        $out = array();
+        foreach ($seeds as $id => $seed) {
+            $out[$id] = $start;
+        }
+        return $out;
+    }
+
+    /**
+     * The ladder's common start (pure): the mean of the season's Ranked
+     * teams' level seeds, rounded to 10; DEFAULT_START with none.
+     *
+     * Why the mean: fitted ratings always average exactly their prior
+     * centres (a result's evidence pushes its two teams apart by equal and
+     * opposite amounts), so starting every team at the mean seed puts the
+     * league's average rating where the seeded fixtures rating puts it. The tier
+     * thresholds (Bronze up to 1349, Silver 1350, Gold 1500, Platinum 1650,
+     * Diamond 1800) were set on that scale, so they keep their meaning: a
+     * league of mostly social teams still averages below Gold, a strong
+     * league above it. It reveals no team's level — every team starts on
+     * the same number. One team's level moves the start by its share of the
+     * mean (a 150-point change in a 14-team league: about 10) and every
+     * team's ladder rating with it by the same amount, so it never changes
+     * the order. Rounded so a small change usually moves nothing.
+     */
+    public static function common_start($seeds) {
+        if (!$seeds) {
+            return self::DEFAULT_START;
+        }
+        return (int) (10 * round(array_sum($seeds) / count($seeds) / 10));
+    }
+
+    /**
+     * The model itself, no database: $seeds = team_id => prior centre (each
+     * team's starting rating: its level seed for the fixtures rating, the
+     * common start for the ladder — priors()); $games = list of
+     * array(home_id, away_id, sets (array of [home, away]), weeks_ago).
+     * Returns team_id => array(rating, sd, provisional, games).
      *
      * Each game's sets are in the order played (the first set first).
      *
@@ -244,7 +322,7 @@ class RSL_Ratings {
         return min(1.0, max($a, $b) / (float) $target);
     }
 
-    /** Forget memoised ratings and season data (after results change in the same request). */
+    /** Forget memoised ratings (both kinds) and season data (after results change in the same request). */
     public static function flush() {
         self::$memo = array();
         self::$data = array();
@@ -255,8 +333,9 @@ class RSL_Ratings {
      * array(team, position, played, won, drawn, lost, forfeits, sets_for,
      * sets_against, rating|null, provisional, move|null, new, placement).
      *
-     * Ranked: settled teams by rating; then teams in placements (by name,
-     * no position yet); then teams without a played game (position null).
+     * Ranked: settled teams by the LADDER rating (never the seeded one);
+     * then teams in placements (by name, no position yet); then teams
+     * without a played game (position null).
      * move = places gained since the previous round.
      * Unranked: by wins, then set difference, then sets won.
      * Published nights only.
@@ -293,7 +372,7 @@ class RSL_Ratings {
         }
 
         if ($division === 'ranked') {
-            $now = self::compute($season);
+            $now = self::compute($season, null, 'ladder');
             // Settled teams are numbered by rating. Teams in placements are
             // listed (by name) but not numbered until their rating settles,
             // so a newcomer can't push everyone down after a game or two.
@@ -325,7 +404,7 @@ class RSL_Ratings {
             sort($dates);
             $before = array();
             if (count($dates) > 1) {
-                $prev = self::compute($season, $dates[count($dates) - 2]);
+                $prev = self::compute($season, $dates[count($dates) - 2], 'ladder');
                 $prev = array_filter($prev, function ($p) { return $p['games'] > 0 && !$p['provisional']; });
                 uasort($prev, function ($x, $y) { return $y['rating'] <=> $x['rating']; });
                 $before = array_flip(array_keys($prev));

@@ -6,7 +6,43 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
-## No protected tier, and finished sets count whole (0.18.1)
+## Two ratings, no protected tier, and finished sets count whole (0.18.1)
+
+- **The captain's level no longer shapes the ladder.** The club decided
+  that a team's starting level must not decide where it sits: a 200-point
+  difference in starting estimate still left about 59% of it in a team's
+  rating after 3 games and 32% after 9. There are now
+  two ratings, from the same model and the same results, differing only in
+  where each team starts (`RSL_Ratings::priors()`):
+  - the **fixtures rating** starts each Ranked team from its level seed, as
+    before, so week one is paired sensibly. It is used only to make
+    fixtures (`RSL_Pairing`), to place free agents (`RSL_Placement`) and for
+    the *Set chance* column on the admin Fixtures screen;
+  - the **ladder rating** starts every team on one common number, so
+    results alone separate teams. It drives everything public and
+    everything a player sees: the ladder order, tiers and their buffer,
+    placements, rating changes per night, upsets, close games, hype tags,
+    season leaders and team pages (`RSL_Stats`).
+
+  The common start is the mean of the season's Ranked teams' level seeds,
+  rounded to 10 (1500 with no Ranked teams), `RSL_Ratings::common_start()`.
+  Fitted ratings always average their starting values, so the league's
+  average rating stays where the seeded rating puts it and the tier
+  thresholds keep their meaning (Silver 1350, Gold 1500, Platinum 1650,
+  Diamond 1800). Changing one team's level moves the start by its share of
+  the mean and every team's ladder rating with it, by the same amount, so
+  the order never changes. One API: `RSL_Ratings::compute($season,
+  $as_of = null, $kind = 'ladder')`, `$kind` `'ladder'` or `'fixtures'`
+  (anything else reads as `'ladder'`), each memoised separately;
+  `flush()` clears both. The placement rules (no rating, tier, change,
+  upset or Even match while a team is in placements) are unchanged; they
+  no longer protect a hidden seed, since the ladder rating holds none.
+  How the ladder works now says every team starts on the same rating, and
+  the admin Fixtures help and team page say which rating uses the level.
+  `dev/simulate-ratings.php` compares the ladder seeded by the captains'
+  levels with the common-start ladder (fixtures made by the seeded rating
+  in both) and measures the seed influence; `ladder` prints those tables
+  alone, `noise=` sets how far off the captains' guesses are.
 
 - **A finished set counts as a whole set for the set bonus.** Before, a set
   needed 40 points in all to count whole, so the most decisive wins counted

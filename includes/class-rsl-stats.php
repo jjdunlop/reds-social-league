@@ -2,9 +2,12 @@
 /**
  * The season's story, for the game-style touches on public pages. Teams only.
  *
+ * Every rating here is the LADDER rating (RSL_Ratings::compute(..., 'ladder'):
+ * every team starts on the same number, so the captain's level never
+ * shapes anything public). The seeded fixtures rating is never read here.
+ *
  * Two kinds of progress, kept apart on purpose:
- *  - The RATING stays honest (it orders the Ranked ladder and makes the
- *    fixtures). It can go down.
+ *  - The RATING stays honest (it orders the Ranked ladder). It can go down.
  *  - What a team EARNS:
  *    - Tier badge (Ranked): Bronze → Silver → Gold → Platinum → Diamond.
  *      Tiers follow the rating with a small buffer so a single result
@@ -12,16 +15,19 @@
  *      into a tier; down one tier after DEMOTE_ROUNDS rounds in a row more
  *      than DEMOTE_BUFFER below the tier's floor (the first such round
  *      shows "at risk"). While provisional, a team is "In placements" — no
- *      tier and no rating change shown (which also keeps the hidden
- *      starting estimate hidden).
+ *      tier and no rating change shown: a rating from a game or two is
+ *      mostly its starting value.
  *    - Season Points (both divisions): points for turning up, winning,
  *      close games, upsets and achievements. Only ever go up; every
  *      LEVEL_POINTS is a new level.
  *
  * Also: per-night rating changes, form, streaks, upsets (winner had under
  * UPSET_CHANCE to win a set), close games, achievements, season leaders.
- * No set chance, upset or rating change involves a team in placements —
- * any of them would give away its hidden starting estimate.
+ * No set chance, upset or rating change involves a team in placements: its
+ * rating is still too unsettled to call a result an upset or to show a
+ * change. (Before 0.18.1 this also hid the captain's level estimate, which
+ * the one rating then held; the ladder rating no longer holds it, and the
+ * rules are unchanged.)
  * Only published nights count. Built from RSL_Ratings snapshots after
  * each round; memoised per request and saved between page views under a
  * fingerprint of the rows it's built from (any change makes a new key).
@@ -127,7 +133,7 @@ class RSL_Stats {
      *   teams => team_id => array(form, streak, history, achievements, peak, upsets, points, now => array(rating,
      *            provisional, position, tier (earned), at_risk, progress (0–1 to next tier), next)),
      *   leaders => array(improved, giant_killer, points => division => row),
-     *   ratings => the latest RSL_Ratings::compute(),
+     *   ratings => the latest ladder ratings, RSL_Ratings::compute($season, null, 'ladder'),
      *   meetings => meeting_key => list of array(date, status, winner (team id, 0 = draw), sets (home, away)), oldest first
      * )
      */
@@ -200,11 +206,12 @@ class RSL_Stats {
         }
         $out = array('games' => array(), 'teams' => array(), 'dates' => $dates, 'leaders' => array(), 'ratings' => array(), 'meetings' => array());
 
-        $before = $dates ? RSL_Ratings::compute($season, date('Y-m-d', strtotime($dates[0] . ' -1 day'))) : array();
+        // The LADDER rating throughout (never the seeded fixtures one): this is all public.
+        $before = $dates ? RSL_Ratings::compute($season, date('Y-m-d', strtotime($dates[0] . ' -1 day')), 'ladder') : array();
         $weeks_off = RSL_Requests::weeks_off($season);
         $wins_in_row = array();
         foreach ($dates as $date) {
-            $after = RSL_Ratings::compute($season, $date);
+            $after = RSL_Ratings::compute($season, $date, 'ladder');
             $positions = self::positions($after);
             $tonight = array_filter($done, function ($g) use ($date) { return $g->night_date === $date; });
             $first = reset($tonight);
@@ -355,7 +362,7 @@ class RSL_Stats {
             $before = $after;
         }
 
-        $now = RSL_Ratings::compute($season);
+        $now = RSL_Ratings::compute($season, null, 'ladder');
         $positions = self::positions($now);
         $min_rounds = self::finals_min_rounds();
         $last_date = $dates ? end($dates) : '';
@@ -444,8 +451,10 @@ class RSL_Stats {
 
     /**
      * Set-win chance for a game not yet played (Ranked), from the latest
-     * ratings — null while either team is in placements (it would give
-     * away the hidden starting estimate).
+     * ladder ratings — null while either team is in placements (its rating
+     * is still too unsettled to say). Public pages use it only for the
+     * Even match tag (RSL_Public_Fixtures::SHOW_SET_CHANCES is off); the admin set chances come
+     * from the fixtures rating (RSL_Pairing::explain_night()).
      */
     public static function chance_now($season, $home_id, $away_id) {
         $now = self::season($season)['ratings'];
