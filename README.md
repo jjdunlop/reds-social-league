@@ -6,62 +6,133 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
-## Two ratings, no protected tier, and finished sets count whole (0.18.1)
+## A results-only ladder, no protected tier, and finished sets count whole (0.18.1)
 
-- **The captain's level no longer shapes the ladder.** The club decided
-  that a team's starting level must not decide where it sits: a 200-point
-  difference in starting estimate still left about 59% of it in a team's
-  rating after 3 games and 32% after 9. There are now
-  two ratings, from the same model and the same results, differing only in
-  where each team starts (`RSL_Ratings::priors()`):
-  - the **fixtures rating** starts each Ranked team from its level seed, as
-    before, so week one is paired sensibly. It is used only to make
-    fixtures (`RSL_Pairing`), to place free agents (`RSL_Placement`) and for
-    the *Set chance* column on the admin Fixtures screen;
-  - the **ladder rating** starts every team on one common number, so
-    results alone separate teams. It drives everything public and
-    everything a player sees: the ladder order, tiers and their buffer,
-    placements, rating changes per night, upsets, close games, hype tags,
-    season leaders and team pages (`RSL_Stats`).
+- **The captain's level has no say in the ladder, at any point in the
+  season.** The club's rule: a captain's level must have no influence on a
+  team's ladder rating, tier or place after 5 games, so it can't affect
+  finals. 0.18.1 goes further: the ladder never reads a level, for any
+  team at any game count. Levels only steer the draw. Under the old single
+  rating, a 200-point difference in starting estimate still left about 59%
+  of it in a team's rating after 3 games and 32% after 9.
 
-  The common start is the mean of the season's Ranked teams' level seeds,
-  rounded to 10 (1500 with no Ranked teams), `RSL_Ratings::common_start()`.
-  Fitted ratings always average their starting values, so the league's
-  average rating stays where the seeded rating puts it and the tier
-  thresholds keep their meaning (Silver 1350, Gold 1500, Platinum 1650,
-  Diamond 1800). Changing one team's level moves the start by its share of
-  the mean and every team's ladder rating with it, by the same amount, so
-  the order never changes. One API: `RSL_Ratings::compute($season,
-  $as_of = null, $kind = 'ladder')`, `$kind` `'ladder'` or `'fixtures'`
-  (anything else reads as `'ladder'`), each memoised separately;
-  `flush()` clears both. The placement rules (no rating, tier, change,
-  upset or Even match while a team is in placements) are unchanged; they
-  no longer protect a hidden seed, since the ladder rating holds none.
-  How the ladder works now says every team starts on the same rating, and
-  the admin Fixtures help and team page say which rating uses the level.
-  `dev/simulate-ratings.php` compares the ladder seeded by the captains'
-  levels with the common-start ladder (fixtures made by the seeded rating
-  in both) and measures the seed influence; `ladder` prints those tables
-  alone, `noise=` sets how far off the captains' guesses are.
+  There are two ratings, from the same model and the same results
+  (`RSL_Ratings::priors()` says where each team starts, `fit_opts()` how
+  wide its prior is):
+  - the **fixtures rating** starts each Ranked team from its level seed
+    with prior sd 200, as before, so games are even from week one. It is
+    used only to make fixtures (`RSL_Pairing`), to place free agents
+    (`RSL_Placement`) and for the *Set chance* column on the admin Fixtures
+    screen;
+  - the **ladder rating** starts every team on one number per season, with
+    prior sd 350 (`LADDER_PRIOR_SD`), and from a team's first game only its
+    results move it. A team on 2 games and a team on 9 are rated the same
+    way. It drives everything public and everything a player sees: the
+    ladder order, tiers and their buffer, placements, rating changes per
+    night, upsets, close games, hype tags, season leaders and team pages
+    (`RSL_Stats`).
 
-  **What it costs, simulated** (14 teams, 10 rounds, 40 seasons; rank
-  correlation with the true strengths, 1 = perfect):
+  One API: `RSL_Ratings::compute($season, $as_of = null, $kind = 'ladder')`,
+  `$kind` `'ladder'` or `'fixtures'` (anything else reads as `'ladder'`),
+  each memoised separately; `flush()` clears both. `fit()` takes
+  `prior_sd` and `provisional_sd` options (defaults `PRIOR_SD` 200 and
+  `PROVISIONAL_SD` 95, which the fixtures rating keeps).
 
-  | Ladder | after R2 | R4 | R6 | R10 |
-  |---|---|---|---|---|
-  | Seeded by captain levels (before) | 0.85 | 0.87 | 0.90 | 0.93 |
-  | Common start (0.18.1) | 0.38 | 0.59 | 0.72 | 0.85 |
+- **One start per season, frozen on the first night.** The ladder's start
+  is set once, when the season's first Ranked night is published
+  (`RSL_Fixtures::publish_night()` calls `RSL_Ratings::start_for()`): the
+  mean level seed of the Ranked teams with a game that night, rounded to 10
+  (`common_start()`, `frozen_start()`, `first_ranked_night()`). It is kept
+  in the option `rsl_ladder_starts` (season => start, night, teams;
+  autoload off) and never recomputed, so a level edited later, or a team
+  joining late, moves nothing. A season already running when 0.18.1
+  arrives freezes it on the first read. Unpublishing every Ranked night of
+  the season forgets it (`forget_start()`), so the next publish freezes it
+  afresh; with no Ranked night published the ladder uses the current mean
+  seed without storing it (nothing public shows then). Fitted ratings
+  always average their starting values, so the league's average rating sits
+  at the start and the tier thresholds keep their meaning (Silver 1350,
+  Gold 1500, Platinum 1650, Diamond 1800).
 
-  The common-start ladder finds the true order more slowly, because the
-  fixtures pair teams the seeded rating calls even: early on, strong teams
-  mostly play strong teams and weak teams weak ones, so a 50/50 record says
-  little about where a team sits. The seeded ladder stays ahead in a lumpy
-  league (0.85 vs 0.92 after round 10) and with captains' guesses twice as
-  far off (`noise=300`: 0.85 vs 0.91). With identical results and one
-  team's level 200 points higher, the fixtures rating keeps 52% of the
-  difference after 3 games and 32% after 9; against the other teams the
-  ladder keeps none at 0, 3 and 9 games (every ladder rating moves by the
-  same ~14 points, the common start's share of the change).
+- **Why the ladder's prior is 350, not 200.** The prior says how far
+  results can comfortably move a team from where it starts. A level seed is
+  usually close to right, so 200 suits the fixtures rating. The shared
+  start knows nothing about a team, and with 200 it held results back: a
+  strong team needed most of the season to pull clear of a weak one. 300
+  made the ratings overconfident and 400 made early moves bigger for
+  little gain; 350 keeps the uncertainty honest (typical error / claimed
+  sd 1.02, against 1.52 at 200).
+
+- **Placements: 3 games, and the ladder's sd line is 120.** A team is in
+  placements while it has fewer than 3 games or its ladder sd is over
+  `LADDER_PROVISIONAL_SD` (120; the fixtures rating keeps 95). With the
+  wider prior, 60-67% of simulated teams are over 95 after 3 games and none
+  is over 120 (the 90th percentile is about 105), so the old line would
+  have kept most teams in placements for a fourth game.
+
+- **The draw links groups that haven't met.** The ladder only has results
+  to go on, so it can't compare teams that no chain of games connects (say
+  the top five have only played each other). From round 3, while the
+  published, played Ranked games split the teams that have played into
+  groups with no chain between them, a game between two groups costs 2.25
+  less (the cost of a 75/25 game) for each night in a row they've been
+  split: 2.25, 4.5, 6.75 and so on (`RSL_Pairing::link()` / `groups()`,
+  weights `link` 2.25 and `link_from` 3, filterable like the rest).
+  Forfeits don't link, a team with no game yet is left out, and Unranked
+  never gets the term. One group changes nothing. Court trimming and the
+  double-header checks judge games without it. `pair_cost()` and
+  `pair_division()` take the link as a last argument; `pair_cost()` returns
+  it as `link`. The admin Fixtures screen shows it in the *Why* column
+  ("Links two groups that haven't met yet: -2.25") and explains it under
+  *How automatic fixtures are made*.
+
+- **Simulated** (`wp eval-file dev/simulate-ratings.php ladder rounds=9
+  runs=600 seed=3000 age=0`: 14 teams, 9 rounds, 600 fresh seasons, the
+  latest night 0 weeks old as `compute()` counts it; rank correlation with
+  the true strengths, 1 = perfect; top 4 = share of the true top 4 in the
+  ladder's top 4 after the last round):
+
+  | Ladder | Draw | after R2 | R4 | R6 | R9 | avg error R9 | top 4 |
+  |---|---|---|---|---|---|---|---|
+  | Seeded by captain levels (0.18.0) | before 0.18.1 | 0.860 | 0.885 | 0.907 | 0.922 | 50.9 | 0.836 |
+  | Common start, prior sd 200 (first 0.18.1 draft) | before 0.18.1 | 0.381 | 0.612 | 0.739 | 0.835 | 77.4 | 0.767 |
+  | Results only, prior sd 350 (0.18.1) | with link | 0.427 | 0.761 | 0.848 | 0.895 | 55.6 | 0.812 |
+
+  After round 2 every team is still in placements, so nothing is shown;
+  the first numbered ladder comes after round 3. Against the draft that
+  kept prior sd 200, finals seeding gains 0.06 in rank correlation and
+  0.045 in top 4; against the old seeded ladder, which let the level count,
+  it gives up 0.027 and 0.024. Games stay as even as they were: the
+  favourite is above a 0.80 set chance in 12.8% of games (12.7% with the
+  old draw) and both teams are inside 0.35-0.65 in 51.2% (51.4%). The
+  costs: rounds 3-4 are rougher than the old seeded ladder, and a team's
+  early moves on the ladder are bigger (at its 4th game 1 in 10 moves over
+  100 points, against 60), all of them from results. With identical
+  results and one team's level 200 points higher from the start, the
+  fixtures rating keeps 52% of the difference after 3 games and 32% after
+  9; against the other teams the ladder keeps none (every ladder rating
+  moves by the start's ~14 points), and a level edited after the first
+  night moves no ladder rating at all. With no options the simulator
+  reproduces the older 10-round table (seeded 0.85 / 0.87 / 0.90 / 0.93
+  after rounds 2 / 4 / 6 / 10, prior-200 draft 0.38 / 0.59 / 0.72 / 0.85)
+  and adds the 0.18.1 ladder (0.43 / 0.73 / 0.82 / 0.89). `seed=` starts
+  from fresh seasons, `age=` sets how old the latest night counts, `ladder`
+  prints these tables alone, `noise=` sets how far off the captains'
+  guesses are.
+
+- **How the ladder works** says every team starts the season on the same
+  rating and only results move it from its first game, that the first 3
+  games are placements whose rating shows once they're done, and that from
+  round 3 the draw may take a slightly less even game to connect teams that
+  have only played each other. The admin team page and Fixtures help say
+  the level never moves a team on the ladder.
+
+- **Tests:** editing levels after night one leaves every ladder rating
+  identical, teams under 5 games included, and nothing public moves; late
+  joiners don't move the start; unpublishing every Ranked night forgets it
+  and publishing re-freezes it; `fit()`'s new options and the 120 line;
+  the link term (pure cases, a real season's groups, forfeits, Unranked,
+  the admin *Why* column).
 
 - **A finished set counts as a whole set for the set bonus.** Before, a set
   needed 40 points in all to count whole, so the most decisive wins counted
