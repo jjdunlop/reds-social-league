@@ -369,8 +369,11 @@ class RSL_Fixtures {
     /**
      * Release (or pull back) a night's fixtures. Already in that state: the
      * publish time is kept. Publishing the season's first Ranked night
-     * freezes the ladder's start from that night's teams; pulling back the
-     * last published Ranked night forgets it (RSL_Ratings::start_for()).
+     * freezes the ladder's start from that night's teams
+     * (RSL_Ratings::start_for()); pulling back a night that leaves the
+     * season no published Ranked night forgets it (forget_start()), so the
+     * next publish freezes it afresh. This is the only place a start is
+     * forgotten: reads never do.
      */
     public static function publish_night($night_id, $publish = true) {
         global $wpdb;
@@ -383,8 +386,23 @@ class RSL_Fixtures {
         }
         RSL_Payments::sync_night($night_id); // game fees are charged when fixtures are published
         RSL_Ratings::flush();
-        RSL_Ratings::start_for($night->season);
+        if ($publish) {
+            RSL_Ratings::start_for($night->season);
+        } elseif (self::published_ranked_games($night->season) === 0) {
+            RSL_Ratings::forget_start($night->season);
+        }
         return RSL_Courts::get_night($night_id);
+    }
+
+    /**
+     * How many of a season's Ranked games are on published nights, or null
+     * when the count can't be read (so a failed read never passes for none).
+     */
+    public static function published_ranked_games($season) {
+        global $wpdb;
+        $n = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . RSL_Database::table('games') . " g JOIN " . RSL_Database::table('nights') . " n ON n.id = g.night_id
+            WHERE g.season = %s AND g.division = 'ranked' AND n.published_at IS NOT NULL", $season));
+        return $n === null ? null : intval($n);
     }
 
     /**

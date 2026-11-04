@@ -166,8 +166,10 @@ class RSL_Stats {
     /**
      * A cheap fingerprint of everything season() is built from: the season's
      * games (results, not live scores), nights, active teams and night
-     * requests, plus the finals rule and the plugin version. One query;
-     * null if it fails (then nothing is saved). Each row is hashed with MD5
+     * requests, plus the finals rule, the plugin version and the ladder
+     * model's settings (RSL_Ratings::ladder_model(), so a same-version build
+     * that changes the ladder gets a fresh key). One query; null if it
+     * fails (then nothing is saved). Each row is hashed with MD5
      * (64 bits of it), not CRC32: CRC32 is linear over XOR, so two rows
      * swapping values (scores entered against the wrong court, then fixed)
      * would cancel out and keep the old key.
@@ -191,7 +193,7 @@ class RSL_Stats {
         if (!$row) {
             return null;
         }
-        return implode('|', array($row->n, $row->h, self::finals_min_rounds(), defined('RSL_VERSION') ? RSL_VERSION : ''));
+        return implode('|', array($row->n, $row->h, self::finals_min_rounds(), defined('RSL_VERSION') ? RSL_VERSION : '', RSL_Ratings::ladder_model()));
     }
 
     private static function build($season) {

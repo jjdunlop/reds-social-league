@@ -33,18 +33,23 @@
  * usually close to right, so 200 suits the fixtures rating. The shared
  * start knows nothing about a team, and at 200 it held results back: a
  * strong team needed most of the season to pull clear of a weak one.
- * Simulated (dev/simulate-ratings.php: 14 teams, 9 rounds, 600 seasons,
- * the link draw), rank correlation with the true strengths after rounds 4
- * and 9 is 0.76 and 0.895 at 350, against 0.61 and 0.835 at 200 (and 0.89
- * and 0.92 for the old ladder that let the level count); the uncertainty
- * stays honest. The cost is bigger moves in a team's first weeks, all of
- * them from results. With the wider prior nearly every team is over 95
- * after 3 games, so the ladder's provisional line is LADDER_PROVISIONAL_SD
- * (120): in simulation no team was over it after 3 games.
+ * Simulated (14 teams, 9 rounds, 600 fresh seasons), rank correlation with
+ * the true strengths after rounds 4 and 9:
+ * - prior 200, on the draw before 0.18.1 (the first draft): 0.61, 0.835;
+ * - prior 350, on that same draw (no link term): 0.734, 0.891;
+ * - prior 350 with the link draw (0.18.1, dev/simulate-ratings.php):
+ *   0.76, 0.895;
+ * - the old ladder that let the level count: 0.89, 0.92.
+ * So the prior gives most of the gain and the link term about 0.03 more at
+ * round 4; the uncertainty stays honest at 350. The cost is bigger moves
+ * in a team's first weeks, all of them from results. With the wider prior
+ * 60-67% of teams are over 95 after 3 games, so the ladder's provisional
+ * line is LADDER_PROVISIONAL_SD (120): in simulation no team was over it
+ * after 3 games (the 90th percentile is about 105).
  *
- * The draw helps: from round 3, RSL_Pairing::link() favours a game
- * between groups of teams that no chain of results connects yet, so the
- * ladder can compare them.
+ * The draw helps: from the third night with Ranked results,
+ * RSL_Pairing::link() favours a game between groups of teams that no chain
+ * of results connects yet, so the ladder can compare them.
  *
  * Both:
  * - The prior keeps a team's first results from flinging it to the ends
@@ -194,6 +199,16 @@ class RSL_Ratings {
     }
 
     /**
+     * The ladder model's settings as one string (pure). RSL_Stats keys its
+     * cache with it, so a build that retunes the ladder under the same
+     * version never serves stats worked out with the old settings.
+     */
+    public static function ladder_model() {
+        return implode('/', array('ladder', self::LADDER_PRIOR_SD, self::LADDER_PROVISIONAL_SD, self::PLACEMENT_GAMES,
+            self::SET_WEIGHT, self::POINT_WEIGHT, self::HALF_LIFE_WEEKS, self::SD_CALIBRATION, self::RALLY_SCALE));
+    }
+
+    /**
      * The ladder's start formula (pure): the mean of the given level seeds,
      * rounded to 10; DEFAULT_START with none. start_for() applies it once a
      * season, to the Ranked teams with a game on the season's first
@@ -260,29 +275,31 @@ class RSL_Ratings {
      * editing a level later — or a team joining late — never moves it.
      * The first read after a Ranked night is published stores it (and
      * RSL_Fixtures::publish_night() reads it straight away), which also
-     * covers a season already running when this arrived. With no published
-     * Ranked night it is common_start() of the current seeds, not stored
-     * (nothing public shows then), and a stored start is forgotten, so
-     * unpublishing every Ranked night lets the next publish freeze it
-     * afresh. Memoised per request; flush() forgets it.
+     * covers a season already running when this arrived. A stored start is
+     * returned as it is: a read never forgets it or freezes it again, even
+     * one that sees no published Ranked night (a failed games read looks
+     * the same). Only RSL_Fixtures::publish_night() forgets it, when
+     * unpublishing leaves no published Ranked night, so the next publish
+     * freezes it afresh. With nothing stored and no published Ranked night
+     * it is common_start() of the current seeds, not stored (nothing public
+     * shows then); nor is a start frozen from no Ranked teams at all (a
+     * failed teams read looks the same), so the next read freezes it from
+     * the real ones. Memoised per request; flush() forgets it.
      */
     public static function start_for($season) {
         if (isset(self::$starts[$season])) {
             return self::$starts[$season];
         }
+        $all = get_option(self::STARTS_OPTION, array());
+        $all = is_array($all) ? $all : array();
+        if (isset($all[$season]['start'])) {
+            return self::$starts[$season] = intval($all[$season]['start']);
+        }
         $data = self::season_data($season);
         $seeds = self::seeds($data['teams']);
         $first = self::first_ranked_night($data['games']);
-        $all = get_option(self::STARTS_OPTION, array());
-        $all = is_array($all) ? $all : array();
-        if ($first === null) {
-            if (isset($all[$season])) {
-                self::forget_start($season);
-            }
+        if ($first === null || !$seeds) {
             return self::$starts[$season] = self::common_start($seeds);
-        }
-        if (isset($all[$season]['start'])) {
-            return self::$starts[$season] = intval($all[$season]['start']);
         }
         $start = self::frozen_start($seeds, $first['teams']);
         $all[$season] = array('start' => $start, 'night' => $first['date'], 'teams' => count(array_intersect_key($seeds, array_flip($first['teams']))));
@@ -290,7 +307,12 @@ class RSL_Ratings {
         return self::$starts[$season] = $start;
     }
 
-    /** Forget a season's frozen start (start_for() freezes it again from the first published Ranked night). */
+    /**
+     * Forget a season's frozen start (start_for() freezes it again from the
+     * first published Ranked night). Called by RSL_Fixtures::publish_night()
+     * when unpublishing leaves the season no published Ranked night, and by
+     * tests and dev scripts cleaning up; never from a read.
+     */
     public static function forget_start($season) {
         unset(self::$starts[$season]);
         $all = get_option(self::STARTS_OPTION, array());

@@ -220,7 +220,12 @@ remove_filter('pre_wp_mail', '__return_true');
 // withdraw it). Made a bye, nothing is left to miss, so it's withdrawn too; then the
 // next save of the dates removes the now-empty night.
 RSL_Fixtures::clear_result($game->id);
+$starts = get_option(RSL_Ratings::STARTS_OPTION, array());
+$frozen_before = is_array($starts) && isset($starts[$season]['start']);
 RSL_Fixtures::publish_night($played->id, false);
+$starts = get_option(RSL_Ratings::STARTS_OPTION, array());
+$check('unpublishing the season\'s only published Ranked night forgets the ladder\'s start (publishing it had frozen it)',
+    $frozen_before && (!is_array($starts) || !isset($starts[$season])) && RSL_Fixtures::published_ranked_games($season) === 0);
 RSL_Fixtures::delete_game($game->id);
 $check('set-up: cleared, no fees, and the supervisor went with the last game', !is_wp_error($cant) && $fees($played->id) === 0 && $jobs($played->id) === 0);
 $g = RSL_Courts::generate_nights($season);
@@ -246,6 +251,7 @@ foreach (RSL_Courts::nights($season) as $n) {
     $wpdb->delete(RSL_Database::table('jobs'), array('night_id' => $n->id));
 }
 $wpdb->delete(RSL_Database::table('nights'), array('season' => $season));
+RSL_Ratings::forget_start($season); // publishing a Ranked night froze the ladder's start
 // Every team in the test's season (however far the test got).
 foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $season)) as $tid) {
     $wpdb->delete(RSL_Database::table('requests'), array('team_id' => $tid));

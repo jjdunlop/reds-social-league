@@ -334,6 +334,11 @@ $check('swapping two results makes a new key and rebuilds from fresh data', $key
 $swap($g2, $g3); // back as they were
 RSL_Stats::flush();
 $check('...and swapping back rebuilds the original story under the original key', RSL_Stats::season($season) == $stats && $key_of() === $key_before);
+// The key carries the ladder model's settings too, so a build that retunes the ladder under the same
+// version (0.18.1 did) never serves stats worked out with the old ladder.
+$model = RSL_Ratings::ladder_model();
+$check('the key ends with the ladder model\'s settings (prior sd 350, line 120, 3 placement games)', is_string($key_before)
+    && substr($key_before, -strlen('|' . $model)) === '|' . $model && strpos($model, 'ladder/350/120/3/') === 0, (string) $key_before);
 $_GET = array('week' => $n3->night_date);
 $html = $pages->render_fixtures();
 $check('fixtures page flags the upset and shows tiers', strpos($html, 'Upset!') !== false && strpos($html, 'rsl-tier') !== false);
@@ -404,6 +409,9 @@ $check('How the ladder works gives the reason for the tier buffer, and nothing a
     && strpos(RSL_Public_Fixtures::tier_rule_words(), 'so a single result doesn\'t flip a team between tiers') !== false
     && strpos(RSL_Public_Fixtures::tier_rule_words(), 'two rounds in a row more than 50 points below where its tier starts') !== false
     && strpos($html, 'Up straight away') === false && stripos($html, 'keep at least') === false);
+$check('How the ladder works says how far the draw goes to link groups (about 3 sets in 4, a wider gap each week apart), not a slightly less even game',
+    strpos($html, 'the favourite would win about 3 sets in 4') !== false && strpos($html, 'a wider gap each week they stay apart') !== false
+    && strpos($html, 'slightly less even') === false);
 
 // Earned tiers: honest rating underneath, fair badge on top.
 $tk = function ($k) { return RSL_Stats::tier_by_key($k); };
@@ -546,7 +554,12 @@ foreach ($levels_were as $id => $level) {
 
 // The start is frozen only while a Ranked night is published: unpublish them all and it's forgotten;
 // publish night one again and it freezes from that night's teams' levels as they are then (Blockers
-// edited to advanced meanwhile: the four average 1575, rounded to 1580).
+// edited to advanced meanwhile: the four average 1575, rounded to 1580). Unpublishing a night while
+// another Ranked night is still out keeps it.
+RSL_Fixtures::publish_night($nights[0]->id, false);
+$starts = get_option(RSL_Ratings::STARTS_OPTION, array());
+$check('unpublishing one night while other Ranked nights are still published keeps the start', isset($starts[$season]) && $starts[$season]['start'] === 1500
+    && RSL_Fixtures::published_ranked_games($season) > 0);
 foreach ($nights as $n) {
     RSL_Fixtures::publish_night($n->id, false);
 }
@@ -572,6 +585,57 @@ foreach (array(0, 1, 2, 3) as $i) {
 }
 $starts = get_option(RSL_Ratings::STARTS_OPTION, array());
 $check('...and back as it was (night one\'s teams at their own levels: 1500)', isset($starts[$season]) && $starts[$season]['start'] === 1500 && RSL_Ratings::start_for($season) === 1500);
+
+// Only publish_night() forgets the start. A read that sees no published Ranked night (a failed games
+// read looks the same) leaves it alone, so the next read still has it, with a level edited meanwhile
+// (Blockers to advanced again: a fresh freeze would give 1580).
+$pub_was = array();
+foreach (RSL_Courts::nights($season) as $n) {
+    $pub_was[intval($n->id)] = $n->published_at;
+}
+RSL_Teams::set_level($B->id, 'advanced');
+$wpdb->query($wpdb->prepare("UPDATE " . RSL_Database::table('nights') . " SET published_at = NULL WHERE season = %s", $season));
+RSL_Ratings::flush();
+$blind_start = RSL_Ratings::start_for($season);
+$blind = RSL_Ratings::compute($season, null, 'ladder');
+$starts = get_option(RSL_Ratings::STARTS_OPTION, array());
+$blind_kept = isset($starts[$season]) && $starts[$season]['start'] === 1500;
+foreach ($pub_was as $id => $at) {
+    $wpdb->update(RSL_Database::table('nights'), array('published_at' => $at), array('id' => $id));
+}
+RSL_Ratings::flush();
+$lad_back = RSL_Ratings::compute($season, null, 'ladder');
+$check('a read that sees no published Ranked night (as a failed games read would) never forgets the start: the next read has it, a level edited meanwhile',
+    $blind_start === 1500 && $blind_kept && abs($blind[intval($E->id)]['rating'] - 1500) < 1e-9 && RSL_Ratings::start_for($season) === 1500
+    && abs($lad_back[intval($E->id)]['rating'] - 1500) < 1e-9 && $lad_back[intval($A->id)]['games'] > 0, wp_json_encode($starts));
+RSL_Teams::set_level($B->id, $levels_were[intval($B->id)]);
+
+// Nor is a start frozen from no Ranked teams (a failed teams read looks the same): nothing is stored,
+// and the next read freezes it from night one's teams.
+$status_was = array();
+foreach (RSL_Teams::list_for_season($season) as $t) {
+    if ($t->division === 'ranked') {
+        $status_was[intval($t->id)] = $t->status;
+    }
+}
+RSL_Ratings::forget_start($season);
+foreach ($status_was as $id => $st) {
+    $wpdb->update(RSL_Database::table('teams'), array('status' => 'pending'), array('id' => $id));
+}
+RSL_Ratings::flush();
+$none_start = RSL_Ratings::start_for($season);
+$starts = get_option(RSL_Ratings::STARTS_OPTION, array());
+$none_stored = !is_array($starts) || !isset($starts[$season]);
+foreach ($status_was as $id => $st) {
+    $wpdb->update(RSL_Database::table('teams'), array('status' => $st), array('id' => $id));
+}
+RSL_Ratings::flush();
+$again_start = RSL_Ratings::start_for($season);
+$starts = get_option(RSL_Ratings::STARTS_OPTION, array());
+$check('...nor is one frozen from no Ranked teams (as a failed teams read would look): nothing stored, and the next read freezes it from night one\'s teams',
+    count($status_was) >= 4 && $none_start === RSL_Ratings::DEFAULT_START && $none_stored && $again_start === 1500
+    && isset($starts[$season]) && $starts[$season]['start'] === 1500 && $starts[$season]['teams'] === 4 && $starts[$season]['night'] === $n1->night_date,
+    wp_json_encode($starts));
 RSL_Ratings::flush();
 RSL_Stats::flush();
 
