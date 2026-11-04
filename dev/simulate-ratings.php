@@ -237,6 +237,7 @@ foreach ($seed_games as $k) {
     foreach (array('fixtures', 'ladder') as $kind) {
         foreach (array('gap', 'rel') as $m) {
             $v = $avg($seed_score[$kind][$k][$m]);
+            $v = abs($v) < 0.05 ? 0.0 : $v; // no -0.0 from rounding noise
             printf(" %22s", sprintf('%+.1f (%.0f%%)', $v, 100 * $v / $seed_bump));
         }
     }

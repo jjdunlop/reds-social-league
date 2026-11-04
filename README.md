@@ -44,6 +44,25 @@ finals (see `CLAUDE.md`).
   in both) and measures the seed influence; `ladder` prints those tables
   alone, `noise=` sets how far off the captains' guesses are.
 
+  **What it costs, simulated** (14 teams, 10 rounds, 40 seasons; rank
+  correlation with the true strengths, 1 = perfect):
+
+  | Ladder | after R2 | R4 | R6 | R10 |
+  |---|---|---|---|---|
+  | Seeded by captain levels (before) | 0.85 | 0.87 | 0.90 | 0.93 |
+  | Common start (0.18.1) | 0.38 | 0.59 | 0.72 | 0.85 |
+
+  The common-start ladder finds the true order more slowly, because the
+  fixtures pair teams the seeded rating calls even: early on, strong teams
+  mostly play strong teams and weak teams weak ones, so a 50/50 record says
+  little about where a team sits. The seeded ladder stays ahead in a lumpy
+  league (0.85 vs 0.92 after round 10) and with captains' guesses twice as
+  far off (`noise=300`: 0.85 vs 0.91). With identical results and one
+  team's level 200 points higher, the fixtures rating keeps 52% of the
+  difference after 3 games and 32% after 9; against the other teams the
+  ladder keeps none at 0, 3 and 9 games (every ladder rating moves by the
+  same ~14 points, the common start's share of the change).
+
 - **A finished set counts as a whole set for the set bonus.** Before, a set
   needed 40 points in all to count whole, so the most decisive wins counted
   least (25-10 was 0.875 of a set, a finished third set 15-8 only 0.575).

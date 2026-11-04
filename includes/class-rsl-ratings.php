@@ -23,7 +23,11 @@
  *   placements, rating changes, upsets, close games, hype, season leaders,
  *   team pages and RSL_Stats. With a 200-point difference in seeds, the
  *   seeded rating still kept ~59% of it after 3 games and ~32% after 9; the
- *   ladder rating keeps none.
+ *   ladder rating keeps none. The cost, simulated (dev/simulate-ratings.php):
+ *   the ladder finds the true order more slowly (rank correlation 0.59 vs
+ *   0.87 after 4 rounds, 0.85 vs 0.93 after 10), as the fixtures pair teams
+ *   the seeded rating calls even, so early results say little about teams
+ *   that haven't met.
  *
  * Both:
  * - The prior (PRIOR_SD) keeps a team's first results from flinging it to
