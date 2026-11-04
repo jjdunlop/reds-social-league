@@ -456,7 +456,7 @@ class RSL_Public_Fixtures {
                     <li><strong>Tiers:</strong> <?php echo esc_html(implode(' · ', array_map(function ($t) { return $t[1] . ($t[2] > 0 ? ' ' . $t[2] . '+' : ''); }, array_reverse(RSL_Stats::TIERS)))); ?>. <?php echo esc_html(self::tier_rule_words()); ?></li>
                     <li><strong>In placements:</strong> a team's first <?php echo intval(RSL_Ratings::PLACEMENT_GAMES); ?> games. They count from the first game; the rating shows once they're done.</li>
                     <li><strong>The draw:</strong> each week pairs teams for even games. From round 3, if some teams have only played each other, the draw connects them with the rest so the ladder can compare everyone, even with a game where the favourite would win about 3 sets in 4, and it accepts a wider gap each week they stay apart.</li>
-                    <li><strong>Finals:</strong> a team needs <?php echo intval(RSL_Stats::finals_min_games()); ?> regular-season games played. A double-header counts as two games. A bye doesn't count, and nor does a forfeit, won or lost.</li>
+                    <li><strong>Finals:</strong> a team needs <?php echo intval(RSL_Stats::finals_min_games()); ?> regular-season games played in its division. A double-header counts as two games. A bye doesn't count, and nor does a forfeit, won or lost.</li>
                     <li><strong>Level:</strong> Season Points — <?php echo esc_html('+' . $pts['played'] . ' a night, +' . $pts['win'] . ' a win, +' . $pts['close'] . ' a close game, +' . $pts['upset'] . ' an upset, +' . $pts['achievement'] . ' an achievement'); ?>.</li>
                 </ul>
             </details>

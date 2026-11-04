@@ -102,6 +102,11 @@ $n_past = $nights[1];
 $wpdb->insert(RSL_Database::table('requests'), array('team_id' => $T(4), 'night_id' => $n_past->id, 'type' => 'off', 'requested_by' => $caps[4]));
 $pg = RSL_Fixtures::add_game($n_past->id, array('home' => $T(0), 'away' => $T(1), 'court_id' => intval(RSL_Courts::courts($hall->id)[0]->id), 'start' => '19:00'));
 RSL_Fixtures::record_result($pg->id, '25-20, 25-22');
+// Team 2's only game that night is one it forfeited (to team 1, whose second game it was).
+$fg = RSL_Fixtures::add_game($n_past->id, array('home' => $T(2), 'away' => $T(1), 'court_id' => intval(RSL_Courts::courts($hall->id)[0]->id), 'start' => '20:00'));
+if (!is_wp_error($fg)) {
+    RSL_Fixtures::record_forfeit($fg->id, $T(2));
+}
 RSL_Fixtures::publish_night($n_past->id);
 $wpdb->query($wpdb->prepare("UPDATE " . RSL_Database::table('teams') . " SET created_at = %s WHERE season = %s", $nights[0]->night_date . ' 00:00:00', $season));
 RSL_Ratings::flush();
@@ -110,7 +115,13 @@ $st = RSL_Stats::season($season);
 $check('left out by the fixtures: turn-up points, but a bye is not a game played for finals (0.18.1)', $st['teams'][$T(3)]['points'] === RSL_Stats::POINTS['played']
     && $st['teams'][$T(3)]['games'] === 0 && $st['teams'][$T(3)]['finals']['games'] === 0);
 $check('a week off: no points, no game', $st['teams'][$T(4)]['games'] === 0 && $st['teams'][$T(4)]['points'] === 0);
-$check('the two teams that played: one game each towards finals', $st['teams'][$T(0)]['games'] === 1 && $st['teams'][$T(1)]['finals']['games'] === 1);
+$check('the two teams that played: one game each towards finals (team 1\'s forfeit win is none)', $st['teams'][$T(0)]['games'] === 1 && $st['teams'][$T(1)]['finals']['games'] === 1);
+// Season Points' turn-up rule is once a night and separate from finals: a team that played gets no bye points on top.
+$check('turn-up points once a night for the teams that played: team 0 a win (' . (RSL_Stats::POINTS['played'] + RSL_Stats::POINTS['win']) . '), team 1 a loss and a forfeit win (' . RSL_Stats::POINTS['played'] . ')',
+    $st['teams'][$T(0)]['points'] === RSL_Stats::POINTS['played'] + RSL_Stats::POINTS['win'] && $st['teams'][$T(1)]['points'] === RSL_Stats::POINTS['played'],
+    $st['teams'][$T(0)]['points'] . ' / ' . $st['teams'][$T(1)]['points']);
+$check('a night whose only game the team forfeited: no turn-up points, no bye points, no game', !is_wp_error($fg)
+    && $st['teams'][$T(2)]['points'] === 0 && $st['teams'][$T(2)]['games'] === 0 && $st['teams'][$T(2)]['finals']['games'] === 0, (string) $st['teams'][$T(2)]['points']);
 
 // --- Team page season schedule -------------------------------------------------------------------
 $team0 = RSL_Teams::get($T(0));

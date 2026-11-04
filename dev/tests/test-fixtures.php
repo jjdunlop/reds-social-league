@@ -424,7 +424,7 @@ $check('How the ladder works says how far the draw goes to link groups (about 3 
     strpos($html, 'the favourite would win about 3 sets in 4') !== false && strpos($html, 'a wider gap each week they stay apart') !== false
     && strpos($html, 'slightly less even') === false);
 $check('How the ladder works and the Finals column count games played (byes and forfeits don\'t count), never rounds',
-    strpos($html, 'a team needs 5 regular-season games played. A double-header counts as two games. A bye doesn\'t count, and nor does a forfeit, won or lost.') !== false
+    strpos($html, 'a team needs 5 regular-season games played in its division. A double-header counts as two games. A bye doesn\'t count, and nor does a forfeit, won or lost.') !== false
     && strpos($html, 'title="Finals: needs 5 regular-season games played"') !== false && strpos($html, 'title="Has played enough games for finals"') !== false
     && stripos($html, 'rounds played') === false && stripos($html, 'rounds needed') === false && stripos($html, 'enough rounds') === false);
 
@@ -460,7 +460,8 @@ $check('a three-set game is a close one', $stats['games'][intval($g1->id)]['clos
 // Finals (0.18.1): a Ranked team needs 5 regular-season games PLAYED. A double-header is two games;
 // a bye, a forfeit (won or lost), a game with no result yet, a finals-night game and anything on an
 // unpublished night are none. In $stats round 3 is the last night with results and round 4's fixtures
-// aren't out, so each team has round 4 to come as one game.
+// aren't out, so each team has round 4 to come as up to two games: until the fixtures are out any team
+// can ask for two, and the draw gives a team at most two a night (a double-header).
 $min = method_exists('RSL_Stats', 'finals_min_games') ? RSL_Stats::finals_min_games() : null;
 $six = $four = $old_name = null;
 if ($min !== null) {
@@ -483,13 +484,13 @@ $fin = function ($st, $t) { return $st['teams'][intval($t->id)]['finals']; };
 $want = function ($games, $need, $eligible, $possible) { return array('games' => $games, 'need' => $need, 'eligible' => $eligible, 'possible' => $possible); };
 $check('a double-header counts as two games: Aces, 5 games over 3 nights (two double-headers), are eligible at exactly 5',
     $games_of($stats, $A) === 5 && $fin($stats, $A) === $want(5, 0, true, true), wp_json_encode($fin($stats, $A)));
-$check('Cobras, 4 games over 3 nights: 1 to go, and round 4 can still give it them (4 + 1 = 5)',
+$check('Cobras, 4 games over 3 nights: 1 to go, and round 4 can still give it them (4 + up to 2)',
     $games_of($stats, $C) === 4 && $fin($stats, $C) === $want(4, 1, false, true), wp_json_encode($fin($stats, $C)));
-$check('a forfeit win is not a game played: Blockers, 2 games and a forfeit win, need 3 and can\'t get there (2 + 1)',
+$check('a forfeit win is not a game played: Blockers, 2 games and a forfeit win, need 3 and can\'t get there (2 + up to 2; their game in round 4\'s draft, not out yet, is not counted again)',
     $games_of($stats, $B) === 2 && $fin($stats, $B) === $want(2, 3, false, false), wp_json_encode($fin($stats, $B)));
-$check('a forfeit loss is not a game played: Diggers, 3 games (round 3: a forfeit loss and a win), need 2 and can\'t get there (3 + 1)',
-    $games_of($stats, $D) === 3 && $fin($stats, $D) === $want(3, 2, false, false), wp_json_encode($fin($stats, $D)));
-$check('a bye is not a game played: Eagles, left out in round 3 (turn-up points for it), have 0 games and need 5',
+$check('a forfeit loss is not a game played: Diggers, 3 games (round 3: a forfeit loss and a win), need 2, which a double-header in round 4 could still give them (3 + 2)',
+    $games_of($stats, $D) === 3 && $fin($stats, $D) === $want(3, 2, false, true), wp_json_encode($fin($stats, $D)));
+$check('a bye is not a game played: Eagles, left out in round 3 (turn-up points for it), have 0 games and need 5 (0 + up to 2: can\'t get there)',
     $games_of($stats, $E) === 0 && $fin($stats, $E) === $want(0, 5, false, false) && $se['points'] === RSL_Stats::POINTS['played'], wp_json_encode($fin($stats, $E)));
 
 // As round 4's fixtures come out and its results come in (the rest of this block puts everything back).
@@ -512,6 +513,43 @@ $html = $pages->render_ladder();
 $check('the Finals column: a tick for Aces, 1 to go and 2 to go, each titled in games', strpos($html, 'title="Has played enough games for finals">&#10003;</span>') !== false
     && strpos($html, 'title="Games still to play to be eligible for finals">1 to go</span>') !== false
     && strpos($html, 'title="Games still to play to be eligible for finals">2 to go</span>') !== false);
+// A game either team has said it can't make (active or handled) is not a game to come, for either team:
+// it stays scheduled until the league calls it off or records a forfeit. Their other games still count.
+$cant_make = function ($team, $status) use ($wpdb, $nights, $person) {
+    $wpdb->insert(RSL_Database::table('requests'), array('team_id' => $team->id, 'night_id' => $nights[3]->id, 'type' => 'cant_make', 'status' => $status,
+        'requested_by' => $person, 'requested_at' => current_time('mysql')));
+    return $wpdb->insert_id;
+};
+$req = $cant_make($B, 'handled');
+$st = $finals_now();
+$check('Blockers can\'t make round 4 (handled, no forfeit recorded yet): Diggers\' game with them is not a game to come (3 + 1, out of reach); Cobras\' game with Diggers still is (4 + 1)',
+    $fin($st, $D) === $want(3, 2, false, false) && $fin($st, $C) === $want(4, 1, false, true) && $fin($st, $B) === $want(2, 3, false, false),
+    wp_json_encode(array($fin($st, $D), $fin($st, $C))));
+$wpdb->delete(RSL_Database::table('requests'), array('id' => $req));
+$req = $cant_make($C, 'active');
+$st = $finals_now();
+$check('Cobras say they can\'t make round 4 (not yet handled): their own game there is not a game to come (4 + 0), and nor is it for Diggers (3 + 1)',
+    $fin($st, $C) === $want(4, 1, false, false) && $fin($st, $D) === $want(3, 2, false, false), wp_json_encode(array($fin($st, $C), $fin($st, $D))));
+$wpdb->delete(RSL_Database::table('requests'), array('id' => $req));
+$check('...and taken back, both games are to come again', $fin($finals_now(), $C) === $want(4, 1, false, true) && $fin($finals_now(), $D) === $want(3, 2, false, true));
+// Only games in the team's own division count, as in its ladder record (P): a team moved from Unranked
+// to Ranked starts its finals count again. Uni Two has one Unranked game played and one to come in round 4;
+// with the minimum set to 1 for this check, it is eligible in Unranked, and not once it moves.
+$uu = RSL_Fixtures::add_game($nights[3]->id, array('home' => $U1->id, 'away' => $U2->id, 'court_id' => intval($cu->id), 'start' => '18:00'));
+update_option('rsl_finals_min_games', 1);
+$st = $finals_now();
+$in_unranked = $fin($st, $U2);
+RSL_Teams::update($U2->id, array('division' => 'ranked'));
+$st = $finals_now();
+$moved = $fin($st, $U2);
+$check('a team moved from Unranked to Ranked: its Unranked game played and its Unranked game to come count nothing in Ranked (minimum 1 here)',
+    !is_wp_error($uu) && $in_unranked === $want(1, 0, true, true) && $moved === $want(0, 1, false, false) && $fin($st, $U1) === $want(1, 0, true, true),
+    wp_json_encode(array($in_unranked, $moved)));
+RSL_Teams::update($U2->id, array('division' => 'unranked'));
+delete_option('rsl_finals_min_games');
+if (!is_wp_error($uu)) {
+    RSL_Fixtures::delete_game($uu->id);
+}
 if (!is_wp_error($c_d) && !is_wp_error($d_b)) {
     RSL_Fixtures::record_result($c_d->id, '25-20, 7-9'); // 1–1, the second set cut short by the clock
     RSL_Fixtures::record_forfeit($d_b->id, $B->id);
@@ -520,21 +558,35 @@ $st = $finals_now();
 $check('a 1–1 draw whose second set the clock cut short is a game played: Cobras reach 5, eligible; Diggers 4 (the forfeit win is none), nothing left to play',
     $fin($st, $C) === $want(5, 0, true, true) && $fin($st, $D) === $want(4, 1, false, false) && $fin($st, $B) === $want(2, 3, false, false),
     wp_json_encode(array($fin($st, $C), $fin($st, $D), $fin($st, $B))));
+// Nights still to be drawn are only those after the last night with a result: a regular night left
+// unpublished before it (here round 3, pulled back once round 4's results are in) is no game to come.
+RSL_Fixtures::publish_night($nights[2]->id, false);
+$st = $finals_now();
+$check('an unpublished regular night before the last night with a result is not to come: round 3 pulled back, Cobras 4 games, nothing to come (4 + 0)',
+    $fin($st, $C) === $want(4, 1, false, false), wp_json_encode($fin($st, $C)));
+RSL_Fixtures::publish_night($nights[2]->id);
 RSL_Fixtures::publish_night($nights[3]->id, false);
 $st = $finals_now();
-$check('games on an unpublished night are not counted: round 4 pulled back, Cobras 4 games, with round 4 to come as one game (4 + 1)',
-    $fin($st, $C) === $want(4, 1, false, true) && $fin($st, $D) === $want(3, 2, false, false), wp_json_encode(array($fin($st, $C), $fin($st, $D))));
+$check('games on an unpublished night are not counted: round 4 pulled back, Cobras 4 games and Diggers 3, with round 4 to come as up to two games (4 + 2, 3 + 2)',
+    $fin($st, $C) === $want(4, 1, false, true) && $fin($st, $D) === $want(3, 2, false, true), wp_json_encode(array($fin($st, $C), $fin($st, $D))));
 RSL_Fixtures::publish_night($nights[3]->id);
+// A finals fixture is not a regular-season game to come, and a finals game played is not one played.
 $fg = RSL_Fixtures::add_game($nights[5]->id, array('home' => $C->id, 'away' => $B->id, 'court_id' => $cxid, 'start' => '19:00'));
+$fd = RSL_Fixtures::add_game($nights[5]->id, array('home' => $D->id, 'away' => $A->id, 'court_id' => $cyid, 'start' => '19:00'));
 RSL_Fixtures::publish_night($nights[5]->id);
-if (!is_wp_error($fg)) {
-    RSL_Fixtures::record_result($fg->id, '25-20, 25-21');
+$st = $finals_now();
+$check('a finals fixture with no result yet is not a game to come: Diggers, 4 games and nothing regular left, stay out of reach (4 + 0)',
+    !is_wp_error($fd) && $fin($st, $D) === $want(4, 1, false, false), wp_json_encode($fin($st, $D)));
+foreach (array($fg, $fd) as $x) {
+    if (!is_wp_error($x)) {
+        RSL_Fixtures::record_result($x->id, '25-20, 25-21');
+    }
 }
 $st = $finals_now();
-$check('a finals-night game is not a regular-season game: Cobras still 5, Blockers still 2',
-    !is_wp_error($fg) && $fin($st, $C) === $want(5, 0, true, true) && $games_of($st, $B) === 2 && $fin($st, $B)['games'] === 2,
-    wp_json_encode(array($fin($st, $C), $fin($st, $B))));
-foreach (array($fg, $c_d, $d_b) as $x) {
+$check('a finals-night game is not a regular-season game: Cobras still 5, Blockers still 2, Diggers still 4',
+    !is_wp_error($fg) && $fin($st, $C) === $want(5, 0, true, true) && $games_of($st, $B) === 2 && $fin($st, $B)['games'] === 2 && $fin($st, $D) === $want(4, 1, false, false),
+    wp_json_encode(array($fin($st, $C), $fin($st, $B), $fin($st, $D))));
+foreach (array($fg, $fd, $c_d, $d_b) as $x) {
     if (!is_wp_error($x)) {
         RSL_Fixtures::delete_game($x->id);
     }

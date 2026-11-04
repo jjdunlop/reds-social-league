@@ -100,7 +100,7 @@ $check('owing more than $75 is not', RSL_Payments::blocked($T(0)) && RSL_Payment
 $plan = RSL_Pairing::plan($nights[1]->id);
 $check('the fixtures leave a team owing too much out, and say why', isset($plan['divisions']['ranked']['out'][$T(0)]) && strpos($plan['divisions']['ranked']['out'][$T(0)], 'Owes $150') === 0);
 RSL_Pairing::generate($nights[1]->id);
-$check('...recorded so it counts like a week off (no bye points)',isset(RSL_Requests::for_night($nights[1]->id, 'unpaid', array('handled'))[$T(0)]));
+$check('...recorded so it counts like a week off (no bye points)', isset(RSL_Requests::for_night($nights[1]->id, 'unpaid', array('handled'))[$T(0)]));
 RSL_Fixtures::publish_night($nights[1]->id, false);
 $check('an adjustment needs a note', is_wp_error(RSL_Payments::adjust($T(0), 50, '', $admin)));
 RSL_Payments::adjust($T(0), 150, 'Cash at the venue', $admin);
