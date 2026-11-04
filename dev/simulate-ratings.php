@@ -4,6 +4,9 @@
  * games are timed (sets cut off by the hour, third sets to 15 or 25, 1–1
  * draws)? Plays pretend seasons rally by rally (dev/lib-sim.php), pairs
  * them with the real engine, then scores each model on the SAME games.
+ * The set-win bonus rules compared: every set whole, the live rule (a
+ * finished set whole, a cut-short set leader / target) and the old one
+ * before 0.18.1 (points played / 40).
  *
  *   wp eval-file dev/simulate-ratings.php [teams=14] [rounds=10] [runs=40] [lumpy]
  */
@@ -20,17 +23,27 @@ foreach ((array) $args as $a) {
     }
 }
 $lumpy = in_array('lumpy', (array) $args, true);
+// Set-win bonus rules (fit()'s set_share option). With none given, fit() uses
+// the live rule, RSL_Ratings::set_share(): a finished set counts whole, a set
+// the clock cut short counts leader's points / target (25; 15 for the third).
+$every_set_whole = function () { return 1; };
+$old_40_points = function ($s) { return min(1, ($s[0] + $s[1]) / 40); }; // before 0.18.1: a set needed 40 points in all to count whole
+$live = array('set_weight' => RSL_Ratings::SET_WEIGHT, 'point_weight' => RSL_Ratings::POINT_WEIGHT);
+$live_name = sprintf('Live: points %s + set bonus %s', RSL_Ratings::POINT_WEIGHT, RSL_Ratings::SET_WEIGHT);
 $models = array(
-    'Sets only (whole sets)' => array('set_weight' => 1, 'point_weight' => 0, 'partial' => false),
-    'Sets only (cut-short sets partial)' => array('set_weight' => 1, 'point_weight' => 0),
+    'Sets only (every set whole)' => array('set_weight' => 1, 'point_weight' => 0, 'set_share' => $every_set_whole),
+    'Sets only (cut short: leader / target)' => array('set_weight' => 1, 'point_weight' => 0),
+    'Sets only (old: points / 40)' => array('set_weight' => 1, 'point_weight' => 0, 'set_share' => $old_40_points),
     'Points only' => array('set_weight' => 0, 'point_weight' => 0.3),
     'Sets + points (0.15)' => array('set_weight' => 1, 'point_weight' => 0.15),
     'Sets + points (0.3)' => array('set_weight' => 1, 'point_weight' => 0.3),
     'Sets + points (0.6)' => array('set_weight' => 1, 'point_weight' => 0.6),
+    $live_name => $live,
+    $live_name . ', old 40-point rule' => $live + array('set_share' => $old_40_points),
 );
 if (in_array('tune', (array) $args, true)) {
     $models = array(
-        'Sets only (whole sets)' => array('set_weight' => 1, 'point_weight' => 0, 'partial' => false),
+        'Sets only (every set whole)' => array('set_weight' => 1, 'point_weight' => 0, 'set_share' => $every_set_whole),
         'Points only (0.3)' => array('set_weight' => 0, 'point_weight' => 0.3),
         'Points only (0.6)' => array('set_weight' => 0, 'point_weight' => 0.6),
         'Points only (1.0)' => array('set_weight' => 0, 'point_weight' => 1.0),
@@ -38,8 +51,10 @@ if (in_array('tune', (array) $args, true)) {
         'Points (1.0) + small set bonus (0.25)' => array('set_weight' => 0.25, 'point_weight' => 1.0),
         'Points (0.3) + small set bonus (0.25)' => array('set_weight' => 0.25, 'point_weight' => 0.3),
         'Points (0.3) + set bonus (0.5)' => array('set_weight' => 0.5, 'point_weight' => 0.3),
+        'Points (0.3) + set bonus (0.25), old 40-point rule' => array('set_weight' => 0.25, 'point_weight' => 0.3, 'set_share' => $old_40_points),
     );
 }
+$name_width = max(36, max(array_map('strlen', array_keys($models))) + 1);
 $checkpoints = array(2, 4, 6, $opt['rounds']);
 $score = array();
 $shape = array('sets' => 0, 'draws' => 0, 'cut' => 0, 'games' => 0);
@@ -82,9 +97,9 @@ for ($run = 1; $run <= $opt['runs']; $run++) {
             $shape['games']++;
             $shape['sets'] += count($sets);
             $won = 0;
-            foreach ($sets as $s) {
+            foreach ($sets as $i => $s) {
                 $won += $s[0] > $s[1] ? 1 : -1;
-                if (max($s) < 25 && !(count($sets) === 3 && $s === end($sets) && max($s) >= 15 && abs($s[0] - $s[1]) >= 2)) { $shape['cut']++; }
+                if (!RSL_Ratings::set_finished($s, $i)) { $shape['cut']++; }
             }
             if ($won === 0) { $shape['draws']++; }
         }
@@ -93,12 +108,7 @@ for ($run = 1; $run <= $opt['runs']; $run++) {
         }
         $hist = array_map(function ($g) use ($round) { return array($g[0], $g[1], $g[2], $round + 1 - $g[3]); }, $games);
         foreach ($models as $name => $m) {
-            $h2 = $hist;
-            if (isset($m['partial']) && !$m['partial']) {
-                // Old behaviour: every set a whole set, however short.
-                $h2 = array_map(function ($g) { $g[2] = array_map(function ($s) { return $s[0] > $s[1] ? array(25, 0) : array(0, 25); }, $g[2]); return $g; }, $hist);
-            }
-            $fit = RSL_Ratings::fit($seeds, $h2, $m);
+            $fit = RSL_Ratings::fit($seeds, $hist, $m);
             $vals = array_map(function ($r) { return $r['rating']; }, $fit);
             $score[$name][$round]['rho'][] = $spearman($true, $vals);
             // Calibration: are the uncertainties honest? (z-scores after removing the overall offset)
@@ -119,12 +129,12 @@ for ($run = 1; $run <= $opt['runs']; $run++) {
 $avg = function ($xs) { return array_sum($xs) / count($xs); };
 printf("%d teams, %d rounds, %d seasons%s. Per game: %.2f sets, %.0f%% draws (1–1), %.2f sets cut short by time\n\n",
     $opt['teams'], $opt['rounds'], $opt['runs'], $lumpy ? ' (lumpy league)' : '', $shape['sets'] / $shape['games'], 100 * $shape['draws'] / $shape['games'], $shape['cut'] / $shape['games']);
-printf("%-36s", 'Model — order found (1 = perfect)');
+printf("%-{$name_width}s", 'Model — order found (1 = perfect)');
 foreach ($checkpoints as $c) { printf(" %9s", "after R$c"); }
 printf(" %12s %12s\n", "avg error R$c", "honesty R$c");
-echo str_repeat('-', 36 + 10 * count($checkpoints) + 26) . "\n";
+echo str_repeat('-', $name_width + 10 * count($checkpoints) + 26) . "\n";
 foreach ($score as $name => $by) {
-    printf("%-36s", $name);
+    printf("%-{$name_width}s", $name);
     foreach ($checkpoints as $c) { printf(" %9.3f", $avg($by[$c]['rho'])); }
     $last = end($checkpoints);
     printf(" %12.0f %12.2f\n", $avg($by[$last]['err']), $avg($by[$last]['z']));

@@ -133,6 +133,35 @@ $check('a 1–1 draw: the team that won far more points rates higher', $draw[1][
 $cut = RSL_Ratings::fit($even, array(array(1, 2, array(array(8, 5)), 0)));
 $full = RSL_Ratings::fit($even, array(array(1, 2, array(array(25, 15)), 0)));
 $check('a set cut off by the hour counts, but for less than a full set', $cut[1]['rating'] > 1500 && $cut[1]['rating'] - 1500 < $full[1]['rating'] - 1500);
+
+// The set bonus: a finished set counts whole, a set the clock cut short as far as the leader got.
+$share = function ($set, $index) { return RSL_Ratings::set_share($set, $index); };
+$check('set bonus: 25-10 and 25-23 (first or second set) and a third set 15-8 each count as a whole set',
+    $share(array(25, 10), 0) === 1.0 && $share(array(23, 25), 1) === 1.0 && $share(array(15, 8), 2) === 1.0
+    && $share(array(8, 15), 2) === 1.0 && $share(array(25, 21), 2) === 1.0 && $share(array(27, 25), 0) === 1.0,
+    implode(' ', array($share(array(25, 10), 0), $share(array(23, 25), 1), $share(array(15, 8), 2))));
+$check('set bonus: a first set cut short at 14-11 counts 14/25; a third set cut short at 10-8 counts 10/15',
+    abs($share(array(14, 11), 0) - 14 / 25) < 1e-9 && abs($share(array(11, 14), 1) - 14 / 25) < 1e-9 && abs($share(array(10, 8), 2) - 10 / 15) < 1e-9,
+    $share(array(14, 11), 0) . ' ' . $share(array(10, 8), 2));
+$check('set bonus: a set finishes at its target two clear (25-24 and a third set 15-14 at time were cut short; 15-13 finishes a third set, not a first, where it counts 15/25; 25-24 still counts whole, its leader reached 25), a tie counts nothing',
+    !RSL_Ratings::set_finished(array(25, 24), 0) && $share(array(25, 24), 0) === 1.0 && !RSL_Ratings::set_finished(array(15, 14), 2)
+    && RSL_Ratings::set_finished(array(15, 13), 2) && !RSL_Ratings::set_finished(array(15, 13), 1) && abs($share(array(15, 13), 0) - 15 / 25) < 1e-9
+    && $share(array(12, 12), 0) === 0.0);
+// The same through fit(), sets only (points evidence off), so the set bonus is all that moves a rating.
+$sets_only = array('set_weight' => 1, 'point_weight' => 0);
+$rating = function ($sets, $opts) use ($even) { return RSL_Ratings::fit($even, array(array(1, 2, $sets, 0)), $opts)[1]['rating']; };
+$whole = $rating(array(array(25, 0)), $sets_only);
+$check('fit(): 25-10, 25-23 and a third set 15-8 move a rating exactly as far as any whole set (the first two sets tied, so only the third counts)',
+    $whole > 1500 && abs($rating(array(array(25, 10)), $sets_only) - $whole) < 1e-6 && abs($rating(array(array(25, 23)), $sets_only) - $whole) < 1e-6
+    && abs($rating(array(array(20, 20), array(20, 20), array(15, 8)), $sets_only) - $whole) < 1e-6,
+    $whole . ' ' . $rating(array(array(25, 10)), $sets_only) . ' ' . $rating(array(array(20, 20), array(20, 20), array(15, 8)), $sets_only));
+$check('fit(): a first set cut short at 14-11 is 14/25 of a whole set; a third set cut short at 10-8 is 10/15 of one',
+    abs($rating(array(array(14, 11)), $sets_only) - $rating(array(array(25, 0)), array('set_weight' => 14 / 25, 'point_weight' => 0))) < 1e-6
+    && abs($rating(array(array(20, 20), array(20, 20), array(10, 8)), $sets_only) - $rating(array(array(25, 0)), array('set_weight' => 10 / 15, 'point_weight' => 0))) < 1e-6);
+$check('fit(): a 1–1 draw of two finished sets is level on the set bonus (25-10 counts no less than 23-25)',
+    abs($rating(array(array(25, 10), array(23, 25)), $sets_only) - 1500) < 1e-6);
+$check('fit(): a 1–1 draw still moves ratings by points, with the live weights', $draw[1]['rating'] > 1505 && $draw[2]['rating'] < 1495
+    && $rating(array(array(25, 10), array(23, 25)), array('set_weight' => 0, 'point_weight' => RSL_Ratings::POINT_WEIGHT)) > 1505);
 $short3 = RSL_Fixtures::parse_sets('25-20, 18-25, 15-11');
 $check('a third set to 15 is a normal result', !is_wp_error($short3) && count($short3) === 3);
 $check('a set ended by time (score as it stands) is accepted', !is_wp_error(RSL_Fixtures::parse_sets('25-21, 22-25, 9-7')));

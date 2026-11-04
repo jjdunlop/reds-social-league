@@ -6,7 +6,21 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
-## No protected tier (0.18.1)
+## No protected tier, and finished sets count whole (0.18.1)
+
+- **A finished set counts as a whole set for the set bonus.** Before, a set
+  needed 40 points in all to count whole, so the most decisive wins counted
+  least (25-10 was 0.875 of a set, a finished third set 15-8 only 0.575).
+  Now a set that finished — the winner at its target two clear: 25 for the
+  first and second sets, 15 or more for the third (the ref picks 15 or 25)
+  — counts whole, close or not. A set the clock cut short counts as far as
+  the leader got: leader's points / target, at most 1 (a 14-11 first set
+  14/25, a 10-8 third set 10/15). A tied set still counts nothing; the
+  points evidence is unchanged, so a 1–1 draw still moves ratings by
+  points. `RSL_Ratings::set_finished()` / `set_share()`, with
+  `SET_TARGET` (25) and `THIRD_SET_TARGET` (15) in place of
+  `FULL_SET_POINTS`. `dev/simulate-ratings.php` compares the live model
+  with the old 40-point rule.
 
 - **Silver is no longer kept for the season.** A team that has reached
   Silver drops to Bronze like any other tier: tiers follow the rating, with

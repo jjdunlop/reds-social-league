@@ -37,8 +37,9 @@ class RSL_Ratings {
     const HALF_LIFE_WEEKS = 8;    // a set this many weeks old counts half
     const PLACEMENT_GAMES = 3;    // a team is in placements (provisional) for its first games — a clear rule players can follow
     const PROVISIONAL_SD = 95;    // ...and stays provisional after that only if its rating is still unusually uncertain
-    const FULL_SET_POINTS = 40;   // a set with this many points (e.g. 25–15) counts as a whole set won
-    const RALLY_SCALE = 6;        // a team's edge in a rally is about 1/6 of its edge in a set (race to 25)
+    const SET_TARGET = 25;        // sets one and two are to 25, two clear (set_share())
+    const THIRD_SET_TARGET = 15;  // the third set is to 15 or 25 (the ref picks); 15 two clear finishes it for the set bonus
+    const RALLY_SCALE = 6;       // a team's edge in a rally is about 1/6 of its edge in a set (race to 25)
     // Chosen by dev/simulate-ratings.php (timed games played rally by rally):
     // points find the true order faster than sets alone; a small set bonus
     // keeps "we won" mattering for little cost in accuracy.
@@ -103,20 +104,26 @@ class RSL_Ratings {
      * $games = list of array(home_id, away_id, sets (array of [home, away]),
      * weeks_ago). Returns team_id => array(rating, sd, provisional, games).
      *
+     * Each game's sets are in the order played (the first set first).
+     *
      * Two kinds of evidence from every set, because games are timed (a set
      * can end when the hour does, a third set may go to 15, a game can end 1–1):
-     *  - who won the set, counted in proportion to how complete it was
-     *    (points played / FULL_SET_POINTS, at most 1) — a 14–11 set cut off
-     *    by the clock counts for less than a 25–23 one;
+     *  - who won the set, worth set_share() of a whole set: a set that
+     *    finished counts whole (25–10, 25–23 and a third set 15–8 alike), a
+     *    set the clock cut short counts as far as the leader got (a 14–11
+     *    first set 14/25, a 10–8 third set 10/15), a tied set not at all;
      *  - the points themselves: each rally is a small contest between the
      *    teams, worth POINT_WEIGHT of a full rally's evidence (rallies aren't
      *    independent — momentum — so they mustn't be over-trusted). A 1–1
      *    draw where one team won far more points still moves the ratings.
-     * $opts may override set_weight / point_weight (the simulator compares them).
+     * $opts may override set_weight / point_weight, and set_share (a
+     * callable($set, $index) giving 0..1, in place of set_share()) — the
+     * simulator compares them.
      */
     public static function fit($seeds, $games, $opts = array()) {
         $set_weight = isset($opts['set_weight']) ? $opts['set_weight'] : self::SET_WEIGHT;
         $point_weight = isset($opts['point_weight']) ? $opts['point_weight'] : self::POINT_WEIGHT;
+        $set_share = isset($opts['set_share']) ? $opts['set_share'] : array(__CLASS__, 'set_share');
         $k = log(10) / self::SCALE;
         $theta = array();
         $mu = array();
@@ -136,10 +143,11 @@ class RSL_Ratings {
             $w = pow(0.5, $weeks / self::HALF_LIFE_WEEKS);
             $count[$h]++;
             $count[$a]++;
-            foreach ($sets as $s) {
+            foreach (array_values($sets) as $i => $s) {
                 $points = $s[0] + $s[1];
-                if ($set_weight > 0 && $s[0] !== $s[1]) {
-                    $sw = $w * $set_weight * min(1, $points / self::FULL_SET_POINTS);
+                $share = ($set_weight > 0 && $s[0] !== $s[1]) ? call_user_func($set_share, $s, $i) : 0;
+                if ($share > 0) {
+                    $sw = $w * $set_weight * $share;
                     $home_won = $s[0] > $s[1] ? 1 : 0;
                     $links[$h][] = array($a, 's', $home_won, $sw);
                     $links[$a][] = array($h, 's', 1 - $home_won, $sw);
@@ -194,6 +202,46 @@ class RSL_Ratings {
             );
         }
         return $out;
+    }
+
+    /**
+     * Did set $index of a game (0 = the first set) finish, rather than being
+     * cut short by the clock? Games are best of three: the first and second
+     * sets are to SET_TARGET; the ref picks 15 or 25 for the third, and the
+     * score doesn't say which, so a third set counts as finished once the
+     * winner has THIRD_SET_TARGET or more, two clear (a third set to 25 that
+     * finished passes too). Every set needs a two-point lead to finish. A
+     * set after the third (league games have none) is judged like the third.
+     */
+    public static function set_finished($set, $index) {
+        $a = intval($set[0]);
+        $b = intval($set[1]);
+        $target = $index >= 2 ? self::THIRD_SET_TARGET : self::SET_TARGET;
+        return max($a, $b) >= $target && abs($a - $b) >= 2;
+    }
+
+    /**
+     * How much of a whole set's win evidence set $index (0 = the first set)
+     * is worth, 0..1 — pure, used by fit():
+     *  - a set that finished (set_finished()) counts whole, close or not:
+     *    25–10, 25–23 and a third set 15–8 are each one whole set won;
+     *  - a set the clock cut short counts as far as the leader got: the
+     *    leader's points / the set's target (SET_TARGET, or THIRD_SET_TARGET
+     *    for the third set), at most 1 — a 14–11 first set 14/25, a 10–8
+     *    third set 10/15;
+     *  - a tied set says nothing about who wins sets: 0.
+     */
+    public static function set_share($set, $index) {
+        $a = intval($set[0]);
+        $b = intval($set[1]);
+        if ($a === $b) {
+            return 0.0;
+        }
+        if (self::set_finished($set, $index)) {
+            return 1.0;
+        }
+        $target = $index >= 2 ? self::THIRD_SET_TARGET : self::SET_TARGET;
+        return min(1.0, max($a, $b) / (float) $target);
     }
 
     /** Forget memoised ratings and season data (after results change in the same request). */
