@@ -361,15 +361,19 @@ class RSL_Public_Fixtures {
             . ' more than ' . intval(RSL_Stats::DEMOTE_BUFFER) . ' points below where its tier starts.';
     }
 
-    /** ✓ when a team has played enough rounds for finals; "2 to go" while it still can; blank once it can't. */
+    /**
+     * ✓ when a team has played enough regular-season games for finals
+     * (RSL_Stats::finals_min_games(); byes and forfeits don't count); "2 to
+     * go" (games) while it still can; blank once it can't.
+     */
     private static function finals_mark($f) {
         if (!$f) {
             return '';
         }
         if ($f['eligible']) {
-            return '<span class="rsl-finals is-in" title="Has played enough rounds for finals">&#10003;</span>';
+            return '<span class="rsl-finals is-in" title="Has played enough games for finals">&#10003;</span>';
         }
-        return $f['possible'] ? '<span class="rsl-finals" title="Rounds still needed to be eligible for finals">' . intval($f['need']) . ' to go</span>' : '';
+        return $f['possible'] ? '<span class="rsl-finals" title="Games still to play to be eligible for finals">' . intval($f['need']) . ' to go</span>' : '';
     }
 
     private static function level_chip($points) {
@@ -452,7 +456,7 @@ class RSL_Public_Fixtures {
                     <li><strong>Tiers:</strong> <?php echo esc_html(implode(' · ', array_map(function ($t) { return $t[1] . ($t[2] > 0 ? ' ' . $t[2] . '+' : ''); }, array_reverse(RSL_Stats::TIERS)))); ?>. <?php echo esc_html(self::tier_rule_words()); ?></li>
                     <li><strong>In placements:</strong> a team's first <?php echo intval(RSL_Ratings::PLACEMENT_GAMES); ?> games. They count from the first game; the rating shows once they're done.</li>
                     <li><strong>The draw:</strong> each week pairs teams for even games. From round 3, if some teams have only played each other, the draw connects them with the rest so the ladder can compare everyone, even with a game where the favourite would win about 3 sets in 4, and it accepts a wider gap each week they stay apart.</li>
-                    <li><strong>Finals:</strong> <?php echo intval(RSL_Stats::finals_min_rounds()); ?> regular-season rounds played.</li>
+                    <li><strong>Finals:</strong> a team needs <?php echo intval(RSL_Stats::finals_min_games()); ?> regular-season games played. A double-header counts as two games. A bye doesn't count, and nor does a forfeit, won or lost.</li>
                     <li><strong>Level:</strong> Season Points — <?php echo esc_html('+' . $pts['played'] . ' a night, +' . $pts['win'] . ' a win, +' . $pts['close'] . ' a close game, +' . $pts['upset'] . ' an upset, +' . $pts['achievement'] . ' an achievement'); ?>.</li>
                 </ul>
             </details>
@@ -467,7 +471,7 @@ class RSL_Public_Fixtures {
         ob_start();
         ?>
         <div class="rsl-table-wrap"><table class="rsl-ladder">
-            <thead><tr><th class="num">#</th><th>Team</th><th>Tier</th><th class="num">Rating</th><th class="num">P</th><th class="num">W</th><?php if ($draws): ?><th class="num">D</th><?php endif; ?><th class="num">L</th><th class="num">Sets</th><th>Form</th><th class="num" title="<?php echo esc_attr('Finals: ' . RSL_Stats::finals_min_rounds() . ' regular-season rounds needed'); ?>">Finals</th><th class="num" title="Places moved since last week">&plusmn;</th></tr></thead>
+            <thead><tr><th class="num">#</th><th>Team</th><th>Tier</th><th class="num">Rating</th><th class="num">P</th><th class="num">W</th><?php if ($draws): ?><th class="num">D</th><?php endif; ?><th class="num">L</th><th class="num">Sets</th><th>Form</th><th class="num" title="<?php echo esc_attr('Finals: needs ' . RSL_Stats::finals_min_games() . ' regular-season games played'); ?>">Finals</th><th class="num" title="Places moved since last week">&plusmn;</th></tr></thead>
             <tbody>
             <?php foreach ($rows as $r): ?>
                 <?php $t = intval($r['team']->id); $s = isset($stats['teams'][$t]) ? $stats['teams'][$t] : null; ?>

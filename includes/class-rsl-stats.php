@@ -26,7 +26,9 @@
  *      LEVEL_POINTS is a new level.
  *
  * Also: per-night rating changes, form, streaks, upsets (winner had under
- * UPSET_CHANCE to win a set), close games, achievements, season leaders.
+ * UPSET_CHANCE to win a set), close games, achievements, season leaders,
+ * and finals eligibility: finals_min_games() regular-season games played
+ * (0.18.1; a double-header is two, a bye or a forfeit none).
  * No set chance, upset or rating change involves a team in placements: its
  * rating is still too unsettled to call a result an upset or to show a
  * change. (Before 0.18.1 this also hid the captain's level estimate, which
@@ -59,13 +61,18 @@ class RSL_Stats {
     // the fixtures gave a team still counts); the rest are per game.
     const POINTS = array('played' => 10, 'win' => 5, 'draw' => 3, 'close' => 3, 'upset' => 5, 'achievement' => 10);
     const LEVEL_POINTS = 40;
-    const FINALS_MIN_ROUNDS = 5;    // default; option rsl_finals_min_rounds / filter rsl_finals_min_rounds
+    const FINALS_MIN_GAMES = 5;     // default; option rsl_finals_min_games / filter rsl_finals_min_games
     const CACHE_PREFIX = 'rsl_stats_'; // transient per season: array(key => fingerprint, data => season())
 
-    /** Regular-season rounds a Ranked team must have played to make finals. */
-    public static function finals_min_rounds() {
-        $n = intval(get_option('rsl_finals_min_rounds', self::FINALS_MIN_ROUNDS));
-        return (int) apply_filters('rsl_finals_min_rounds', $n > 0 ? $n : self::FINALS_MIN_ROUNDS);
+    /**
+     * Regular-season games a Ranked team must have PLAYED to make finals
+     * (0.18.1; before, regular-season rounds, option rsl_finals_min_rounds).
+     * A game counts once it has a result and isn't a forfeit; a
+     * double-header is two games; a bye counts nothing (build()).
+     */
+    public static function finals_min_games() {
+        $n = intval(get_option('rsl_finals_min_games', self::FINALS_MIN_GAMES));
+        return (int) apply_filters('rsl_finals_min_games', $n > 0 ? $n : self::FINALS_MIN_GAMES);
     }
 
     private static $memo = array();
@@ -135,7 +142,8 @@ class RSL_Stats {
      * array(
      *   games => game_id => array(p_home, upset_team, close, delta => team_id => change|null),
      *   teams => team_id => array(form, streak, history, achievements, peak, upsets, points, now => array(rating,
-     *            provisional, position, tier (earned), at_risk, progress (0–1 to next tier), next)),
+     *            provisional, position, tier (earned), at_risk, progress (0–1 to next tier), next),
+     *            games (regular-season games played), finals => array(games, need, eligible, possible)),
      *   leaders => array(improved, giant_killer, points => division => row),
      *   ratings => the latest ladder ratings, RSL_Ratings::compute($season, null, 'ladder'),
      *   meetings => meeting_key => list of array(date, status, winner (team id, 0 = draw), sets (home, away)), oldest first
@@ -166,10 +174,11 @@ class RSL_Stats {
     /**
      * A cheap fingerprint of everything season() is built from: the season's
      * games (results, not live scores), nights, active teams and night
-     * requests, plus the finals rule, the plugin version and the ladder
-     * model's settings (RSL_Ratings::ladder_model(), so a same-version build
-     * that changes the ladder gets a fresh key). One query; null if it
-     * fails (then nothing is saved). Each row is hashed with MD5
+     * requests, plus the finals rule (named, finals-games:5, so stats saved
+     * under 0.18.1's earlier count of rounds are never reused), the plugin
+     * version and the ladder model's settings (RSL_Ratings::ladder_model(),
+     * so a same-version build that changes the ladder gets a fresh key).
+     * One query; null if it fails (then nothing is saved). Each row is hashed with MD5
      * (64 bits of it), not CRC32: CRC32 is linear over XOR, so two rows
      * swapping values (scores entered against the wrong court, then fixed)
      * would cancel out and keep the old key.
@@ -193,7 +202,7 @@ class RSL_Stats {
         if (!$row) {
             return null;
         }
-        return implode('|', array($row->n, $row->h, self::finals_min_rounds(), defined('RSL_VERSION') ? RSL_VERSION : '', RSL_Ratings::ladder_model()));
+        return implode('|', array($row->n, $row->h, 'finals-games:' . self::finals_min_games(), defined('RSL_VERSION') ? RSL_VERSION : '', RSL_Ratings::ladder_model()));
     }
 
     private static function build($season) {
@@ -208,7 +217,7 @@ class RSL_Stats {
         foreach ($data['teams'] as $t) {
             $teams[intval($t->id)] = array('team' => $t, 'form' => array(), 'streak' => '', 'history' => array(), 'achievements' => array(),
                 'peak' => null, 'now' => null, 'upsets' => 0, 'points' => 0, 'earned' => null, 'below' => 0, 'first_rating' => null,
-                'rounds' => 0, 'finals' => null);
+                'games' => 0, 'finals' => null);
         }
         $out = array('games' => array(), 'teams' => array(), 'dates' => $dates, 'leaders' => array(), 'ratings' => array(), 'meetings' => array());
 
@@ -226,12 +235,10 @@ class RSL_Stats {
             $turned_up = array();   // team => true once it has a game (not a forfeit loss) tonight
             $had_game = array();    // team => true if it had any game tonight
             $divisions_tonight = array();
-            $regular = true;
             foreach ($tonight as $g) {
                 $h = intval($g->home_team_id);
                 $a = intval($g->away_team_id);
                 $divisions_tonight[$g->division] = true;
-                $regular = $regular && $g->night_type !== 'finals';
                 $info = array('p_home' => null, 'upset_team' => null, 'close' => false, 'delta' => array());
                 if ($g->status === 'played') {
                     $sets = RSL_Fixtures::parse_sets($g->sets);
@@ -268,6 +275,11 @@ class RSL_Stats {
                     $wins_in_row[$t] = $letter === 'W' ? (isset($wins_in_row[$t]) ? $wins_in_row[$t] : 0) + 1 : 0;
                     if ($letter === 'W') {
                         $night_wins[$t] = (isset($night_wins[$t]) ? $night_wins[$t] : 0) + 1;
+                    }
+                    // Finals count regular-season games played: a double-header
+                    // is two; a forfeit, won or lost, is none.
+                    if ($g->status === 'played' && $g->night_type !== 'finals') {
+                        $teams[$t]['games']++;
                     }
                     // Season Points: turning up counts most — once a night.
                     $had_game[$t] = true;
@@ -314,24 +326,19 @@ class RSL_Stats {
                 }
             }
             // A team the fixtures left out (odd numbers) isn't penalised: it
-            // gets the turn-up points and the round counts towards finals.
-            // A forfeit loss is neither, and nor is a week off the team asked
-            // for, or a night it said it couldn't make (its game unplayed).
+            // gets the turn-up points. A week off the team asked for isn't a
+            // bye, and nor is a night it said it couldn't make (its game
+            // unplayed). No bye is a game played, so none counts towards
+            // finals (since 0.18.1; before, a bye counted as a round).
             foreach ($teams as $t => &$row) {
-                if (empty($divisions_tonight[$row['team']->division])) {
+                if (empty($divisions_tonight[$row['team']->division]) || !empty($had_game[$t])) {
                     continue;
                 }
-                $bye = empty($had_game[$t]);
                 $joined = self::joined_date($row['team']);
-                if ($bye && (($joined !== '' && $joined > $date) || isset($weeks_off[$date][$t]) || isset($cant_make[$t]))) {
+                if (($joined !== '' && $joined > $date) || isset($weeks_off[$date][$t]) || isset($cant_make[$t])) {
                     continue; // not in the league yet that night, took the week off, or couldn't make it
                 }
-                if ($bye) {
-                    $row['points'] += self::POINTS['played'];
-                }
-                if ($regular && ($bye || !empty($turned_up[$t]))) {
-                    $row['rounds']++;
-                }
+                $row['points'] += self::POINTS['played'];
             }
             unset($row);
 
@@ -370,14 +377,29 @@ class RSL_Stats {
 
         $now = RSL_Ratings::compute($season, null, 'ladder');
         $positions = self::positions($now);
-        $min_rounds = self::finals_min_rounds();
+        // Finals: games played (above) against finals_min_games(). A team can
+        // still get there if its games played, plus its games in published
+        // regular-season fixtures with no result yet (a double-header there
+        // is two, a night it isn't in is none), plus one game for each
+        // regular night after the last night with a result whose fixtures
+        // aren't out yet (double-headers aren't planned ahead), reach it.
+        $min_games = self::finals_min_games();
         $last_date = $dates ? end($dates) : '';
-        $rounds_left = count(array_filter(RSL_Courts::nights($season), function ($n) use ($last_date) {
-            return $n->type === 'regular' && $n->night_date > $last_date;
+        $to_play = array();
+        foreach ($games as $g) {
+            if ($g->status === 'scheduled' && $g->night_type !== 'finals') {
+                foreach (array(intval($g->home_team_id), intval($g->away_team_id)) as $t) {
+                    $to_play[$t] = (isset($to_play[$t]) ? $to_play[$t] : 0) + 1;
+                }
+            }
+        }
+        $nights_left = count(array_filter(RSL_Courts::nights($season), function ($n) use ($last_date) {
+            return $n->type === 'regular' && empty($n->published_at) && $n->night_date > $last_date;
         }));
         foreach ($teams as $t => &$row) {
-            $row['finals'] = array('rounds' => $row['rounds'], 'need' => max(0, $min_rounds - $row['rounds']),
-                'eligible' => $row['rounds'] >= $min_rounds, 'possible' => $row['rounds'] + $rounds_left >= $min_rounds);
+            $could = $row['games'] + (isset($to_play[$t]) ? $to_play[$t] : 0) + $nights_left;
+            $row['finals'] = array('games' => $row['games'], 'need' => max(0, $min_games - $row['games']),
+                'eligible' => $row['games'] >= $min_games, 'possible' => $could >= $min_games);
             if ($row['form']) {
                 $last = end($row['form']);
                 $n = 0;

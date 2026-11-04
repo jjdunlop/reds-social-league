@@ -3,7 +3,8 @@
  * A captain's requests about single nights of the season:
  *  - off:       "we need this week off" — before that week's fixtures are
  *               out; the fixtures simply leave the team out (free). A week
- *               off is not a bye: no turn-up points, no finals round.
+ *               off is not a bye: no turn-up points. (Neither counts
+ *               towards finals, which count games played.)
  *  - double:    "we'd like two games" — before fixtures are out; the
  *               fixtures give the team a double-header if there's a spare
  *               slot (ahead of teams that only opted in for the season).
@@ -115,7 +116,7 @@ class RSL_Requests {
         return true;
     }
 
-    /** The fixtures left this team out for owing money (counts like a week off: no bye points, no finals round). */
+    /** The fixtures left this team out for owing money (counts like a week off: no bye points). */
     public static function record_unpaid($team_id, $night_id) {
         global $wpdb;
         $wpdb->insert(RSL_Database::table('requests'), array('team_id' => intval($team_id), 'night_id' => intval($night_id), 'type' => 'unpaid', 'status' => 'handled', 'requested_by' => 0,

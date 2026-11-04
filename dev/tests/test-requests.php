@@ -107,8 +107,10 @@ $wpdb->query($wpdb->prepare("UPDATE " . RSL_Database::table('teams') . " SET cre
 RSL_Ratings::flush();
 RSL_Stats::flush();
 $st = RSL_Stats::season($season);
-$check('left out by the fixtures: turn-up points and a finals round', $st['teams'][$T(3)]['rounds'] === 1 && $st['teams'][$T(3)]['points'] === RSL_Stats::POINTS['played']);
-$check('a week off: no points, no round', $st['teams'][$T(4)]['rounds'] === 0 && $st['teams'][$T(4)]['points'] === 0);
+$check('left out by the fixtures: turn-up points, but a bye is not a game played for finals (0.18.1)', $st['teams'][$T(3)]['points'] === RSL_Stats::POINTS['played']
+    && $st['teams'][$T(3)]['games'] === 0 && $st['teams'][$T(3)]['finals']['games'] === 0);
+$check('a week off: no points, no game', $st['teams'][$T(4)]['games'] === 0 && $st['teams'][$T(4)]['points'] === 0);
+$check('the two teams that played: one game each towards finals', $st['teams'][$T(0)]['games'] === 1 && $st['teams'][$T(1)]['finals']['games'] === 1);
 
 // --- Team page season schedule -------------------------------------------------------------------
 $team0 = RSL_Teams::get($T(0));
