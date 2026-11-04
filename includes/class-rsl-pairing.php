@@ -21,11 +21,14 @@
  *               two weeks ago: costs another 1.
  *   bye         odd numbers: someone sits out (or fills a double-header),
  *               dearer each time the same team has sat out.
- *   link        (Ranked, from round 3) while the season's results split the
- *               teams into groups that no chain of games connects, a game
- *               between two groups costs 2.25 (a 75/25 game) less for each
- *               night in a row they've been split — so the ladder, which
- *               only has results to go on, gets to compare them (link()).
+ *   link        (Ranked, from its third night with results) while the
+ *               season's results split the teams into groups that no chain
+ *               of games connects, a game between two groups costs 2.25 (a
+ *               75/25 game) less for each of the division's nights in a row
+ *               they've been split — so the ladder, which only has results
+ *               to go on, gets to compare them (link()). When a night has
+ *               fewer slots than games, a game that links groups is the
+ *               last to sit out (trim()).
  *
  * Unranked has no ratings, so only variety counts: least-played, longest
  * ago — the usual social-league round robin, but robust to late joiners
@@ -62,7 +65,7 @@ class RSL_Pairing {
             'double_max' => 2.25,     // a spare-slot double-header only if its closeness cost is at most this (75/25)
             'double_max_asked' => 4.0, // ...or this when a team asked for two games that week (about 83/17)
             'link' => 2.25,           // Ranked: a game between groups the results haven't connected costs this much less (a 75/25 game), × nights in a row split
-            'link_from' => 3,         // ...from this round (after one night every game is a group of its own; simulated)
+            'link_from' => 3,         // ...from the division's 3rd night (nights without its results don't count; after one night every game is a group of its own; simulated)
         ));
     }
 
@@ -127,29 +130,50 @@ class RSL_Pairing {
      * The link term for one Ranked night (pure). $ids: the division's team
      * ids; $games_by_round: round => list of array(home, away), the
      * published, PLAYED games of earlier rounds (forfeits don't link);
-     * $this_round: the round being paired (1 = the season's first night).
+     * $this_round: the season round being paired (context()'s numbering;
+     * only the rounds before it are read).
      *
      * groups(): the teams with at least one of those games, joined into
      * groups by any chain of them; a team with no game yet is left out.
-     * From round $w['link_from'], k = the nights in a row, counting back
-     * from this one to link_from, on which those groups were 2 or more.
-     * Returns array(groups => team => group id (this night's; empty
-     * unless split), bonus => $w['link'] × k, nights => k). k = 0 (one
-     * group, or before link_from) changes nothing.
+     * Nights are the division's own: the earlier rounds with at least one
+     * of those games, then this one. A round without any — no Ranked courts
+     * that night, a night called off, results not in yet, a division that
+     * started late — doesn't count, so it never adds to the bonus or brings
+     * the term on early. From the division's night $w['link_from'], k = its
+     * nights in a row, counting back from this one to link_from, paired
+     * while those groups were 2 or more. Returns array(groups => team =>
+     * group id (this night's; empty unless split), bonus => $w['link'] × k,
+     * nights => k). k = 0 (one group, or before link_from) changes nothing.
      */
     public static function link($ids, $games_by_round, $this_round, $w) {
         $out = array('groups' => array(), 'bonus' => 0.0, 'nights' => 0);
-        $from = isset($w['link_from']) ? intval($w['link_from']) : 3;
-        if (empty($w['link']) || $this_round < $from) {
+        $from = max(1, isset($w['link_from']) ? intval($w['link_from']) : 3);
+        if (empty($w['link'])) {
             return $out;
         }
+        $in = array_flip(array_map('intval', $ids));
+        $before = array(); // the division's night n is paired from the games of rounds before $before[n - 1]
+        foreach ($games_by_round as $round => $games) {
+            if (intval($round) >= $this_round) {
+                continue;
+            }
+            foreach ($games as $g) {
+                if (isset($in[intval($g[0])]) && isset($in[intval($g[1])])) {
+                    $before[] = intval($round);
+                    break;
+                }
+            }
+        }
+        sort($before);
+        $before[] = intval($this_round);
+        $nights = count($before);
         $k = 0;
-        for ($r = $this_round; $r >= $from; $r--) {
-            $groups = self::groups($ids, $games_by_round, $r);
+        for ($n = $nights; $n >= $from; $n--) {
+            $groups = self::groups($ids, $games_by_round, $before[$n - 1]);
             if (count(array_unique($groups)) < 2) {
                 break;
             }
-            if ($r === $this_round) {
+            if ($n === $nights) {
                 $out['groups'] = $groups;
             }
             $k++;
@@ -242,6 +266,19 @@ class RSL_Pairing {
             $pairs[] = array($p[0], $p[1], $info[self::meeting_key($p[0], $p[1])]);
         }
         return array('pairs' => $pairs, 'bye' => $bye, 'total' => $m['total']);
+    }
+
+    /**
+     * More games than slots (pure): the most expensive pairings sit out,
+     * judged by the draw's own cost (pair_cost()'s cost, the link bonus
+     * included), so a game that links groups the results haven't connected
+     * is the last to go. $pairs: pair_division()'s pairs; $room: the slots.
+     * Returns array(kept, dropped), each cheapest first.
+     */
+    public static function trim($pairs, $room) {
+        usort($pairs, function ($x, $y) { return $x[2]['cost'] <=> $y[2]['cost']; });
+        $room = max(0, intval($room));
+        return array('kept' => array_slice($pairs, 0, $room), 'dropped' => array_slice($pairs, $room));
     }
 
     /**
@@ -656,13 +693,10 @@ class RSL_Pairing {
             }
             $link = $division === 'ranked' ? $ctx['link'] : null;
             $result = self::pair_division($ids, $ratings, $ctx['meetings'], $byes, $w, $salt, $link);
-            $pairs = $result['pairs'];
-
-            // More games than slots: the most expensive pairings sit out
-            // (judged without the link bonus, as before it, like the double-header checks below).
-            usort($pairs, function ($x, $y) { return ($x[2]['cost'] - $x[2]['link']) <=> ($y[2]['cost'] - $y[2]['link']); });
-            while (count($pairs) > count($slots)) {
-                $drop = array_pop($pairs);
+            // More games than slots: the most expensive pairings sit out (trim()).
+            $trimmed = self::trim($result['pairs'], count($slots));
+            $pairs = $trimmed['kept'];
+            foreach ($trimmed['dropped'] as $drop) {
                 $d['out'][$drop[0]] = $d['out'][$drop[1]] = 'Not enough courts';
             }
             $games = array();

@@ -150,6 +150,41 @@ $check('a team with no games yet is left out (no group, no link bonus either way
 $check('pair_cost: link is 0 without groups (no link, or one group)', RSL_Pairing::pair_cost(2, 6, $r8, array(), $w)['link'] === 0.0
     && RSL_Pairing::pair_cost(2, 6, $r8, array(), $w, '', $l4j)['link'] === 0.0);
 $check('a filter can switch the link term off (link 0)', RSL_Pairing::link($ids8, $within, 3, array('link' => 0.0) + $w)['bonus'] === 0.0);
+// Nights are the division's own: only rounds with its results count. A round without them (no Ranked
+// courts, called off, results not in yet) or a late start neither brings the term on early nor raises it.
+$late3 = RSL_Pairing::link($ids8, array(2 => $within[1]), 3, $w);
+$late4 = RSL_Pairing::link($ids8, array(2 => $within[1], 3 => $within[2]), 4, $w);
+$check('a division whose first games are in round 2: no link on its 2nd night (round 3); on its 3rd (round 4) 2.25 for one night split, not 4.5',
+    $late3['bonus'] === 0.0 && $late3['groups'] === array() && $late4['bonus'] === 2.25 && $late4['nights'] === 1 && count(array_unique($late4['groups'])) === 2);
+$gap4 = RSL_Pairing::link($ids8, $within, 4, $w);
+$gap6 = RSL_Pairing::link($ids8, $within + array(4 => $still[3]), 6, $w);
+$check('a round with no results (round 3, then 5) doesn\'t count: round 4 gets 2.25, and still split on round 6 it is 4.5 (two of its nights), not 9',
+    $gap4['bonus'] === 2.25 && $gap4['nights'] === 1 && $gap6['bonus'] === 4.5 && $gap6['nights'] === 2);
+$check('round 3 with only round 1\'s results in (round 2\'s not entered yet): one night of results, so no link term yet',
+    RSL_Pairing::link($ids8, array(1 => $within[1]), 3, $w) === array('groups' => array(), 'bonus' => 0.0, 'nights' => 0));
+$check('a round whose only game involves a team outside the division doesn\'t count either',
+    RSL_Pairing::link($ids8, array(1 => $within[1], 2 => array(array(1, 99)), 3 => $within[2]), 4, $w)['bonus'] === 2.25);
+
+// More games than slots: the most expensive pairings sit out by the draw's own cost, link bonus
+// included, so a game that links groups is the last to go. Ten teams, two groups (1-6 strong, 7-10
+// weaker) that have only met inside them in rounds 1 and 2.
+$by10 = array(1 => array(array(1, 2), array(3, 4), array(5, 6), array(7, 8), array(9, 10)), 2 => array(array(1, 3), array(2, 5), array(4, 6), array(7, 9), array(8, 10)));
+$r10 = array_map(function ($x) { return array('rating' => $x['rating'], 'sd' => 80); },
+    $r(array(1 => 1660, 2 => 1640, 3 => 1620, 4 => 1600, 5 => 1590, 6 => 1580, 7 => 1420, 8 => 1400, 9 => 1380, 10 => 1360)));
+$l10 = RSL_Pairing::link(range(1, 10), $by10, 3, $w);
+$p10 = RSL_Pairing::pair_division(range(1, 10), $r10, $meet8($by10, 3), array(), $w, 's3', $l10);
+$cross10 = function ($pairs) { $n = 0; foreach ($pairs as $p) { $n += (($p[0] <= 6) !== ($p[1] <= 6)) ? 1 : 0; } return $n; };
+$t3 = RSL_Pairing::trim($p10['pairs'], 3);
+$kept_max = max(array_map(function ($p) { return $p[2]['cost']; }, $t3['kept']));
+$dropped_min = min(array_map(function ($p) { return $p[2]['cost']; }, $t3['dropped']));
+$by_closeness = $p10['pairs']; // the trim before this fix: cost without the link bonus
+usort($by_closeness, function ($x, $y) { return ($x[2]['cost'] - $x[2]['link']) <=> ($y[2]['cost'] - $y[2]['link']); });
+$check('three courts for five games: a game linking the groups is kept (judged without the bonus, both would have sat out)',
+    $l10['bonus'] === 2.25 && $cross10($p10['pairs']) === 2 && count($t3['kept']) === 3 && count($t3['dropped']) === 2
+    && $cross10($t3['kept']) >= 1 && $kept_max <= $dropped_min && $cross10(array_slice($by_closeness, 0, 3)) === 0,
+    $cross10($p10['pairs']) . ' cross, ' . $cross10($t3['kept']) . ' kept');
+$check('...room for every game: nothing sits out', count(RSL_Pairing::trim($p10['pairs'], 5)['kept']) === 5 && RSL_Pairing::trim($p10['pairs'], 6)['dropped'] === array()
+    && RSL_Pairing::trim(array(), 3) === array('kept' => array(), 'dropped' => array()));
 
 // --- Slots ---------------------------------------------------------------------------------
 $slots = array(
@@ -249,23 +284,13 @@ $ctx_unpub = RSL_Pairing::context($nights[2]);
 RSL_Fixtures::publish_night($nights[0]->id);
 
 // The link term from a real season (0.18.1): week one's three Ranked games leave three pairs that no
-// chain of games connects. Round 3 links them (2.25); round 2 doesn't yet; unpublished results, forfeits
-// and Unranked games never count.
-$ctx3 = RSL_Pairing::context($nights[2]);
-$g3 = $ctx3['link']['groups'];
-$u_ids = array_map(function ($t) { return intval($t->id); }, $u);
-$check('context(): round 3 links week one\'s three Ranked pairs (three groups, bonus 2.25); no Unranked team is in a group',
-    count($g3) === 6 && count(array_unique($g3)) === 3 && $ctx3['link']['bonus'] === 2.25 && $ctx3['link']['nights'] === 1 && !array_intersect($u_ids, array_keys($g3)),
-    wp_json_encode($ctx3['link']));
-$check('...round 2 has no link term, and nor does round 3 while week one is unpublished', RSL_Pairing::context($nights[1])['link']['bonus'] === 0.0
-    && $ctx_unpub['link']['bonus'] === 0.0 && $ctx_unpub['link']['groups'] === array());
-$week1_ranked = array_values(array_filter(RSL_Fixtures::games_for_night($nights[0]->id), function ($g) { return $g->division === 'ranked'; }));
-$gave_away = $week1_ranked[0];
-RSL_Fixtures::record_forfeit($gave_away->id, $gave_away->home_team_id);
-$ctx3f = RSL_Pairing::context($nights[2]);
-$check('...a forfeit doesn\'t link: its two teams (no other game) are left out', count($ctx3f['link']['groups']) === 4
-    && !isset($ctx3f['link']['groups'][intval($gave_away->home_team_id)]) && !isset($ctx3f['link']['groups'][intval($gave_away->away_team_id)]));
-RSL_Fixtures::record_result($gave_away->id, '25-20, 25-20, 20-25');
+// chain of games connects, but that is one night of the division's results, so round 3 has no link
+// term while week two's aren't in (nights without results don't count); round 2 has none either, nor
+// round 3 while week one is unpublished.
+$no_link = array('groups' => array(), 'bonus' => 0.0, 'nights' => 0);
+$check('context(): round 3 with only week one\'s results has no link term (one night of the division\'s results); round 2 none; round 3 none while week one is unpublished',
+    RSL_Pairing::context($nights[2])['link'] === $no_link && RSL_Pairing::context($nights[1])['link'] === $no_link && $ctx_unpub['link'] === $no_link,
+    wp_json_encode(RSL_Pairing::context($nights[2])['link']));
 
 // Byes: a team only sat out for the fixtures' sake if it was in the league by then (approved,
 // not just applied) and hadn't said it couldn't make that night. Three teams that weren't in week one.
@@ -290,6 +315,55 @@ RSL_Pairing::generate($nights[1]->id);
 $week1 = array_map(function ($g) { return RSL_Pairing::meeting_key(intval($g->home_team_id), intval($g->away_team_id)); }, RSL_Fixtures::games_for_night($nights[0]->id));
 $week2 = array_map(function ($g) { return RSL_Pairing::meeting_key(intval($g->home_team_id), intval($g->away_team_id)); }, RSL_Fixtures::games_for_night($nights[1]->id));
 $check('week two repeats no week-one game', !array_intersect($week1, $week2) && count($week2) >= 3);
+$check('...and while week two is drafted, not played, round 3 still has no link term', RSL_Pairing::context($nights[2])['link'] === $no_link);
+
+// Week two by hand, so the results stay split: week one's pairs (a b), (c d), (e f); week two a-c, b-d
+// and e-f again. Published and played, that's {a b c d} and {e f}: round 3 (the division's third
+// night) links them, 2.25 for one night split. (e and f met last week, so the round-3 draw below pairs
+// each with the other group whatever the results, which keeps its checks the same every run.) Every
+// team gets $150 credit, so two published nights' fees don't keep anyone out of the later draws.
+$week1_ranked = array_values(array_filter(RSL_Fixtures::games_for_night($nights[0]->id), function ($g) { return $g->division === 'ranked'; }));
+foreach (RSL_Fixtures::games_for_night($nights[1]->id) as $g) {
+    if ($g->division === 'ranked') {
+        RSL_Fixtures::delete_game($g->id);
+    }
+}
+$pa = array(intval($week1_ranked[0]->home_team_id), intval($week1_ranked[0]->away_team_id));
+$pc = array(intval($week1_ranked[1]->home_team_id), intval($week1_ranked[1]->away_team_id));
+$pe = array(intval($week1_ranked[2]->home_team_id), intval($week1_ranked[2]->away_team_id));
+$slots2 = array_values(array_filter(RSL_Courts::slots_for_night($nights[1]->id), function ($s) { return $s['division'] === 'ranked'; }));
+$w2 = array();
+foreach (array(array($pa[0], $pc[0]), array($pa[1], $pc[1]), $pe) as $i => $pair) {
+    $w2[] = RSL_Fixtures::add_game($nights[1]->id, array('home' => $pair[0], 'away' => $pair[1], 'court_id' => $slots2[$i]['court_id'], 'start' => $slots2[$i]['start']));
+}
+RSL_Fixtures::publish_night($nights[1]->id);
+foreach ($w2 as $g) {
+    if (!is_wp_error($g)) {
+        RSL_Fixtures::record_result($g->id, '25-20, 25-20, 20-25');
+    }
+}
+foreach (array_merge($teams, $u) as $t) {
+    RSL_Payments::adjust($t->id, 150, 'Test credit', 0);
+}
+RSL_Ratings::flush();
+$ctx3 = RSL_Pairing::context($nights[2]);
+$g3 = $ctx3['link']['groups'];
+$u_ids = array_map(function ($t) { return intval($t->id); }, $u);
+$check('context(): week two played and still split, round 3 links {a b c d} and {e f} (two groups, bonus 2.25, one night); no Unranked team is in a group',
+    count($w2) === 3 && !is_wp_error($w2[0]) && !is_wp_error($w2[1]) && !is_wp_error($w2[2]) && count($g3) === 6 && count(array_unique($g3)) === 2
+    && $g3[$pa[0]] === $g3[$pc[1]] && $g3[$pe[0]] === $g3[$pe[1]] && $g3[$pa[0]] !== $g3[$pe[0]]
+    && $ctx3['link']['bonus'] === 2.25 && $ctx3['link']['nights'] === 1 && !array_intersect($u_ids, array_keys($g3)),
+    wp_json_encode($ctx3['link']));
+$ef_games = array($week1_ranked[2], $w2[2]);
+foreach ($ef_games as $ef) {
+    RSL_Fixtures::record_forfeit($ef->id, $ef->home_team_id);
+}
+$ctx3f = RSL_Pairing::context($nights[2]);
+$check('...a forfeit doesn\'t link: with both e-f games forfeited, e and f (no other game) are left out and the rest are one group, so no link term',
+    $ctx3f['link'] === $no_link, wp_json_encode($ctx3f['link']));
+foreach ($ef_games as $ef) {
+    RSL_Fixtures::record_result($ef->id, '25-20, 25-20, 20-25');
+}
 
 // Court supervisors: a remake keeps a venue's supervisor when the venue still has games;
 // removing a venue's last game takes its supervisor off (one of two games doesn't).
@@ -336,7 +410,7 @@ foreach (RSL_Fixtures::games_for_night($n3->id) as $x) {
         $unranked_links[] = $why3[intval($x->id)]['link'];
     }
 }
-$check('round 3: games between the groups week one left apart carry the link bonus (-2.25); Unranked games never do',
+$check('round 3: games between the groups weeks one and two left apart carry the link bonus (-2.25); Unranked games never do',
     in_array(-2.25, $ranked_links, true) && $unranked_links && max(array_map('abs', $unranked_links)) === 0.0,
     wp_json_encode(array($ranked_links, $unranked_links)));
 $g = RSL_Fixtures::games_for_night($n3->id)[0];
