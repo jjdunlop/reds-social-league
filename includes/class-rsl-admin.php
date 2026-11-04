@@ -438,7 +438,7 @@ class RSL_Admin {
             </label>
             <button type="submit" class="button">Save</button>
         </form>
-        <p class="description">The level is the captain's starting guess (or yours) — admin-only, never public. It seeds a Ranked team's first-week matchmaking (<?php echo intval(RSL_Teams::level_seed_rating($team->est_level ?: 'solid')); ?> on the rating scale) until results take over. The public ladder doesn't use it: there every team starts on the same rating.</p>
+        <p class="description">The level is the captain's starting guess (or yours) — admin-only, never public. It seeds a Ranked team's first-week matchmaking (<?php echo intval(RSL_Teams::level_seed_rating($team->est_level ?: 'solid')); ?> on the rating scale) until results take over. The public ladder never uses it: there every team starts on the same rating and only results move it, so changing the level never moves a team on the ladder.</p>
         <p><strong>Fixturing preferences:</strong> <?php echo esc_html(RSL_Teams::preferences_summary($team)); ?> <span class="description">(set by the captain on the league page)</span></p>
 
         <h2>Roster (<?php echo count($members); ?>)</h2>

@@ -3,8 +3,11 @@
  * The season's story, for the game-style touches on public pages. Teams only.
  *
  * Every rating here is the LADDER rating (RSL_Ratings::compute(..., 'ladder'):
- * every team starts on the same number, so the captain's level never
- * shapes anything public). The seeded fixtures rating is never read here.
+ * every team starts on the season's frozen start and moves on results
+ * alone; it never reads a level, for any team at any game count). So
+ * earned tiers and their buffer, first ratings, changes, upsets and leaders
+ * hold nothing of the captain's level, and editing a level moves none of
+ * them. The seeded fixtures rating is never read here.
  *
  * Two kinds of progress, kept apart on purpose:
  *  - The RATING stays honest (it orders the Ranked ladder). It can go down.
@@ -14,9 +17,10 @@
  *      doesn't flip a team between tiers: up as soon as the rating crosses
  *      into a tier; down one tier after DEMOTE_ROUNDS rounds in a row more
  *      than DEMOTE_BUFFER below the tier's floor (the first such round
- *      shows "at risk"). While provisional, a team is "In placements" — no
- *      tier and no rating change shown: a rating from a game or two is
- *      mostly its starting value.
+ *      shows "at risk"). While provisional (under PLACEMENT_GAMES games,
+ *      or its ladder sd still above RSL_Ratings::LADDER_PROVISIONAL_SD), a
+ *      team is "In placements" — no tier and no rating change shown: a
+ *      rating from a game or two can still swing a long way.
  *    - Season Points (both divisions): points for turning up, winning,
  *      close games, upsets and achievements. Only ever go up; every
  *      LEVEL_POINTS is a new level.

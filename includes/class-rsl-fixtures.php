@@ -366,7 +366,12 @@ class RSL_Fixtures {
     // Publishing
     // ------------------------------------------------------------------
 
-    /** Release (or pull back) a night's fixtures. Already in that state: the publish time is kept. */
+    /**
+     * Release (or pull back) a night's fixtures. Already in that state: the
+     * publish time is kept. Publishing the season's first Ranked night
+     * freezes the ladder's start from that night's teams; pulling back the
+     * last published Ranked night forgets it (RSL_Ratings::start_for()).
+     */
     public static function publish_night($night_id, $publish = true) {
         global $wpdb;
         $night = RSL_Courts::get_night($night_id);
@@ -377,6 +382,8 @@ class RSL_Fixtures {
             $wpdb->update(RSL_Database::table('nights'), array('published_at' => $publish ? current_time('mysql') : null), array('id' => intval($night_id)));
         }
         RSL_Payments::sync_night($night_id); // game fees are charged when fixtures are published
+        RSL_Ratings::flush();
+        RSL_Ratings::start_for($night->season);
         return RSL_Courts::get_night($night_id);
     }
 

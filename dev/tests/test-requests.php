@@ -165,6 +165,7 @@ foreach (RSL_Courts::nights($season) as $n) {
 }
 $wpdb->delete(RSL_Database::table('nights'), array('season' => $season));
 delete_transient(RSL_Stats::CACHE_PREFIX . $season); // RSL_Stats::season() saved a copy above
+RSL_Ratings::forget_start($season); // publishing a Ranked night froze the ladder's start
 $settings = get_option(RSL_Courts::SETTINGS_OPTION, array());
 if (is_array($settings) && isset($settings[$season])) {
     unset($settings[$season]);

@@ -60,6 +60,10 @@ $reset = function () use ($wpdb, $fake_option, $fake_venues_option) {
 
 list($teams_removed, $users_removed) = $reset();
 echo "Removed $teams_removed fake teams and $users_removed fake players.\n";
+if ($teams_removed) {
+    // The ladder's start was frozen from the fake first night: freeze it again from what's left.
+    RSL_Ratings::forget_start(RSL_Seasons::current());
+}
 if (isset($args[0]) && $args[0] === 'reset') {
     rsl_dev_release_mail($hold);
     return;
@@ -158,7 +162,8 @@ $today = current_time('Y-m-d');
 $last_sunday = date('w', strtotime($today)) === '0' ? $today : date('Y-m-d', strtotime('last sunday', strtotime($today)));
 $first = date('Y-m-d', strtotime($last_sunday . ' -3 weeks'));
 $wpdb->query($wpdb->prepare("UPDATE " . RSL_Database::table('nights') . " SET published_at = NULL WHERE season = %s", $season));
-RSL_Courts::save_settings($season, array('start' => $first, 'end' => date('Y-m-d', strtotime($first . ' +11 weeks')), 'weekday' => 0,
+RSL_Ratings::forget_start($season); // nothing published now: the ladder's start freezes again from the fake first night
+RSL_Courts::save_settings($season,array('start' => $first, 'end' => date('Y-m-d', strtotime($first . ' +11 weeks')), 'weekday' => 0,
     'minutes' => array('ranked' => 60, 'unranked' => 50)));
 RSL_Courts::generate_nights($season);
 $nights = RSL_Courts::nights($season);

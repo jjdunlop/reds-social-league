@@ -114,19 +114,32 @@ $rf = RSL_Ratings::compute($season, null, 'fixtures');
 $check('the dominant team rates highest, the beaten team lowest (ladder and fixtures ratings alike)',
     $r[$A->id]['rating'] > $r[$B->id]['rating'] && $r[$B->id]['rating'] > $r[$D->id]['rating'] && $r[$C->id]['rating'] > $r[$D->id]['rating']
     && $rf[$A->id]['rating'] > $rf[$B->id]['rating'] && $rf[$B->id]['rating'] > $rf[$D->id]['rating'] && $rf[$C->id]['rating'] > $rf[$D->id]['rating']);
-// 0.18.1: two ratings. The ladder (the default) starts every team on the mean of the season's
-// level seeds, rounded to 10: (1800 + 1500 + 1500 + 1200 + 1650) / 5 = 1530.
-$start = RSL_Ratings::common_start(RSL_Ratings::seeds(RSL_Teams::list_for_season($season)));
-$check('the ladder\'s common start is the mean of the Ranked teams\' level seeds, rounded to 10 (1530 here); 1500 with no teams', $start === 1530
-    && RSL_Ratings::common_start(array()) === 1500 && RSL_Ratings::common_start(array(1 => 1200, 2 => 1350)) === 1280, (string) $start);
-$check('a team with no games: the fixtures rating sits at its seed, the ladder rating at the common start; provisional in both',
-    abs($rf[$E->id]['rating'] - RSL_Teams::level_seed_rating('strong')) < 0.01 && abs($r[$E->id]['rating'] - 1530) < 0.01
+// 0.18.1: two ratings. The ladder (the default) starts every team on one number per season, frozen
+// when the season's first Ranked night was published: the mean of the level seeds of the teams with a
+// game that night, rounded to 10. Night one had Aces, Blockers, Cobras and Diggers: 1500. Eagles (no
+// game that night) don't count; with them the mean would be 1530.
+$starts = get_option(RSL_Ratings::STARTS_OPTION, array());
+$frozen = is_array($starts) && isset($starts[$season]) ? $starts[$season] : null;
+$check('the ladder\'s start is frozen when night one is published: the mean seed of that night\'s teams, rounded to 10 (1500), kept in its option',
+    $frozen && $frozen['start'] === 1500 && $frozen['night'] === $n1->night_date && $frozen['teams'] === 4 && RSL_Ratings::start_for($season) === 1500
+    && RSL_Ratings::common_start(RSL_Ratings::seeds(RSL_Teams::list_for_season($season))) === 1530, wp_json_encode($frozen));
+$check('the start formula: the mean of the level seeds, rounded to 10; 1500 with none', RSL_Ratings::common_start(array()) === 1500
+    && RSL_Ratings::common_start(array(1 => 1200, 2 => 1350)) === 1280 && RSL_Ratings::frozen_start(array(1 => 1200, 2 => 1350, 3 => 1800), array(1, 2)) === 1280);
+$check('a team with no games: the fixtures rating sits at its seed, the ladder rating at the frozen start; provisional in both',
+    abs($rf[$E->id]['rating'] - RSL_Teams::level_seed_rating('strong')) < 0.01 && abs($r[$E->id]['rating'] - 1500) < 0.01
     && $r[$E->id]['provisional'] && $rf[$E->id]['provisional'] && $r[$E->id]['games'] === 0,
     round($rf[$E->id]['rating'], 2) . ' / ' . round($r[$E->id]['rating'], 2));
 $check('the default kind is the ladder, and anything but fixtures is read as the ladder', RSL_Ratings::compute($season, null, 'ladder') === $r
     && RSL_Ratings::compute($season, null, 'nonsense') === $r && RSL_Ratings::kind('') === 'ladder' && RSL_Ratings::kind('fixtures') === 'fixtures');
-$check('the advanced team\'s fixtures rating sits above its ladder rating (its seed is above the common start)', $rf[$A->id]['rating'] > $r[$A->id]['rating'] + 20
-    && $rf[$D->id]['rating'] < $r[$D->id]['rating'] - 20, round($rf[$A->id]['rating']) . ' vs ' . round($r[$A->id]['rating']));
+// The ladder's prior is wider (it knows nothing about a team), so the same results move a team further from
+// its start than the fixtures rating moves it from its level seed.
+$check('results move a ladder rating further from the start than the fixtures rating from its seed (the ladder\'s wider prior)',
+    $r[$A->id]['rating'] - 1500 > $rf[$A->id]['rating'] - RSL_Teams::level_seed_rating('advanced') + 100
+    && 1500 - $r[$D->id]['rating'] > RSL_Teams::level_seed_rating('new') - $rf[$D->id]['rating'] + 100 && $r[$A->id]['sd'] > $rf[$A->id]['sd'],
+    round($r[$A->id]['rating']) . ' vs ' . round($rf[$A->id]['rating']));
+$check('Aces, three games, ladder sd between 95 and 120: settled on the ladder (its line is 120, not the fixtures rating\'s 95)',
+    !$r[$A->id]['provisional'] && $r[$A->id]['games'] === 3 && $r[$A->id]['sd'] > RSL_Ratings::PROVISIONAL_SD
+    && $r[$A->id]['sd'] <= RSL_Ratings::LADDER_PROVISIONAL_SD, round($r[$A->id]['sd'], 1));
 $check('unranked teams aren\'t rated', !isset($r[$U1->id]) && !isset($rf[$U1->id]));
 $check('games are counted per team', $r[$D->id]['games'] === 2 && $r[$B->id]['games'] === 2 && $r[$A->id]['games'] === 3);
 
@@ -177,12 +190,31 @@ $check('fit(): a 1–1 draw of two finished sets is level on the set bonus (25-1
     abs($rating(array(array(25, 10), array(23, 25)), $sets_only) - 1500) < 1e-6);
 $check('fit(): a 1–1 draw still moves ratings by points, with the live weights', $draw[1]['rating'] > 1505 && $draw[2]['rating'] < 1495
     && $rating(array(array(25, 10), array(23, 25)), array('set_weight' => 0, 'point_weight' => RSL_Ratings::POINT_WEIGHT)) > 1505);
+// The ladder's own prior and provisional line (0.18.1): fit() takes them as options, and its defaults are the constants.
+$even4 = array(1 => 1500, 2 => 1500, 3 => 1500, 4 => 1500);
+$three = function ($sets) { return array(array(1, 2, $sets, 0), array(1, 3, $sets, 0), array(1, 4, $sets, 0)); };
+$h3 = $three(array(array(25, 20), array(25, 21)));
+$f200 = RSL_Ratings::fit($even4, $h3);
+$fdef = RSL_Ratings::fit($even4, $h3, array('prior_sd' => RSL_Ratings::PRIOR_SD, 'provisional_sd' => RSL_Ratings::PROVISIONAL_SD));
+$f350 = RSL_Ratings::fit($even4, $h3, RSL_Ratings::fit_opts('ladder'));
+$check('fit(): prior_sd and provisional_sd default to PRIOR_SD and PROVISIONAL_SD; fit_opts() gives the ladder 350 and 120 and the fixtures rating the defaults',
+    $fdef === $f200 && RSL_Ratings::fit_opts('ladder') === array('prior_sd' => 350, 'provisional_sd' => 120) && RSL_Ratings::fit_opts('fixtures') === array()
+    && RSL_Ratings::fit_opts('nonsense') === RSL_Ratings::fit_opts('ladder') && RSL_Ratings::PRIOR_SD === 200);
+$check('fit(): prior sd 350 spreads the same results wider than 200, with a wider uncertainty',
+    $f350[1]['rating'] - $f350[2]['rating'] > $f200[1]['rating'] - $f200[2]['rating'] + 20 && $f350[1]['sd'] > $f200[1]['sd'] + 10,
+    round($f350[1]['rating'] - $f350[2]['rating']) . ' vs ' . round($f200[1]['rating'] - $f200[2]['rating']));
+$one_set = RSL_Ratings::fit($even4, $three(array(array(25, 20))), RSL_Ratings::fit_opts('ladder'));
+$at95 = RSL_Ratings::fit($even4, $h3, array('prior_sd' => RSL_Ratings::LADDER_PRIOR_SD, 'provisional_sd' => RSL_Ratings::PROVISIONAL_SD));
+$check('ladder: a team on 3 games with sd about 100 is settled (the fixtures line of 95 would hold it back); one on 3 one-set games, sd about 130, is still provisional',
+    $f350[1]['games'] === 3 && $f350[1]['sd'] > 95 && $f350[1]['sd'] < 110 && !$f350[1]['provisional'] && $at95[1]['provisional']
+    && $one_set[1]['games'] === 3 && $one_set[1]['sd'] > 120 && $one_set[1]['sd'] < 140 && $one_set[1]['provisional'],
+    round($f350[1]['sd'], 1) . ' / ' . round($one_set[1]['sd'], 1));
 $short3 = RSL_Fixtures::parse_sets('25-20, 18-25, 15-11');
 $check('a third set to 15 is a normal result', !is_wp_error($short3) && count($short3) === 3);
 $check('a set ended by time (score as it stands) is accepted', !is_wp_error(RSL_Fixtures::parse_sets('25-21, 22-25, 9-7')));
 
 // More sets played = more certain.
-$check('uncertainty shrinks with sets played', $after[$A->id]['sd'] < $after[$E->id]['sd'] && $after[$E->id]['sd'] > RSL_Ratings::PROVISIONAL_SD);
+$check('uncertainty shrinks with sets played', $after[$A->id]['sd'] < $after[$E->id]['sd'] && $after[$E->id]['sd'] > RSL_Ratings::LADDER_PROVISIONAL_SD);
 $sd_before = $after[$B->id]['sd'];
 RSL_Fixtures::record_result($h2->id, '25-23, 22-25, 25-21, 23-25, 25-20');
 RSL_Ratings::flush();
@@ -443,11 +475,18 @@ $check('identical results, different captain levels: identical ladder ratings (a
     $twins_in && abs($lad[$lo->id]['rating'] - $lad[$hi->id]['rating']) < 1e-3 && abs($lad[$lo->id]['sd'] - $lad[$hi->id]['sd']) < 1e-3
     && $lad[$lo->id]['games'] === 1 && $lad[$hi->id]['games'] === 1 && $fix[$hi->id]['rating'] - $fix[$lo->id]['rating'] > 150,
     $twins_in ? sprintf('ladder %.3f / %.3f, fixtures %.1f / %.1f', $lad[$lo->id]['rating'], $lad[$hi->id]['rating'], $fix[$lo->id]['rating'], $fix[$hi->id]['rating']) : 'game not added');
+// The twins joined after night one: their levels don't move the frozen start (the season's mean seed now
+// rounds to 1520, but the ladder still starts every team on 1500).
+$starts = get_option(RSL_Ratings::STARTS_OPTION, array());
+$check('late joiners\' levels don\'t move the start: it stays as frozen on night one', RSL_Ratings::start_for($season) === 1500
+    && isset($starts[$season]) && $starts[$season]['start'] === 1500 && $starts[$season]['teams'] === 4
+    && RSL_Ratings::common_start(RSL_Ratings::seeds(RSL_Teams::list_for_season($season))) === 1520
+    && abs($lad[intval($E->id)]['rating'] - 1500) < 1e-9);
 
-// A team's ladder rating, tier and place never depend on its own level: swap two teams' levels
-// (the season's mean seed, so the common start, stays put) and nothing public moves — ladder,
-// tiers and their buffer, placements, rating changes, upsets, close games, leaders. Only the
-// fixtures ratings follow the levels.
+// After night one, no level reaches the ladder at all, for any team at any game count: edit levels —
+// teams on 5, 4, 3, 1 and 0 games, the twins under 5 — and every ladder rating (and uncertainty) stays
+// exactly as it was, and so does everything public: the ladder, tiers and their buffer, placements, first
+// ratings, rating changes, upsets, close games, leaders. Only the fixtures ratings follow the levels.
 $norm = function ($v) use (&$norm) {
     if (is_array($v)) {
         return array_map($norm, $v);
@@ -472,35 +511,67 @@ $public = function () use ($season, $norm) {
     }
     return $norm($out);
 };
-$start_was = RSL_Ratings::common_start(RSL_Ratings::seeds(RSL_Teams::list_for_season($season)));
+$levels_were = array();
+foreach (array($A, $B, $C, $D, $E, $lo, $hi) as $t) {
+    $levels_were[intval($t->id)] = RSL_Teams::get($t->id)->est_level;
+}
 $seen = $public();
-$fix_was = RSL_Ratings::compute($season, null, 'fixtures');
-RSL_Teams::set_level($A->id, 'new');
-RSL_Teams::set_level($D->id, 'advanced');
-$swapped_view = $public();
-$fix_now = RSL_Ratings::compute($season, null, 'fixtures');
-$a_tier = isset($seen['teams'][intval($A->id)][0]['tier']['key']) ? $seen['teams'][intval($A->id)][0]['tier']['key'] : 'none';
-$check('a team\'s ladder tier never depends on its level: two teams\' levels swapped (same mean), the ladder, tiers, changes, upsets and leaders are unchanged',
-    $swapped_view == $seen && $a_tier !== 'placement' && $a_tier !== 'none'
-    && RSL_Ratings::common_start(RSL_Ratings::seeds(RSL_Teams::list_for_season($season))) === $start_was, 'Aces tier ' . $a_tier);
-$check('...while the fixtures ratings follow the levels', $fix_now[$A->id]['rating'] < $fix_was[$A->id]['rating'] - 20 && $fix_now[$D->id]['rating'] > $fix_was[$D->id]['rating'] + 20,
-    round($fix_was[$A->id]['rating']) . ' -> ' . round($fix_now[$A->id]['rating']));
-// One team's level alone moves the common start, and with it every team's ladder rating by the
-// same amount: never the order. (Eagles strong -> new: 7 teams, 1520 -> 1460.)
-RSL_Teams::set_level($A->id, 'advanced');
-RSL_Teams::set_level($D->id, 'new');
 RSL_Ratings::flush();
 $lad_was = RSL_Ratings::compute($season, null, 'ladder');
-RSL_Teams::set_level($E->id, 'new');
+$fix_was = RSL_Ratings::compute($season, null, 'fixtures');
+$games_by_team = array_map(function ($x) { return $x['games']; }, $lad_was);
+$edits = array(intval($A->id) => 'new', intval($B->id) => 'advanced', intval($D->id) => 'advanced', intval($E->id) => 'new',
+    intval($lo->id) => 'advanced', intval($hi->id) => 'new');
+foreach ($edits as $id => $level) {
+    RSL_Teams::set_level($id, $level);
+}
+$edited_view = $public();
 RSL_Ratings::flush();
 $lad_now = RSL_Ratings::compute($season, null, 'ladder');
-$shift = RSL_Ratings::common_start(RSL_Ratings::seeds(RSL_Teams::list_for_season($season))) - $start_was;
-$same_shift = count($lad_now) === count($lad_was);
+$fix_now = RSL_Ratings::compute($season, null, 'fixtures');
+$identical = count($lad_now) === count($lad_was);
 foreach ($lad_was as $id => $x) {
-    $same_shift = $same_shift && isset($lad_now[$id]) && abs($lad_now[$id]['rating'] - $x['rating'] - $shift) < 1e-3;
+    $identical = $identical && isset($lad_now[$id]) && $lad_now[$id] === $x;
 }
-$check('one team\'s level moves every ladder rating by the same amount (the common start), never the order', $same_shift && $shift === -60, 'shift ' . $shift);
-RSL_Teams::set_level($E->id, 'strong');
+$a_tier = isset($seen['teams'][intval($A->id)][0]['tier']['key']) ? $seen['teams'][intval($A->id)][0]['tier']['key'] : 'none';
+$check('levels edited after night one leave every ladder rating exactly as it was, teams under 5 games too (games: ' . implode(', ', $games_by_team) . ')',
+    $identical && min($games_by_team) === 0 && in_array(1, $games_by_team, true) && max($games_by_team) >= 5 && RSL_Ratings::start_for($season) === 1500);
+$check('...and nothing public moves: ladder, places, tiers and their buffer, placements, first ratings, changes, upsets and leaders',
+    $edited_view == $seen && $a_tier !== 'placement' && $a_tier !== 'none', 'Aces tier ' . $a_tier);
+$check('...while the fixtures ratings follow the levels', $fix_now[$A->id]['rating'] < $fix_was[$A->id]['rating'] - 20 && $fix_now[$D->id]['rating'] > $fix_was[$D->id]['rating'] + 20,
+    round($fix_was[$A->id]['rating']) . ' -> ' . round($fix_now[$A->id]['rating']));
+foreach ($levels_were as $id => $level) {
+    RSL_Teams::set_level($id, $level);
+}
+
+// The start is frozen only while a Ranked night is published: unpublish them all and it's forgotten;
+// publish night one again and it freezes from that night's teams' levels as they are then (Blockers
+// edited to advanced meanwhile: the four average 1575, rounded to 1580).
+foreach ($nights as $n) {
+    RSL_Fixtures::publish_night($n->id, false);
+}
+$starts = get_option(RSL_Ratings::STARTS_OPTION, array());
+$cleared = !is_array($starts) || !isset($starts[$season]);
+RSL_Teams::set_level($B->id, 'advanced');
+RSL_Ratings::flush();
+$unfrozen = RSL_Ratings::start_for($season); // nothing published: the current mean seed, not stored
+$starts = get_option(RSL_Ratings::STARTS_OPTION, array());
+$still_cleared = !is_array($starts) || !isset($starts[$season]);
+RSL_Fixtures::publish_night($n1->id);
+$starts = get_option(RSL_Ratings::STARTS_OPTION, array());
+$refrozen = is_array($starts) && isset($starts[$season]) ? $starts[$season] : null;
+$lad_re = RSL_Ratings::compute($season, null, 'ladder');
+$check('unpublishing every Ranked night forgets the start (with none published it is the current mean seed, not stored); publishing night one freezes it again from that night\'s teams',
+    $cleared && $still_cleared && $unfrozen === RSL_Ratings::common_start(RSL_Ratings::seeds(RSL_Teams::list_for_season($season)))
+    && $refrozen && $refrozen['start'] === 1580 && $refrozen['night'] === $n1->night_date && RSL_Ratings::start_for($season) === 1580
+    && abs($lad_re[intval($E->id)]['rating'] - 1580) < 1e-9, wp_json_encode($refrozen) . ' / ' . $unfrozen);
+RSL_Teams::set_level($B->id, $levels_were[intval($B->id)]);
+RSL_Fixtures::publish_night($n1->id, false);
+foreach (array(0, 1, 2, 3) as $i) {
+    RSL_Fixtures::publish_night($nights[$i]->id);
+}
+$starts = get_option(RSL_Ratings::STARTS_OPTION, array());
+$check('...and back as it was (night one\'s teams at their own levels: 1500)', isset($starts[$season]) && $starts[$season]['start'] === 1500 && RSL_Ratings::start_for($season) === 1500);
 RSL_Ratings::flush();
 RSL_Stats::flush();
 
@@ -534,6 +605,7 @@ foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('
     $wpdb->delete(RSL_Database::table('venues'), array('id' => $vid));
 }
 delete_transient(RSL_Stats::CACHE_PREFIX . $season);
+RSL_Ratings::forget_start($season);
 // Every team in the test's season (however far the test got).
 foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $season)) as $tid) {
     $wpdb->delete(RSL_Database::table('requests'), array('team_id' => $tid));
