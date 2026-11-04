@@ -159,8 +159,13 @@ finals (see `CLAUDE.md`).
   games. A bye (the fixtures left the team out), a forfeit won or lost, a
   game with no result yet, a finals-night game and anything on an
   unpublished night count nothing, and nor does a week off or a night the
-  team said it couldn't make. The 0.8.1 rule counted nights instead: a
-  double-header night was one, a bye counted, a forfeit win counted.
+  team said it couldn't make. Only games in the team's own division count,
+  as in its ladder record (P): a team the league moves from Unranked to
+  Ranked starts its finals count at 0. (Before, its Unranked nights
+  counted as rounds, so after 3 Unranked games and 2 Ranked ones it showed
+  a tick beside P 2, still in placements.) The 0.8.1 rule counted nights
+  instead: a double-header night was one, a bye counted, a forfeit win
+  counted.
   Season Points are unchanged: the turn-up points are once a night and a
   bye still earns them (checked: `RSL_Stats::season()` is identical to the
   previous build's apart from the finals count, on the test season before
@@ -168,22 +173,35 @@ finals (see `CLAUDE.md`).
   - Renamed so the names say what is counted: `FINALS_MIN_ROUNDS` is
     `FINALS_MIN_GAMES` (5), `finals_min_rounds()` is `finals_min_games()`,
     and the option and filter `rsl_finals_min_rounds` are
-    `rsl_finals_min_games`. The old option is not read (it was never set
-    on the live site). Each team's row in `RSL_Stats::season()` has
-    `games` in place of `rounds`, and its `finals` array is `games`,
-    `need`, `eligible`, `possible`.
-  - `possible` (whether a team can still get there) adds to its games
-    played its games in published regular-season fixtures with no result
-    yet (a published double-header is two, a published night it isn't in
-    is none) and one game for each regular night after the last night with
-    a result whose fixtures aren't out yet (double-headers aren't planned
-    ahead). Counting one game for every regular night after the last night
-    with a result, as first planned, left the mark blank for a team whose
-    result on that night wasn't in yet, and for a team whose published
-    double-header would get it there.
+    `rsl_finals_min_games`. The old option is not read; it was not set on
+    the live site when checked on 5 Nov 2026. Each team's row in
+    `RSL_Stats::season()` has `games` in place of `rounds`, and its
+    `finals` array is `games`, `need`, `eligible`, `possible`.
+  - `possible` (whether a team can still get there) is true while its
+    games played plus its games to come reach the minimum. Games to come:
+    its games in published regular-season fixtures with no result yet, in
+    its own division (a published double-header is two, a published night
+    it isn't in is none), leaving out a game either team has said it can't
+    make, active or handled (the league calls it off or records a forfeit;
+    the opponent's game is off too), plus two games for each regular night
+    after the last night with a result whose fixtures aren't out yet.
+    - Two a night, not one: until a night's fixtures are out any team can
+      ask for Two games, and the draw gives a team at most two a night, so
+      a blank mark (can't get there) never later turns into a tick. With
+      one a night, a team on 3 games with one night left showed blank, then
+      got a double-header and became eligible. The cost: a team that needs
+      a double-header on every night left shows "N to go" though it may not
+      get one.
+    - Counting one game for every regular night after the last night with
+      a result, as first planned, left the mark blank for a team whose
+      result on that night wasn't in yet, and for a team whose published
+      double-header would get it there.
+    - Without the can't-make rule, a game left scheduled after a team said
+      it couldn't make it (handled, no forfeit recorded) kept "1 to go"
+      beside both teams for the rest of the season.
   - The ladder's How the ladder works says: Finals: a team needs 5
-    regular-season games played. A double-header counts as two games. A
-    bye doesn't count, and nor does a forfeit, won or lost. The Finals
+    regular-season games played in its division. A double-header counts as
+    two games. A bye doesn't count, and nor does a forfeit, won or lost. The Finals
     column keeps its marks (✓, "2 to go", blank once a team can't get
     there), its titles now in games.
   - The Stats cache key names the rule (`finals-games:5`, where it had the
@@ -203,7 +221,15 @@ finals (see `CLAUDE.md`).
   a forfeit loss, a game with no result, a finals-night game and an
   unpublished night are none, a 1–1 draw cut short by the clock counts,
   eligible at exactly 5, need and possible as fixtures come out and
-  results come in, the setting's option and filter, the public wording).
+  results come in, two games to come for a night not yet drawn, a game
+  either team can't make (active or handled) is none to come for both, a
+  finals fixture and a game in an unpublished draft are none to come, an
+  unpublished night before the last result is none to come, a team moved
+  from Unranked to Ranked counts only its Ranked games, the setting's
+  option and filter, the public wording); Season Points stay once a night
+  for teams that played (exact points for a win, and for a loss plus a
+  forfeit win), and a night whose only game a team forfeited earns it
+  nothing.
 
 - **A finished set counts as a whole set for the set bonus.** Before, a set
   needed 40 points in all to count whole, so the most decisive wins counted
