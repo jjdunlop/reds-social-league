@@ -21,6 +21,11 @@
  *               two weeks ago: costs another 1.
  *   bye         odd numbers: someone sits out (or fills a double-header),
  *               dearer each time the same team has sat out.
+ *   link        (Ranked, from round 3) while the season's results split the
+ *               teams into groups that no chain of games connects, a game
+ *               between two groups costs 2.25 (a 75/25 game) less for each
+ *               night in a row they've been split — so the ladder, which
+ *               only has results to go on, gets to compare them (link()).
  *
  * Unranked has no ratings, so only variety counts: least-played, longest
  * ago — the usual social-league round robin, but robust to late joiners
@@ -56,6 +61,8 @@ class RSL_Pairing {
             'bye' => 4.0,             // sitting out, × (times sat out + 1)
             'double_max' => 2.25,     // a spare-slot double-header only if its closeness cost is at most this (75/25)
             'double_max_asked' => 4.0, // ...or this when a team asked for two games that week (about 83/17)
+            'link' => 2.25,           // Ranked: a game between groups the results haven't connected costs this much less (a 75/25 game), × nights in a row split
+            'link_from' => 3,         // ...from this round (after one night every game is a group of its own; simulated)
         ));
     }
 
@@ -82,10 +89,12 @@ class RSL_Pairing {
      * What pairing two teams would cost, and why.
      * $ratings: id => array(rating, sd), or null (Unranked: no closeness).
      * $meetings: meeting_key => array(count, last) where last = rounds ago.
-     * Returns array(cost, p (A wins a set), edge, closeness, repeat, recent, count, last).
+     * $link: link()'s array(groups, bonus), or null (Unranked, or none).
+     * Returns array(cost, p (A wins a set), edge, closeness, repeat, recent,
+     * link (minus the bonus when A and B are in different groups, else 0), count, last).
      */
-    public static function pair_cost($a, $b, $ratings, $meetings, $w, $salt = '') {
-        $out = array('cost' => 0.0, 'p' => null, 'edge' => null, 'closeness' => 0.0, 'repeat' => 0.0, 'recent' => 0.0, 'count' => 0, 'last' => null);
+    public static function pair_cost($a, $b, $ratings, $meetings, $w, $salt = '', $link = null) {
+        $out = array('cost' => 0.0, 'p' => null, 'edge' => null, 'closeness' => 0.0, 'repeat' => 0.0, 'recent' => 0.0, 'link' => 0.0, 'count' => 0, 'last' => null);
         if ($ratings !== null && isset($ratings[$a]) && isset($ratings[$b])) {
             $p = self::set_win_probability($ratings[$a]['rating'], $ratings[$a]['sd'], $ratings[$b]['rating'], $ratings[$b]['sd']);
             $edge = abs(2 * $p - 1);
@@ -105,18 +114,107 @@ class RSL_Pairing {
                 $out['recent'] = $w['two_weeks'];
             }
         }
+        if ($link && !empty($link['bonus']) && isset($link['groups'][$a]) && isset($link['groups'][$b]) && $link['groups'][$a] !== $link['groups'][$b]) {
+            $out['link'] = -$link['bonus'];
+        }
         // A tiny, repeatable tie-break so equal options don't always fall the same way.
         $jitter = (crc32($salt . '|' . $key) % 1000) / 100000;
-        $out['cost'] = $out['closeness'] + $out['repeat'] + $out['recent'] + $jitter;
+        $out['cost'] = $out['closeness'] + $out['repeat'] + $out['recent'] + $jitter + $out['link'];
+        return $out;
+    }
+
+    /**
+     * The link term for one Ranked night (pure). $ids: the division's team
+     * ids; $games_by_round: round => list of array(home, away), the
+     * published, PLAYED games of earlier rounds (forfeits don't link);
+     * $this_round: the round being paired (1 = the season's first night).
+     *
+     * groups(): the teams with at least one of those games, joined into
+     * groups by any chain of them; a team with no game yet is left out.
+     * From round $w['link_from'], k = the nights in a row, counting back
+     * from this one to link_from, on which those groups were 2 or more.
+     * Returns array(groups => team => group id (this night's; empty
+     * unless split), bonus => $w['link'] × k, nights => k). k = 0 (one
+     * group, or before link_from) changes nothing.
+     */
+    public static function link($ids, $games_by_round, $this_round, $w) {
+        $out = array('groups' => array(), 'bonus' => 0.0, 'nights' => 0);
+        $from = isset($w['link_from']) ? intval($w['link_from']) : 3;
+        if (empty($w['link']) || $this_round < $from) {
+            return $out;
+        }
+        $k = 0;
+        for ($r = $this_round; $r >= $from; $r--) {
+            $groups = self::groups($ids, $games_by_round, $r);
+            if (count(array_unique($groups)) < 2) {
+                break;
+            }
+            if ($r === $this_round) {
+                $out['groups'] = $groups;
+            }
+            $k++;
+        }
+        $out['bonus'] = $w['link'] * $k;
+        $out['nights'] = $k;
+        return $out;
+    }
+
+    /**
+     * Groups of teams joined by a chain of games in rounds before $before
+     * (pure, union-find): team => group id (the group's lowest team id), for
+     * the teams in $ids with at least one such game against another of $ids.
+     */
+    public static function groups($ids, $games_by_round, $before) {
+        $parent = array();
+        foreach ($ids as $t) {
+            $parent[intval($t)] = intval($t);
+        }
+        $find = function ($x) use (&$parent) {
+            while ($parent[$x] !== $x) {
+                $parent[$x] = $parent[$parent[$x]];
+                $x = $parent[$x];
+            }
+            return $x;
+        };
+        $played = array();
+        foreach ($games_by_round as $round => $games) {
+            if ($round >= $before) {
+                continue;
+            }
+            foreach ($games as $g) {
+                $a = intval($g[0]);
+                $b = intval($g[1]);
+                if (!isset($parent[$a]) || !isset($parent[$b])) {
+                    continue;
+                }
+                $played[$a] = $played[$b] = true;
+                $ra = $find($a);
+                $rb = $find($b);
+                if ($ra !== $rb) {
+                    // The lower id becomes the root, so a group's id is its lowest team id.
+                    if ($ra < $rb) {
+                        $parent[$rb] = $ra;
+                    } else {
+                        $parent[$ra] = $rb;
+                    }
+                }
+            }
+        }
+        $out = array();
+        foreach (array_keys($played) as $t) {
+            $out[$t] = $find($t);
+        }
+        ksort($out);
         return $out;
     }
 
     /**
      * Pair one division's teams for a night. $ids: team ids (Ranked: any
      * order; strongest first helps the search). $byes: id => times sat out.
+     * $link: link()'s result for Ranked (null: no link term).
      * Returns array(pairs => list of array(a, b, info), bye => id|null, total).
      */
-    public static function pair_division($ids, $ratings, $meetings, $byes, $w, $salt = '') {
+    public static function pair_division($ids, $ratings, $meetings, $byes, $w, $salt = '', $link = null) {
         $ids = array_values(array_map('intval', $ids));
         if ($ratings !== null) {
             usort($ids, function ($x, $y) use ($ratings) {
@@ -124,12 +222,12 @@ class RSL_Pairing {
             });
         }
         $info = array();
-        $cost = function ($a, $b) use (&$info, $ratings, $meetings, $byes, $w, $salt) {
+        $cost = function ($a, $b) use (&$info, $ratings, $meetings, $byes, $w, $salt, $link) {
             if ($a === 0 || $b === 0) {
                 $t = $a === 0 ? $b : $a;
                 return $w['bye'] * (1 + (isset($byes[$t]) ? $byes[$t] : 0)) + (crc32($salt . '|bye|' . $t) % 1000) / 100000;
             }
-            $c = self::pair_cost($a, $b, $ratings, $meetings, $w, $salt);
+            $c = self::pair_cost($a, $b, $ratings, $meetings, $w, $salt, $link);
             $info[self::meeting_key($a, $b)] = $c;
             return $c['cost'];
         };
@@ -408,7 +506,8 @@ class RSL_Pairing {
     /**
      * Everything the engine needs to know about the season before this
      * night: meetings, byes, home games, late slots, missed time
-     * preferences, double-headers, and (Ranked) ratings as of the night before.
+     * preferences, double-headers, and (Ranked) ratings as of the night
+     * before and the link term (link(), from the published played games).
      */
     public static function context($night) {
         $season = $night->season;
@@ -425,14 +524,18 @@ class RSL_Pairing {
             $teams[intval($t->id)] = $t;
         }
         $ctx = array('night' => $night, 'round' => $this_round, 'teams' => $teams, 'meetings' => array(), 'byes' => array(), 'home' => array(),
-            'late' => array(), 'misses' => array(), 'doubles' => array(), 'ratings' => null);
+            'late' => array(), 'misses' => array(), 'doubles' => array(), 'ratings' => null, 'link' => null);
 
         $by_night = array();
+        $linked = array(); // round => the published, played Ranked games (the ladder's evidence), for link()
         foreach (RSL_Fixtures::games_for_season($season) as $g) {
             if ($g->night_date >= $night->night_date || !isset($round[intval($g->night_id)])) {
                 continue;
             }
             $by_night[intval($g->night_id)][] = $g;
+            if ($g->division === 'ranked' && $g->status === 'played' && !empty($g->published_at)) {
+                $linked[$round[intval($g->night_id)]][] = array(intval($g->home_team_id), intval($g->away_team_id));
+            }
             $ago = $this_round - $round[intval($g->night_id)];
             $key = self::meeting_key(intval($g->home_team_id), intval($g->away_team_id));
             if (!isset($ctx['meetings'][$key])) {
@@ -490,6 +593,9 @@ class RSL_Pairing {
         foreach ($ratings as $id => $r) {
             $ctx['ratings'][$id] = array('rating' => $r['rating'], 'sd' => $r['sd']);
         }
+        // Ranked only: groups the ladder can't compare yet, and what a game between them is worth.
+        $ranked = array_keys(array_filter($teams, function ($t) { return $t->division === 'ranked'; }));
+        $ctx['link'] = self::link($ranked, $linked, $this_round, self::weights());
         return $ctx;
     }
 
@@ -548,11 +654,13 @@ class RSL_Pairing {
                     }
                 }
             }
-            $result = self::pair_division($ids, $ratings, $ctx['meetings'], $byes, $w, $salt);
+            $link = $division === 'ranked' ? $ctx['link'] : null;
+            $result = self::pair_division($ids, $ratings, $ctx['meetings'], $byes, $w, $salt, $link);
             $pairs = $result['pairs'];
 
-            // More games than slots: the most expensive pairings sit out.
-            usort($pairs, function ($x, $y) { return $x[2]['cost'] <=> $y[2]['cost']; });
+            // More games than slots: the most expensive pairings sit out
+            // (judged without the link bonus, as before it, like the double-header checks below).
+            usort($pairs, function ($x, $y) { return ($x[2]['cost'] - $x[2]['link']) <=> ($y[2]['cost'] - $y[2]['link']); });
             while (count($pairs) > count($slots)) {
                 $drop = array_pop($pairs);
                 $d['out'][$drop[0]] = $d['out'][$drop[1]] = 'Not enough courts';
@@ -722,7 +830,8 @@ class RSL_Pairing {
 
     /**
      * Why a saved game looks the way it does (for the admin fixture board):
-     * array(p (home wins a set), edge, count (earlier meetings), last (rounds ago), doubles, time_ok per team).
+     * array(p (home wins a set), edge, count (earlier meetings), last (rounds ago),
+     * link (the link bonus it got, negative, or 0), doubles, time_ok per team).
      */
     public static function explain_night($night_id) {
         $night = RSL_Courts::get_night($night_id);
@@ -743,7 +852,8 @@ class RSL_Pairing {
         foreach ($games as $g) {
             $h = intval($g->home_team_id);
             $a = intval($g->away_team_id);
-            $c = self::pair_cost($h, $a, $g->division === 'ranked' ? $ctx['ratings'] : null, $ctx['meetings'], $w);
+            $ranked = $g->division === 'ranked';
+            $c = self::pair_cost($h, $a, $ranked ? $ctx['ratings'] : null, $ctx['meetings'], $w, '', $ranked ? $ctx['link'] : null);
             $s = array_values(array_unique($starts[$g->division]));
             sort($s);
             $pos = array_search(RSL_Courts::hm($g->start_time), $s, true);
@@ -753,7 +863,7 @@ class RSL_Pairing {
                 $pref = isset($ctx['teams'][$t]) ? $ctx['teams'][$t]->pref_time : 'any';
                 $time_ok[$t] = $pref === 'any' ? null : (($pref === 'early' && $r <= 0.5) || ($pref === 'late' && $r >= 0.5));
             }
-            $out[intval($g->id)] = array('p' => $c['p'], 'edge' => $c['edge'], 'count' => $c['count'], 'last' => $c['last'],
+            $out[intval($g->id)] = array('p' => $c['p'], 'edge' => $c['edge'], 'count' => $c['count'], 'last' => $c['last'], 'link' => $c['link'],
                 'double' => array($h => $count[$h] > 1, $a => $count[$a] > 1), 'time_ok' => $time_ok);
         }
         $playing = array_keys($count);

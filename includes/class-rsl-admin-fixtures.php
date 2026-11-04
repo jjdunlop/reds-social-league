@@ -402,12 +402,13 @@ class RSL_Admin_Fixtures {
             <ul>
                 <li><strong>Close games (Ranked):</strong> from the two ratings, each team's chance of winning a set — shown in the <em>Set chance</em> column. It doesn't depend on how many sets fit in the hour. 50/50 costs nothing, 67/33 costs 1, 75/25 costs 2.25, 80/20 costs 3.2, 90/10 costs 5.8 — slightly uneven is cheap, lopsided is expensive. New teams' ratings are uncertain, so their chances are pulled towards 50/50.</li>
                 <li><strong>Variety:</strong> a second meeting costs the same as a 67/33 game, so a rematch happens only when it's clearly the closest option. A third meeting costs far more than any lopsided game, so teams meet at most twice a season unless there's no alternative. Last week's opponent is never repeated; two weeks ago costs a little extra.</li>
+                <li><strong>Linking groups (Ranked, from round 3):</strong> the ladder only has results to go on, so it can't compare teams that no chain of games connects (say the top five have only played each other). While the results are split like that, a game between two groups costs 2.25 less (the cost of a 75/25 game), and 2.25 more off for each further night they stay split. Teams that haven't played yet are left out. The <em>Why</em> column shows it.</li>
                 <li><strong>Unranked:</strong> no ratings, so it's purely who's played whom least and longest ago.</li>
                 <li><strong>Odd numbers:</strong> the spare team gets a game against a team happy to double-header, or sits out (sharing that around).</li>
                 <li><strong>Slots:</strong> earlier/later preferences are honoured where possible (teams that missed out get priority next time), the last slot is shared around, and spare slots become double-headers for teams that opted in — back-to-back or with a break, as they asked.</li>
             </ul>
             <p><strong>Ratings</strong> come from the points in every set (each rally is a small contest between the teams) plus a small bonus for winning sets — so a timed game that ends 1–1, a third set to 15, or a set cut off by the hour all count fairly. Forfeits never count.</p>
-            <p><strong>Two ratings from the same results.</strong> Fixtures and the <em>Set chance</em> column use a rating that starts each Ranked team from its level, so week one is paired sensibly. The public ladder, tiers and everything players see use a second rating that starts every team on the same number, so a team's level never moves it up or down the ladder. The two numbers differ until results outweigh the levels.</p>
+            <p><strong>Two ratings from the same results.</strong> Fixtures and the <em>Set chance</em> column use a rating that starts each Ranked team from its level, so games are even from week one. The public ladder, tiers and everything players see use a second rating that starts every team on the same number, fixed on the season's first published night, and moves on results alone: a team's level never moves it up or down the ladder, at any point in the season. The two numbers differ until results outweigh the levels.</p>
             <p class="description">Simulated over many 10-round seasons of timed games, this gives games about as close as pairing by ladder position, with no team meeting another more than twice.</p>
         </details>
         <?php
@@ -427,6 +428,9 @@ class RSL_Admin_Fixtures {
             $chips[] = '<span class="rsl-fx-chip">First meeting</span>';
         } else {
             $chips[] = '<span class="rsl-fx-chip is-warn">' . esc_html(($w['count'] + 1) . self::nth($w['count'] + 1) . ' meeting · last ' . ($w['last'] === 1 ? 'last week' : $w['last'] . ' rounds ago')) . '</span>';
+        }
+        if (!empty($w['link']) && $w['link'] < 0) {
+            $chips[] = '<span class="rsl-fx-chip">' . esc_html('Links two groups that haven\'t met yet: ' . sprintf('%.2f', $w['link'])) . '</span>';
         }
         foreach ($w['double'] as $t => $double) {
             if ($double) {
