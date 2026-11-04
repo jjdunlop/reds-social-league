@@ -44,8 +44,9 @@
  * round 4; the uncertainty stays honest at 350. The cost is bigger moves
  * in a team's first weeks, all of them from results. With the wider prior
  * 60-67% of teams are over 95 after 3 games, so the ladder's provisional
- * line is LADDER_PROVISIONAL_SD (120): in simulation no team was over it
- * after 3 games (the 90th percentile is about 105).
+ * line is LADDER_PROVISIONAL_SD (120): in 600 simulated seasons 1 team in
+ * 8,400 was over it after 3 games, at 120.1 (the 90th percentile is about
+ * 105).
  *
  * The draw helps: from the third night with Ranked results,
  * RSL_Pairing::link() favours a game between groups of teams that no chain

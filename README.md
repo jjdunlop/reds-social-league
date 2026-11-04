@@ -6,14 +6,14 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
-## A results-only ladder, no protected tier, and finished sets count whole (0.18.1)
+## A results-only ladder, finals on games played, no protected tier, and finished sets count whole (0.18.1)
 
 - **The captain's level has no say in the ladder, at any point in the
   season.** The club's rule: a captain's level must have no influence on a
   team's ladder rating, tier or place after 5 games, so it can't affect
   finals. 0.18.1 goes further: the ladder never reads a level, for any
   team at any game count. Levels only steer the draw. Under the old single
-  rating, a 200-point difference in starting estimate still left about 59%
+  rating, a 200-point difference in starting estimate still left about 52%
   of it in a team's rating after 3 games and 32% after 9.
 
   There are two ratings, from the same model and the same results
@@ -77,9 +77,10 @@ finals (see `CLAUDE.md`).
 - **Placements: 3 games, and the ladder's sd line is 120.** A team is in
   placements while it has fewer than 3 games or its ladder sd is over
   `LADDER_PROVISIONAL_SD` (120; the fixtures rating keeps 95). With the
-  wider prior, 60-67% of simulated teams are over 95 after 3 games and none
-  is over 120 (the 90th percentile is about 105), so the old line would
-  have kept most teams in placements for a fourth game.
+  wider prior, 60-67% of simulated teams are over 95 after 3 games, and in
+  600 simulated seasons 1 team in 8,400 was over 120 (at 120.1; the 90th
+  percentile is about 105), so the old line would have kept most teams in
+  placements for a fourth game.
 
 - **The draw links groups that haven't met.** The ladder only has results
   to go on, so it can't compare teams that no chain of games connects (say
@@ -151,6 +152,44 @@ finals (see `CLAUDE.md`).
   placement games and fit settings), so a build that changes the ladder
   under the same version never serves stats worked out with the old one.
 
+- **Finals count games played, not rounds** (the club's rule, 5 Nov 2026).
+  A Ranked team needs 5 regular-season games played to be eligible for
+  finals. A game counts once it has a result that isn't a forfeit, so a
+  1–1 draw or a game the clock cut short counts, and a double-header is two
+  games. A bye (the fixtures left the team out), a forfeit won or lost, a
+  game with no result yet, a finals-night game and anything on an
+  unpublished night count nothing, and nor does a week off or a night the
+  team said it couldn't make. The 0.8.1 rule counted nights instead: a
+  double-header night was one, a bye counted, a forfeit win counted.
+  Season Points are unchanged: the turn-up points are once a night and a
+  bye still earns them (checked: `RSL_Stats::season()` is identical to the
+  previous build's apart from the finals count, on the test season before
+  and after a round of double-headers, forfeits and a finals night).
+  - Renamed so the names say what is counted: `FINALS_MIN_ROUNDS` is
+    `FINALS_MIN_GAMES` (5), `finals_min_rounds()` is `finals_min_games()`,
+    and the option and filter `rsl_finals_min_rounds` are
+    `rsl_finals_min_games`. The old option is not read (it was never set
+    on the live site). Each team's row in `RSL_Stats::season()` has
+    `games` in place of `rounds`, and its `finals` array is `games`,
+    `need`, `eligible`, `possible`.
+  - `possible` (whether a team can still get there) adds to its games
+    played its games in published regular-season fixtures with no result
+    yet (a published double-header is two, a published night it isn't in
+    is none) and one game for each regular night after the last night with
+    a result whose fixtures aren't out yet (double-headers aren't planned
+    ahead). Counting one game for every regular night after the last night
+    with a result, as first planned, left the mark blank for a team whose
+    result on that night wasn't in yet, and for a team whose published
+    double-header would get it there.
+  - The ladder's How the ladder works says: Finals: a team needs 5
+    regular-season games played. A double-header counts as two games. A
+    bye doesn't count, and nor does a forfeit, won or lost. The Finals
+    column keeps its marks (✓, "2 to go", blank once a team can't get
+    there), its titles now in games.
+  - The Stats cache key names the rule (`finals-games:5`, where it had the
+    bare number), so stats an earlier 0.18.1 build saved under the rounds
+    rule are rebuilt.
+
 - **Tests:** editing levels after night one leaves every ladder rating
   identical, teams under 5 games included, and nothing public moves; late
   joiners don't move the start; unpublishing every Ranked night forgets it
@@ -159,7 +198,12 @@ finals (see `CLAUDE.md`).
   freezes nothing; `fit()`'s new options and the 120 line; the link term
   (pure cases, a late start, rounds without results, a real season's
   groups, forfeits, Unranked, the admin *Why* column); a linking game
-  survives the court trim; the public draw sentence; the Stats cache key.
+  survives the court trim; the public draw sentence; the Stats cache key;
+  finals eligibility (a double-header is two games, a bye, a forfeit win,
+  a forfeit loss, a game with no result, a finals-night game and an
+  unpublished night are none, a 1–1 draw cut short by the clock counts,
+  eligible at exactly 5, need and possible as fixtures come out and
+  results come in, the setting's option and filter, the public wording).
 
 - **A finished set counts as a whole set for the set bonus.** Before, a set
   needed 40 points in all to count whole, so the most decisive wins counted
@@ -552,7 +596,7 @@ changed for people:
 - **Not fixtured when owing more than $75** (setting): one forgotten week
   is fine, two isn't. The fixtures engine leaves the team out ("Owes $150
   — not fixtured until paid"), records it so it counts like a week off
-  (no bye points, no finals round), and the team page says so.
+  (no bye points), and the team page says so.
 - **"Can't make it"** after fixtures are out: before the cut-off (48 hours
   before the night by default) neither team in that game pays; after it
   the withdrawing team pays both fees ($150) and the opponent pays nothing.
@@ -609,7 +653,9 @@ changed for people:
   before, bye weeks and finals.
 - **Captain requests** (buttons on the schedule; captains and admins only):
   - **Week off** — before that week's fixtures are out; free; the
-    fixtures leave the team out. Not a bye: no turn-up points, no finals round.
+    fixtures leave the team out. Not a bye: no turn-up points. (Since
+    0.18.1 finals count games played, so neither a week off nor a bye
+    counts towards them.)
   - **Two games** — before fixtures are out; first in line for a spare-slot
     double-header (a wider gap is accepted than for season-long opt-ins;
     never a third meeting).
@@ -633,11 +679,15 @@ changed for people:
 - **Season Points: +10 for turning up is once per night** (double-headers
   don't double it); a week the fixtures leave a team out (odd numbers)
   still earns it. Wins, close games and upsets still count per game.
-- **Finals eligibility (Ranked):** a team needs 5 regular-season
-  **rounds** (nights, not games — double-headers don't fast-track),
-  counting weeks the fixtures left it out but not forfeits. Ladder
-  column: ✓, "2 to go", or blank once it can't get there. Setting:
-  option `rsl_finals_min_rounds` (filter of the same name).
+- **Finals eligibility (Ranked), replaced in 0.18.1:** this rule counted 5
+  regular-season **rounds** (nights, not games: a double-header night was
+  one), including weeks the fixtures left a team out and nights it won by
+  forfeit, but not a night it only forfeited. Since 0.18.1 finals count
+  regular-season **games played** instead (a double-header is two; a bye
+  or a forfeit, won or lost, is none), set by the option
+  `rsl_finals_min_games`; the option `rsl_finals_min_rounds` named here is
+  no longer read. See 0.18.1. Ladder column: ✓, "2 to go", or blank once
+  a team can't get there.
 - The Ranked ladder no longer has a Level column (rating and tier tell
   that story); Unranked keeps **Level**; every team page shows it.
 
