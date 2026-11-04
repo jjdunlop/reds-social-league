@@ -46,10 +46,17 @@ finals (see `CLAUDE.md`).
   in the option `rsl_ladder_starts` (season => start, night, teams;
   autoload off) and never recomputed, so a level edited later, or a team
   joining late, moves nothing. A season already running when 0.18.1
-  arrives freezes it on the first read. Unpublishing every Ranked night of
-  the season forgets it (`forget_start()`), so the next publish freezes it
-  afresh; with no Ranked night published the ladder uses the current mean
-  seed without storing it (nothing public shows then). Fitted ratings
+  arrives freezes it on the first read. Only `publish_night()` forgets it
+  (`forget_start()`): when unpublishing leaves the season no published
+  Ranked night (`RSL_Fixtures::published_ranked_games()` is 0, never a
+  failed count), so the next publish freezes it afresh. A read never
+  forgets a stored start or freezes it again, even one that sees no
+  published Ranked night (as a failed games read would), and no start is
+  frozen from an empty list of Ranked teams (as a failed teams read would
+  give); so a level edited after night one can't reach the ladder through
+  either. With nothing stored and no Ranked night published the ladder uses
+  the current mean seed without storing it (nothing public shows then).
+  Fitted ratings
   always average their starting values, so the league's average rating sits
   at the start and the tier thresholds keep their meaning (Silver 1350,
   Gold 1500, Platinum 1650, Diamond 1800).
@@ -61,7 +68,11 @@ finals (see `CLAUDE.md`).
   strong team needed most of the season to pull clear of a weak one. 300
   made the ratings overconfident and 400 made early moves bigger for
   little gain; 350 keeps the uncertainty honest (typical error / claimed
-  sd 1.02, against 1.52 at 200).
+  sd 1.02, against 1.52 at 200). Most of the gain in the table below is the
+  prior's: in the simulation study, prior 350 on the draw before 0.18.1 (no
+  link term) gave 0.734 after round 4 and 0.891 after round 9, against
+  0.612 and 0.835 at 200; the link term adds about 0.03 at round 4 and
+  little by round 9.
 
 - **Placements: 3 games, and the ladder's sd line is 120.** A team is in
   placements while it has fewer than 3 games or its ladder sd is over
@@ -72,15 +83,22 @@ finals (see `CLAUDE.md`).
 
 - **The draw links groups that haven't met.** The ladder only has results
   to go on, so it can't compare teams that no chain of games connects (say
-  the top five have only played each other). From round 3, while the
-  published, played Ranked games split the teams that have played into
-  groups with no chain between them, a game between two groups costs 2.25
-  less (the cost of a 75/25 game) for each night in a row they've been
-  split: 2.25, 4.5, 6.75 and so on (`RSL_Pairing::link()` / `groups()`,
-  weights `link` 2.25 and `link_from` 3, filterable like the rest).
+  the top five have only played each other). From the division's third
+  night, while the published, played Ranked games split the teams that
+  have played into groups with no chain between them, a game between two
+  groups costs 2.25 less (the cost of a 75/25 game) for each of its nights
+  in a row they've been split: 2.25, 4.5, 6.75 and so on
+  (`RSL_Pairing::link()` / `groups()`, weights `link` 2.25 and `link_from`
+  3, filterable like the rest). The nights are the division's own: a
+  round with none of those games (no Ranked courts, called off, results
+  not in yet, a division that started late) doesn't count, so it neither
+  brings the term on after one night of results nor raises the bonus.
   Forfeits don't link, a team with no game yet is left out, and Unranked
-  never gets the term. One group changes nothing. Court trimming and the
-  double-header checks judge games without it. `pair_cost()` and
+  never gets the term. One group changes nothing. When a night has more
+  games than courts, the games that sit out are the dearest by the draw's
+  own cost, the link bonus included (`RSL_Pairing::trim()`), so a game
+  that links groups is the last to go; the double-header checks judge
+  games without it. `pair_cost()` and
   `pair_division()` take the link as a last argument; `pair_cost()` returns
   it as `link`. The admin Fixtures screen shows it in the *Why* column
   ("Links two groups that haven't met yet: -2.25") and explains it under
@@ -123,16 +141,25 @@ finals (see `CLAUDE.md`).
 - **How the ladder works** says every team starts the season on the same
   rating and only results move it from its first game, that the first 3
   games are placements whose rating shows once they're done, and that from
-  round 3 the draw may take a slightly less even game to connect teams that
-  have only played each other. The admin team page and Fixtures help say
-  the level never moves a team on the ladder.
+  round 3 the draw connects teams that have only played each other with the
+  rest, even with a game where the favourite would win about 3 sets in 4,
+  and accepts a wider gap each week they stay apart. The admin team page
+  and Fixtures help say the level never moves a team on the ladder.
+
+- **The Stats cache knows the ladder model.** `RSL_Stats`' cache key adds
+  `RSL_Ratings::ladder_model()` (the ladder's prior, provisional line,
+  placement games and fit settings), so a build that changes the ladder
+  under the same version never serves stats worked out with the old one.
 
 - **Tests:** editing levels after night one leaves every ladder rating
   identical, teams under 5 games included, and nothing public moves; late
   joiners don't move the start; unpublishing every Ranked night forgets it
-  and publishing re-freezes it; `fit()`'s new options and the 120 line;
-  the link term (pure cases, a real season's groups, forfeits, Unranked,
-  the admin *Why* column).
+  and publishing re-freezes it, while unpublishing one of several keeps it;
+  a read that sees no published night keeps it, and an empty teams read
+  freezes nothing; `fit()`'s new options and the 120 line; the link term
+  (pure cases, a late start, rounds without results, a real season's
+  groups, forfeits, Unranked, the admin *Why* column); a linking game
+  survives the court trim; the public draw sentence; the Stats cache key.
 
 - **A finished set counts as a whole set for the set bonus.** Before, a set
   needed 40 points in all to count whole, so the most decisive wins counted
