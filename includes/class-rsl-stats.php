@@ -5,15 +5,15 @@
  * Two kinds of progress, kept apart on purpose:
  *  - The RATING stays honest (it orders the Ranked ladder and makes the
  *    fixtures). It can go down.
- *  - What a team EARNS is designed to feel fair and mostly go up:
+ *  - What a team EARNS:
  *    - Tier badge (Ranked): Bronze → Silver → Gold → Platinum → Diamond.
- *      Promotion is instant when the rating crosses into a tier. Demotion
- *      only after DEMOTE_ROUNDS rounds in a row more than DEMOTE_BUFFER
- *      below the tier's floor (the first such round shows "at risk"), and
- *      a team that has reached PROTECTED_TIER never drops below it that
- *      season. While provisional, a team is "In placements" — no tier and
- *      no rating change shown (which also keeps the hidden starting
- *      estimate hidden).
+ *      Tiers follow the rating with a small buffer so a single result
+ *      doesn't flip a team between tiers: up as soon as the rating crosses
+ *      into a tier; down one tier after DEMOTE_ROUNDS rounds in a row more
+ *      than DEMOTE_BUFFER below the tier's floor (the first such round
+ *      shows "at risk"). While provisional, a team is "In placements" — no
+ *      tier and no rating change shown (which also keeps the hidden
+ *      starting estimate hidden).
  *    - Season Points (both divisions): points for turning up, winning,
  *      close games, upsets and achievements. Only ever go up; every
  *      LEVEL_POINTS is a new level.
@@ -43,7 +43,6 @@ class RSL_Stats {
     );
     const DEMOTE_BUFFER = 50;       // rating points below a tier's floor before a round counts against it
     const DEMOTE_ROUNDS = 2;        // rounds in a row below that before dropping a tier
-    const PROTECTED_TIER = 'silver'; // once reached, never lost that season
     const UPSET_CHANCE = 0.35;
     const CLOSE_POINTS = 6;         // a game within this many points overall is a close one
     // 'played' is once per night (a double-header doesn't double it; a bye
@@ -323,7 +322,7 @@ class RSL_Stats {
             }
             unset($row);
 
-            // Earned tiers: instant promotion, slow and protected demotion.
+            // Earned tiers: the rating's tier, with the demotion buffer.
             foreach ($positions as $t => $pos) {
                 if (!isset($teams[$t])) {
                     continue;
@@ -336,7 +335,7 @@ class RSL_Stats {
                     if ($row['first_rating'] === null) {
                         $row['first_rating'] = $rating;
                     }
-                    $step = self::step_tier($row['earned'], $row['below'], $row['peak'], $rating);
+                    $step = self::step_tier($row['earned'], $row['below'], $rating);
                     if ($step['promoted']) {
                         self::earn($row, 'promoted', 'Promoted', 'Moved up a tier', $date);
                     }
@@ -420,10 +419,11 @@ class RSL_Stats {
     /**
      * One round of the earned-tier rules (pure). $earned: the tier held
      * (null before the first settled round); $below: rounds in a row it has
-     * been well below that tier; $peak: best tier this season.
-     * Returns array(earned, below, promoted).
+     * been more than DEMOTE_BUFFER below that tier's floor. Up as soon as
+     * the rating is in a higher tier; down one tier after DEMOTE_ROUNDS
+     * such rounds in a row. Returns array(earned, below, promoted).
      */
-    public static function step_tier($earned, $below, $peak, $rating) {
+    public static function step_tier($earned, $below, $rating) {
         $raw = self::tier($rating);
         if ($earned === null || $earned['rank'] < 0) {
             return array('earned' => $raw, 'below' => 0, 'promoted' => false);
@@ -431,18 +431,15 @@ class RSL_Stats {
         if ($raw['rank'] > $earned['rank']) {
             return array('earned' => $raw, 'below' => 0, 'promoted' => true);
         }
-        $protected = self::tier_by_key(self::PROTECTED_TIER);
-        $best = $peak && $peak['rank'] > $earned['rank'] ? $peak : $earned;
-        $floor = $best['rank'] >= $protected['rank'] ? $protected['rank'] : 0;
-        // Holding the tier: not far below it, or it's as low as this team can go.
-        if ($rating >= $earned['floor'] - self::DEMOTE_BUFFER || $earned['rank'] <= $floor) {
+        // Holding the tier: not far below it, or it's the bottom tier.
+        if ($rating >= $earned['floor'] - self::DEMOTE_BUFFER || $earned['rank'] === 0) {
             return array('earned' => $earned, 'below' => 0, 'promoted' => false);
         }
         $below++;
         if ($below < self::DEMOTE_ROUNDS) {
             return array('earned' => $earned, 'below' => $below, 'promoted' => false);
         }
-        return array('earned' => self::tier_by_rank(max($floor, $earned['rank'] - 1, $raw['rank'])), 'below' => 0, 'promoted' => false);
+        return array('earned' => self::tier_by_rank(max($earned['rank'] - 1, $raw['rank'])), 'below' => 0, 'promoted' => false);
     }
 
     /**

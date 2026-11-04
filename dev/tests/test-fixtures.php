@@ -322,24 +322,33 @@ $_GET = array();
 $html = $pages->render_ladder();
 $check('ladder shows tiers, form, levels and season leaders', strpos($html, '<th>Tier</th>') !== false && strpos($html, 'rsl-form-w') !== false
     && strpos($html, 'rsl-level') !== false && strpos($html, 'Giant killers') !== false);
+$check('How the ladder works gives the reason for the tier buffer, and nothing about a protected tier (0.18.1)',
+    strpos($html, esc_html(RSL_Public_Fixtures::tier_rule_words())) !== false
+    && strpos(RSL_Public_Fixtures::tier_rule_words(), 'so a single result doesn\'t flip a team between tiers') !== false
+    && strpos(RSL_Public_Fixtures::tier_rule_words(), 'two rounds in a row more than 50 points below where its tier starts') !== false
+    && strpos($html, 'Up straight away') === false && stripos($html, 'keep at least') === false);
 
 // Earned tiers: honest rating underneath, fair badge on top.
 $tk = function ($k) { return RSL_Stats::tier_by_key($k); };
-$s1 = RSL_Stats::step_tier($tk('silver'), 0, $tk('silver'), 1510);
+$s1 = RSL_Stats::step_tier($tk('silver'), 0, 1510);
 $check('promotion is instant', $s1['earned']['key'] === 'gold' && $s1['promoted']);
-$s1 = RSL_Stats::step_tier($tk('gold'), 0, $tk('gold'), 1470);
+$s1 = RSL_Stats::step_tier($tk('gold'), 0, 1470);
 $check('a little below the floor holds the tier', $s1['earned']['key'] === 'gold' && $s1['below'] === 0);
-$s1 = RSL_Stats::step_tier($tk('gold'), 0, $tk('gold'), 1400);
+$s1 = RSL_Stats::step_tier($tk('gold'), 0, 1400);
 $check('well below once: still the tier, but at risk', $s1['earned']['key'] === 'gold' && $s1['below'] === 1);
-$s2 = RSL_Stats::step_tier($s1['earned'], $s1['below'], $tk('gold'), 1400);
+$s2 = RSL_Stats::step_tier($s1['earned'], $s1['below'], 1400);
 $check('well below twice in a row: down one tier', $s2['earned']['key'] === 'silver' && $s2['below'] === 0);
-$s2 = RSL_Stats::step_tier($tk('gold'), 1, $tk('gold'), 1490);
+$s2 = RSL_Stats::step_tier($tk('gold'), 1, 1490);
 $check('bouncing back clears the risk', $s2['earned']['key'] === 'gold' && $s2['below'] === 0);
-$s1 = RSL_Stats::step_tier($tk('platinum'), 1, $tk('platinum'), 1100);
+$s1 = RSL_Stats::step_tier($tk('platinum'), 1, 1100);
 $check('a collapse still drops only one tier at a time', $s1['earned']['key'] === 'gold');
-$s1 = RSL_Stats::step_tier($tk('silver'), 1, $tk('silver'), 1100);
-$check('Silver, once reached, is kept all season (and never shows at risk)', $s1['earned']['key'] === 'silver' && $s1['below'] === 0);
-$s1 = RSL_Stats::step_tier(null, 0, null, 1700);
+$s1 = RSL_Stats::step_tier($tk('silver'), 0, 1100);
+$check('Silver is not protected (0.18.1): well below once shows at risk there too', $s1['earned']['key'] === 'silver' && $s1['below'] === 1);
+$s2 = RSL_Stats::step_tier($s1['earned'], $s1['below'], 1100);
+$check('Silver well below twice in a row: down to Bronze', $s2['earned']['key'] === 'bronze' && $s2['below'] === 0 && !$s2['promoted']);
+$s1 = RSL_Stats::step_tier($tk('bronze'), 1, 900);
+$check('Bronze is the bottom tier: never at risk', $s1['earned']['key'] === 'bronze' && $s1['below'] === 0);
+$s1 = RSL_Stats::step_tier(null, 0, 1700);
 $check('placements end in the tier the rating has earned', $s1['earned']['key'] === 'platinum' && !$s1['promoted']);
 
 // Season Points: only ever up.

@@ -6,6 +6,22 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## No protected tier (0.18.1)
+
+- **Silver is no longer kept for the season.** A team that has reached
+  Silver drops to Bronze like any other tier: tiers follow the rating, with
+  the same buffer as before — up as soon as the rating crosses into a tier,
+  down one tier after 2 rounds in a row more than 50 points below the
+  tier's floor (the first such round shows "At risk"). `RSL_Stats::step_tier()`
+  no longer takes the season's peak tier; the team page still shows the peak.
+- **How the ladder works** gives the reason for the buffer instead of
+  "Up straight away; down only after two weeks well below": "They follow the
+  rating with a small buffer so a single result doesn't flip a team between
+  tiers: a team moves up as soon as its rating crosses into a tier, and down
+  one tier after two rounds in a row more than 50 points below where its
+  tier starts." (`RSL_Public_Fixtures::tier_rule_words()`, from the
+  constants).
+
 ## A season preview while the ladder is empty, and three small fixes (0.18.0)
 
 - **Season preview.** Until a season's first fixtures are published, the
@@ -466,9 +482,9 @@ fair, the way ranked modes in games work:
 
 - **Earned tiers (middle ground):** promotion is instant; demotion only
   after **2 rounds in a row more than 50 points below** the tier's floor
-  (the first such round shows "At risk"), and one tier at a time; a team
-  that reaches **Silver keeps at least Silver** all season (and never
-  shows at risk there). Team pages show a progress bar to the next tier.
+  (the first such round shows "At risk"), and one tier at a time. (Until
+  0.18.1 a team that reached Silver kept at least Silver all season; that
+  protection is gone.) Team pages show a progress bar to the next tier.
   Rules in `RSL_Stats::step_tier()`; numbers are constants.
 - **Season Points and levels (both divisions — Unranked teams get
   progression too):** +10 per game played, +5 win, +3 draw, +3 close game

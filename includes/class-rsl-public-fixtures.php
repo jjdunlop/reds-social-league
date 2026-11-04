@@ -352,6 +352,15 @@ class RSL_Public_Fixtures {
             . esc_html($tier['label']) . '</span>';
     }
 
+    /** The tier rule in a sentence (How the ladder works), from RSL_Stats::DEMOTE_ROUNDS and DEMOTE_BUFFER. Plain text. */
+    public static function tier_rule_words() {
+        $n = intval(RSL_Stats::DEMOTE_ROUNDS);
+        $when = $n === 1 ? 'a round' : strtolower(RSL_Public::count_word($n)) . ' rounds in a row';
+        return 'They follow the rating with a small buffer so a single result doesn\'t flip a team between tiers: '
+            . 'a team moves up as soon as its rating crosses into a tier, and down one tier after ' . $when
+            . ' more than ' . intval(RSL_Stats::DEMOTE_BUFFER) . ' points below where its tier starts.';
+    }
+
     /** ✓ when a team has played enough rounds for finals; "2 to go" while it still can; blank once it can't. */
     private static function finals_mark($f) {
         if (!$f) {
@@ -440,7 +449,7 @@ class RSL_Public_Fixtures {
                 <summary>How the ladder works</summary>
                 <ul>
                     <li><strong>Ranked</strong> is ordered by rating, from the points in every set plus a bonus for winning sets — beating a strong team counts for more.</li>
-                    <li><strong>Tiers:</strong> <?php echo esc_html(implode(' · ', array_map(function ($t) { return $t[1] . ($t[2] > 0 ? ' ' . $t[2] . '+' : ''); }, array_reverse(RSL_Stats::TIERS)))); ?>. Up straight away; down only after two weeks well below.</li>
+                    <li><strong>Tiers:</strong> <?php echo esc_html(implode(' · ', array_map(function ($t) { return $t[1] . ($t[2] > 0 ? ' ' . $t[2] . '+' : ''); }, array_reverse(RSL_Stats::TIERS)))); ?>. <?php echo esc_html(self::tier_rule_words()); ?></li>
                     <li><strong>In placements:</strong> a team's first <?php echo intval(RSL_Ratings::PLACEMENT_GAMES); ?> games.</li>
                     <li><strong>Finals:</strong> <?php echo intval(RSL_Stats::finals_min_rounds()); ?> regular-season rounds played.</li>
                     <li><strong>Level:</strong> Season Points — <?php echo esc_html('+' . $pts['played'] . ' a night, +' . $pts['win'] . ' a win, +' . $pts['close'] . ' a close game, +' . $pts['upset'] . ' an upset, +' . $pts['achievement'] . ' an achievement'); ?>.</li>
