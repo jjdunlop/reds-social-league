@@ -64,7 +64,8 @@ finals (see `CLAUDE.md`).
   team leaving move it. An admin change can also put an ordinary
   application on the waiting list: a team added or approved ahead of it,
   an older application moved into its division, or new teams an admin
-  put in placement's draft by hand. Each says so (below).
+  put in placement's draft by hand, or a placement draft made before one
+  of those changes. Each says so (below).
 - **Where it applies.** Placement (no new team in a place an application
   is in line for, below), Start a team (at registration and on the
   league page's application card), applying, the captain's application
@@ -146,7 +147,9 @@ finals (see `CLAUDE.md`).
   says what that takes:
   "Confirming fills places that 2 Ranked applications waiting for
   approval are next in line for, so they go on the waiting list." (It
-  shows too when an application has come in since the proposal.) The
+  shows too when the division has changed since the proposal, for
+  example an application came in or a team was added; re-running the
+  proposal plans round it.) The
   confirm notice then says "2 applications in Ranked, 2027 Pre-season are
   now on the waiting list."
 - **Before 0.19.0** only placement looked at courts, as 2 × the game slots

@@ -2594,8 +2594,10 @@ class RSL_Placement {
 
         // The places in each division (RSL_Capacity, 0.19.0): going over is allowed, with the nights it costs,
         // and the admin hears when the new teams take places that applications waiting for approval are in line for.
-        // propose() keeps those places free (club decision, 5 Nov 2026), so that warning comes only when an admin's
-        // moves go past the room it planned, or an application has come in since the proposal.
+        // propose() keeps those places free (club decision, 5 Nov 2026), so its own plan never brings that warning on.
+        // It shows when an admin's moves go past the room it planned, or when the division has changed since the
+        // proposal (state() reads the places afresh): an application came in, a team was added, approved or moved
+        // into the division, or the places went down. Re-running the proposal plans within the new room.
         foreach (array_keys($divs) as $div) {
             $cap = isset($s['capacity'][$div]) ? $s['capacity'][$div] : null;
             if ($cap === null) {
