@@ -9,8 +9,10 @@
  * sit_out_numbers() / sit_out_words() / over_words() / over_line() /
  * limit_words(), the
  * waiting-list queue (ties on applied_at go by id), bumped() /
- * would_bump() / bumped_words(), places_line(), full_words() (a division with
- * no game slots too), waiting_words() (with and without the season).
+ * would_bump() / bumped_words(), held() / held_line() (the places ordinary
+ * applications hold; the waiting list holds none), places_line(),
+ * full_words() (a division with no game slots too), waiting_words() (with
+ * and without the season).
  *
  * Database: a far-future season whose nights have exactly the slots the test
  * sets (two throwaway venues, one court each; every other court off on those
@@ -27,10 +29,16 @@
  * division with no slot (its words); what RSL_Teams::apply() returns and a
  * second submit; a later season named once in the flashes; the success
  * notice after approving over the cap; the Teams screen's counts scoped to
- * this test's rows. Then a fourth season for placement: an older application
- * moved into a division bumping a newer one, the warning that new teams take
- * places applications are in line for, Add a team bumping one, and a
- * placement confirm over the places (the notice's numbers and the bump).
+ * this test's rows; placement holding a place for an application (the
+ * override) and none in a season with no nights. Then a fourth season for
+ * placement: an older application moved into a division bumping a newer one;
+ * placement keeping the place left in each division for its application (no
+ * new team, the free agents' capacity reason, the placement screen's line;
+ * with 3 places set by hand, one new team; an application on the waiting
+ * list holding nothing); an admin's new teams past that room and the warning
+ * that they take places applications are in line for; Add a team bumping
+ * one (then nothing held in Ranked); and a placement confirm over the places
+ * (the notice's numbers and the bump).
  *
  *   wp eval-file dev/tests/test-capacity.php
  *   php dev/tests/test-capacity.php        (standalone: the pure part only)
@@ -195,6 +203,22 @@ $check('...approving an ordinary application bumps nobody', RSL_Capacity::bumped
 $check('...nor does a change with nobody ordinary before', RSL_Capacity::bumped($at(30, $apps), $at(31, $apps)) === array());
 $check('would_bump(): 2 ordinary applications, 30 places, 30 teams after: 2; 29 after: 1; not checked: 0', RSL_Capacity::would_bump($at(28, $apps), 30) === 2
     && RSL_Capacity::would_bump($at(28, $apps), 29) === 1 && RSL_Capacity::would_bump(array_merge($at(28, $apps), array('places' => null)), 30) === 0);
+// Placement keeps the places ordinary applications are in line for (club decision, 5 Nov 2026).
+$check('held(): the ordinary applications hold a place each and the waiting list none (28 of 30: 2; 29: 1; 30: 0); not checked: 0', RSL_Capacity::held($at(28, $apps)) === 2
+    && RSL_Capacity::held($at(29, $apps)) === 1 && RSL_Capacity::held($at(30, $apps)) === 0 && RSL_Capacity::held($at(28, array())) === 0
+    && RSL_Capacity::held(array_merge($at(28, $apps), array('places' => null))) === 0);
+$hl = function ($active, $n) use ($apps) {
+    $q = RSL_Capacity::queue(30, $active, array_slice($apps, 0, $n));
+    return array('label' => 'Ranked', 'season' => '2027-pre', 'places' => 30, 'active' => $active, 'left' => max(0, 30 - $active), 'order' => $q['order'], 'waiting' => $q['waiting']);
+};
+$check('held_line(): 2 of 3 places left held', RSL_Capacity::held_line($hl(27, 2)) === 'Ranked, 2027 Pre-season: 2 of the 3 places left are held for applications waiting for approval, so placement can make 1 new Ranked team.', RSL_Capacity::held_line($hl(27, 2)));
+$check('held_line(): 1 of 3', RSL_Capacity::held_line($hl(27, 1)) === 'Ranked, 2027 Pre-season: 1 of the 3 places left is held for an application waiting for approval, so placement can make 2 new Ranked teams.', RSL_Capacity::held_line($hl(27, 1)));
+$check('held_line(): every place left held (1, 2, 3), the applications beyond them on the waiting list holding nothing',
+    RSL_Capacity::held_line($hl(29, 4)) === 'Ranked, 2027 Pre-season: the 1 place left is held for an application waiting for approval, so placement can\'t make a new Ranked team.'
+    && RSL_Capacity::held_line($hl(28, 4)) === 'Ranked, 2027 Pre-season: both places left are held for applications waiting for approval, so placement can\'t make a new Ranked team.'
+    && RSL_Capacity::held_line($hl(27, 4)) === 'Ranked, 2027 Pre-season: all 3 places left are held for applications waiting for approval, so placement can\'t make a new Ranked team.', RSL_Capacity::held_line($hl(28, 4)));
+$check('held_line(): nothing held, nothing said (no applications; every one on the waiting list; not checked)', RSL_Capacity::held_line($hl(27, 0)) === '' && RSL_Capacity::held_line($hl(30, 4)) === ''
+    && RSL_Capacity::held_line(array_merge($hl(27, 2), array('places' => null, 'left' => null, 'waiting' => array()))) === '');
 $check('bumped_words(): one, several, other', RSL_Capacity::bumped_words($at(28, $apps), 1) === '1 application in Ranked, 2027 Pre-season is now on the waiting list.'
     && RSL_Capacity::bumped_words($at(28, $apps), 2) === '2 applications in Ranked, 2027 Pre-season are now on the waiting list.'
     && RSL_Capacity::bumped_words($at(28, $apps), 1, true) === '1 other application in Ranked, 2027 Pre-season is now on the waiting list.');
@@ -520,6 +544,9 @@ $html = $admin_page();
 $check('...the admin line keeps today\'s words', strpos($html, esc_html('Ranked, 2097 Mid-season 1: 0 teams, 1 application waiting. This season has no game nights yet, so court space isn\'t checked.')) !== false);
 $warn = RSL_Placement::blockers($B)['warnings'];
 $check('...and placement says court space isn\'t checked', in_array('This season has no game nights yet, so court space isn\'t checked.', $warn, true), implode(' | ', $warn));
+$ctxb = RSL_Placement::context($B);
+$check('...nor holds a place for the application there, and the placement screen has no held line', $ctxb[2]['held'] === array('unranked' => 0, 'ranked' => 0)
+    && RSL_Placement::draft($B)['held'] === array(), json_encode($ctxb[2]['held']));
 // A season other than the sign-up season names itself once: the aside, not the waiting-list words again.
 // Most teams per division at 1 for a moment gives B one Ranked place, which C6's application has.
 $set_rules(array('capacity_override' => array('ranked' => 1, 'unranked' => 0)));
@@ -552,6 +579,7 @@ $ctx = RSL_Placement::context($A);
 $check('the override wins (Ranked 7, set by hand), and placement reads it', $capa['divisions']['ranked']['places'] === 7 && $capa['divisions']['ranked']['set_by_hand']
     && $capa['divisions']['unranked']['places'] === 2 && $ctx[2]['capacity']['ranked'] === 7 && $ctx[2]['allowance']['ranked'] === null && $ctx[2]['allowance']['unranked'] === 0);
 $check('...and with 5 teams and 1 application for 7 places, Ranked isn\'t full', !$capa['divisions']['ranked']['full'] && $capa['divisions']['ranked']['waiting'] === array());
+$check('...and placement holds one of the 2 places left for that application (0.19.0, first come, first served)', $ctx[2]['held'] === array('unranked' => 0, 'ranked' => 1), json_encode($ctx[2]['held']));
 $set_rules(array('capacity_override' => array('ranked' => 0, 'unranked' => 0)));
 wp_set_current_user($admin);
 $fa_post = function ($fields) use ($A, $admin) {
@@ -601,9 +629,10 @@ $check('the Settings tab has both rows under Places in each division, and no Oth
     && strpos($tab_html, 'name="sit_out_nights"') !== false && strpos($tab_html, 'name="capacity_override[ranked]"') !== false && strpos($tab_html, '<h3>Other</h3>') === false
     && strpos($tab_html, 'Start a team') !== false);
 
-// --- Placement confirm, and changes that take a place an application was in line for -------------------------------------
+// --- Placement keeps the places applications are in line for; changes that take one; confirm over the places ----------------
 // D: one slot a night in each division (this test's two courts; every other court off on its nights), allowance 0, so
-// 2 places each. Teams of 4 to 6 here, so a handful of free agents makes a new team.
+// 2 places each. Teams of 4 to 6 here, so a handful of free agents makes a new team. The team in each division is
+// full (6), so nobody tops it up and every free agent left over gets a reason.
 $r = $set_rules(array('min_roster' => 4, 'target_roster' => 4, 'new_team_target' => 4, 'max_roster' => 6));
 $check('placement setup: teams of 4 to 6', !is_wp_error($r) && RSL_Free_Agents::settings()['min_roster'] === 4, is_wp_error($r) ? $r->get_error_message() : '');
 RSL_Courts::save_settings($D, array('start' => $day(150), 'end' => $day(170), 'weekday' => 0, 'minutes' => $minutes));
@@ -623,12 +652,17 @@ foreach (array(1, 2, 3, 4) as $i) {
     RSL_Teams::add_member($tu->id, $c[$i], $i === 1 ? 'captain' : 'player');
     RSL_Teams::add_member($tr->id, $c[$i + 4], $i === 1 ? 'captain' : 'player');
 }
+foreach (array(1, 2) as $i) {
+    RSL_Teams::add_member($tu->id, $mk("du$i"));
+    RSL_Teams::add_member($tr->id, $mk("dr$i"));
+}
 $q = $mk('q');
 RSL_Players::register($q, array('level' => 'social', 'years' => '1to3'));
 $appq = RSL_Teams::apply($D, $q, array('name' => "Q Team $suffix", 'division' => 'ranked', 'level' => 'social'));
 $appp = RSL_Teams::apply($D, $p, array('name' => "P Team $suffix", 'division' => 'unranked', 'level' => 'social'));
 $capd = RSL_Capacity::season($D);
-$check('placement setup: 2 places a division, one team each with 4 players, an ordinary application each', is_object($appq) && is_object($appp)
+$check('placement setup: 2 places a division, one full team each (6 players), an ordinary application each', is_object($appq) && is_object($appp)
+    && count(RSL_Teams::members($tu->id)) === 6 && count(RSL_Teams::members($tr->id)) === 6
     && $capd['divisions']['ranked']['places'] === 2 && $capd['divisions']['unranked']['places'] === 2
     && $capd['divisions']['ranked']['active'] === 1 && $capd['divisions']['unranked']['active'] === 1
     && !$capd['divisions']['ranked']['waiting'] && !$capd['divisions']['unranked']['waiting'], json_encode(array($capd['divisions']['ranked'], $capd['divisions']['unranked'])));
@@ -648,23 +682,80 @@ foreach (array('unranked', 'ranked') as $d) {
         $fa[] = $u;
     }
 }
+// Placement keeps free the place each application is in line for (club decision, 5 Nov 2026: first come, first
+// served). Before it, placement made one new team in each division here, in that place, and only warned that
+// confirming put the application on the waiting list; these checks replace that expectation.
+$ctx = RSL_Placement::context($D);
+$check('placement\'s settings hold the place left in each division for its application', $ctx[2]['capacity'] === array('unranked' => 2, 'ranked' => 2)
+    && $ctx[2]['held'] === array('unranked' => 1, 'ranked' => 1), json_encode(array($ctx[2]['capacity'], $ctx[2]['held'])));
 $sum = RSL_Placement::suggest($D);
-$drafts = RSL_Free_Agents::building($D)['new_teams'];
-$check('placement proposes one new team in each division (1 place left in each)', !is_wp_error($sum) && isset($drafts['U1'], $drafts['R1']) && !isset($drafts['U2']) && !isset($drafts['R2']),
-    is_wp_error($sum) ? $sum->get_error_message() : json_encode(array_keys((array) $drafts)));
+$drafts = (array) RSL_Free_Agents::building($D)['new_teams'];
+$check('with the one place left in each division held, placement makes no new team', !is_wp_error($sum) && !$drafts,
+    is_wp_error($sum) ? $sum->get_error_message() : json_encode(array_keys($drafts)));
+$reason_u = '4 Unranked players left — no place for another Unranked team without teams sitting out; Unranked teams full';
+$reason_r = '4 Ranked players left — no place for another Ranked team without teams sitting out; Ranked teams full';
+$got = array();
+foreach ($fa as $u) {
+    $fr = RSL_Free_Agents::get($u, $D);
+    $got[] = $fr->proposed_dest . ' ' . $fr->proposed_reason;
+}
+$check('...every free agent is left out with the capacity reason, which players see, so it never mentions the applications',
+    $got === array_merge(array_fill(0, 4, 'none ' . $reason_u), array_fill(0, 4, 'none ' . $reason_r))
+    && RSL_Free_Agents::unplaced_words($reason_u) === $reason_u && stripos($reason_u . $reason_r, 'application') === false, json_encode($got));
+$warn = RSL_Placement::blockers($D)['warnings'];
+$check('...and nothing to warn about the places: no division over them, no place an application is in line for taken', !preg_grep('/^Confirming fills/', $warn)
+    && !preg_grep('/would have \d+ teams for/', $warn), implode(' | ', $warn));
+$held_r = 'Ranked, 2097 Post-season: the 1 place left is held for an application waiting for approval, so placement can\'t make a new Ranked team.';
+$held_u = 'Unranked, 2097 Post-season: the 1 place left is held for an application waiting for approval, so placement can\'t make a new Unranked team.';
+$ptab = new ReflectionMethod('RSL_Admin_Free_Agents', 'placement_tab');
+$ptab->setAccessible(true);
+wp_set_current_user($admin);
+$ptab_html = $ptab->invoke(null, $D);
+$check('the placement screen says, for each division, that its place left is held (admin only)', RSL_Placement::draft($D)['held'] === array($held_r, $held_u)
+    && strpos($ptab_html, esc_html($held_r)) !== false && strpos($ptab_html, esc_html($held_u)) !== false, json_encode(RSL_Placement::draft($D)['held']));
+// Room for exactly the places nobody holds: 3 Ranked places for a moment (set by hand), so 2 left and 1 held.
+$set_rules(array('capacity_override' => array('ranked' => 3, 'unranked' => 0)));
+RSL_Placement::suggest($D);
+$drafts = (array) RSL_Free_Agents::building($D)['new_teams'];
+$held_r3 = 'Ranked, 2097 Post-season: 1 of the 2 places left is held for an application waiting for approval, so placement can make 1 new Ranked team.';
+$check('3 Ranked places: 2 left, 1 held, so the Ranked free agents make one new team (none in Unranked), and the line says so',
+    array_keys($drafts) === array('R1') && RSL_Free_Agents::get($fa[4], $D)->proposed_dest === 'n:R1' && RSL_Free_Agents::get($fa[0], $D)->proposed_dest === 'none'
+    && RSL_Placement::draft($D)['held'] === array($held_r3, $held_u), json_encode(array(array_keys($drafts), RSL_Placement::draft($D)['held'])));
+$warn = RSL_Placement::blockers($D)['warnings'];
+$check('...with no warning about a place an application is in line for', !preg_grep('/^Confirming fills/', $warn), implode(' | ', $warn));
+$set_rules(array('capacity_override' => array('ranked' => 0, 'unranked' => 0)));
+RSL_Placement::suggest($D);
+$check('back to 2 places: a re-run takes that team away again', !(array) RSL_Free_Agents::building($D)['new_teams'], json_encode(array_keys((array) RSL_Free_Agents::building($D)['new_teams'])));
+// An application on the waiting list holds nothing.
+$rq = $mk('rq');
+RSL_Players::register($rq, array('level' => 'social', 'years' => '1to3'));
+$apprq = RSL_Teams::apply($D, $rq, array('name' => "RQ Team $suffix", 'division' => 'ranked', 'level' => 'social'));
+$ctx = RSL_Placement::context($D);
+$check('a newer Ranked application goes on the waiting list and holds nothing: still 1 held, the same line', is_object($apprq) && $apprq->waiting_list === true
+    && $ctx[2]['held'] === array('unranked' => 1, 'ranked' => 1) && RSL_Placement::draft($D)['held'] === array($held_r, $held_u), json_encode($ctx[2]['held']));
+// An admin can still make new teams by hand past the room placement left; the warning then says what it costs.
+$moved = true;
+foreach ($fa as $i => $u) {
+    $moved = $moved && RSL_Placement::move($D, $u, $i < 4 ? 'n:U1' : 'n:R1', intval(RSL_Free_Agents::building($D)['draft_version'])) === true;
+}
+$check('an admin moves the free agents into a new team in each division by hand', $moved && RSL_Free_Agents::get($fa[3], $D)->proposed_dest === 'n:U1'
+    && RSL_Free_Agents::get($fa[7], $D)->proposed_dest === 'n:R1');
 $warn = RSL_Placement::blockers($D)['warnings'];
 $bump_u = 'Confirming fills a place that 1 Unranked application waiting for approval is next in line for, so it goes on the waiting list.';
 $bump_r = 'Confirming fills a place that 1 Ranked application waiting for approval is next in line for, so it goes on the waiting list.';
-$check('placement warns that the new teams take places applications are in line for (no division over its places)', in_array($bump_u, $warn, true) && in_array($bump_r, $warn, true)
-    && !preg_grep('/would have \d+ teams for/', $warn), implode(' | ', $warn));
+$check('...past the room placement left, so the warning says the new teams take places applications are in line for (no division over its places)',
+    in_array($bump_u, $warn, true) && in_array($bump_r, $warn, true) && !preg_grep('/would have \d+ teams for/', $warn), implode(' | ', $warn));
 // Add a team takes Ranked's last place, so Q's application goes on the waiting list.
 $n = $adm(array('do' => 'create_team', 'season' => $D, 'name' => "DX $suffix", 'division' => 'ranked'));
 $check('Add a team taking the place an application was in line for: the notice says it\'s now on the waiting list', $n['message'] === "Team \"DX $suffix\" created. 1 application in Ranked, 2097 Post-season is now on the waiting list."
     && RSL_Capacity::on_waiting_list(RSL_Teams::get($appq->id)), $n['message']);
 $warn = RSL_Placement::blockers($D)['warnings'];
-$check('...now placement\'s new Ranked team goes over: the numbers and the allowance, and no Ranked bump (nobody ordinary left there)',
+$check('...now the admin\'s new Ranked team goes over: the numbers and the allowance, and no Ranked bump (nobody ordinary left there)',
     (bool) preg_grep('/^Ranked would have 3 teams for 2 places: about 1 night each sat out (this season|in the \d+ nights? left)\. 2 is the most it takes with no team sitting out\.$/', $warn)
     && in_array($bump_u, $warn, true) && !in_array($bump_r, $warn, true), implode(' | ', $warn));
+$ctx = RSL_Placement::context($D);
+$check('...and with no Ranked place left, the two Ranked applications on the waiting list hold nothing: no Ranked line', $ctx[2]['held'] === array('unranked' => 1, 'ranked' => 0)
+    && RSL_Placement::draft($D)['held'] === array($held_u), json_encode(RSL_Placement::draft($D)['held']));
 $ver = intval(RSL_Free_Agents::building($D)['draft_version']);
 $named = RSL_Placement::update_new($D, 'U1', array('name' => "DU New $suffix"), $ver);
 $ver = intval(RSL_Free_Agents::building($D)['draft_version']);

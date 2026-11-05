@@ -6,7 +6,9 @@
  * is one, a team that said no is never used), short teams filled first, an
  * asked-for team preferred, the captain swap, leftover reasons in plain
  * words, the same answer every time (and in any input order), the places,
- * locked units.
+ * the places held for applications waiting for approval (0.19.0: new teams
+ * leave them free, Either players cross when they're all held, an admin's
+ * new team past them is kept), locked units.
  *
  *   wp eval-file dev/tests/test-placement.php
  *   php dev/tests/test-placement.php        (standalone — no WordPress needed)
@@ -25,6 +27,10 @@ if (!defined('ABSPATH')) {
 }
 if (!class_exists('RSL_Placement')) {
     require_once __DIR__ . '/../../includes/class-rsl-placement.php';
+}
+if (!class_exists('RSL_Capacity')) {
+    // The unplaced reason names the allowance through RSL_Capacity::limit_words() (pure).
+    require_once __DIR__ . '/../../includes/class-rsl-capacity.php';
 }
 
 $fails = 0;
@@ -289,6 +295,36 @@ $ei = $singles(10, 4.0, array('divisions' => array('unranked', 'ranked')));
 $res = $run($ei, array(), array('capacity' => array('unranked' => null, 'ranked' => 0)));
 $check('Either players go to Unranked when Ranked is full', count($res['new_teams']) === 1 && isset($res['new_teams']['U1']), json_encode(array_keys($res['new_teams'])));
 
+// --- Places held for applications waiting for approval (0.19.0) -----------------------------------------------
+// The club's decision (5 Nov 2026): first come, first served. Placement makes new teams only in the places
+// left that no application waiting for approval is in line for (settings held, from RSL_Capacity::held()).
+$res = $run($singles(30, 2.0), array(), array('capacity' => array('unranked' => 3, 'ranked' => null), 'held' => array('unranked' => 1, 'ranked' => 0)));
+$check('held places stay free: 3 places, 1 held, 30 players make exactly 2 new teams', count($res['new_teams']) === 2 && $res['summary']['placed'] === 20 && $res['summary']['unplaced'] === 10,
+    json_encode($new_sizes($res)));
+$res = $run($singles(30, 2.0), array($team(1, 'unranked', 8, 2.0)), array('capacity' => array('unranked' => 3, 'ranked' => null), 'held' => array('unranked' => 1, 'ranked' => 0)));
+$check('...a team there takes one of the places not held: 1 new team', count($res['new_teams']) === 1, (string) count($res['new_teams']));
+$all = $singles(8, 2.0);
+$res = $run($all, array($team(1, 'unranked', 10, 2.0)), array('capacity' => array('unranked' => 3, 'ranked' => null), 'held' => array('unranked' => 2, 'ranked' => 0), 'allowance' => array('unranked' => 2, 'ranked' => 2)));
+$check('every place left held: no new team, and the free agents get the capacity reason, which never mentions applications', !$res['new_teams']
+    && $why($res, $all[0]) === '8 Unranked players left — no place for another Unranked team without teams sitting out more than 2 nights a season; Unranked teams full'
+    && in_array('capacity', $res['units'][$all[0]['ref']]['flags'], true) && stripos($why($res, $all[0]), 'application') === false, $why($res, $all[0]));
+$res = $run($all, array($team(1, 'unranked', 10, 2.0)), array('capacity' => array('unranked' => 3, 'ranked' => null), 'held' => array('unranked' => 1, 'ranked' => 0)));
+$check('...with one of the two left held, the other still makes a team', count($res['new_teams']) === 1 && $dest($res, $all[0]) === 'n:U1', json_encode(array_keys($res['new_teams'])));
+$res = $run($singles(16, 2.0), array(), array('held' => array('unranked' => 5, 'ranked' => 5)));
+$check('a division whose places aren\'t checked holds nothing (16 players, 2 new teams)', count($res['new_teams']) === 2, (string) count($res['new_teams']));
+$ei = $singles(10, 4.0, array('divisions' => array('unranked', 'ranked')));
+$res = $run($ei, array($team(1, 'ranked', 10, 4.0)), array('capacity' => array('unranked' => null, 'ranked' => 2), 'held' => array('unranked' => 0, 'ranked' => 1)));
+$check('Either players go to Unranked when the Ranked place left is held', count($res['new_teams']) === 1 && isset($res['new_teams']['U1']), json_encode(array_keys($res['new_teams'])));
+$res = $run($ei, array($team(1, 'ranked', 10, 4.0)), array('capacity' => array('unranked' => null, 'ranked' => 2), 'held' => array('unranked' => 0, 'ranked' => 0)));
+$check('...and stay in Ranked when nobody holds it', count($res['new_teams']) === 1 && isset($res['new_teams']['R1']), json_encode(array_keys($res['new_teams'])));
+$l = $unit(2.0, array('locked' => 'n:U1'));
+$res = $run(array_merge(array($l), $singles(20, 2.0)), array(), array('capacity' => array('unranked' => 2, 'ranked' => null), 'held' => array('unranked' => 2, 'ranked' => 0)));
+$check('an admin\'s new team in a held place is kept and filled (confirming warns), and placement makes no other', isset($res['new_teams']['U1']) && $res['new_teams']['U1']['seeded']
+    && count($res['new_teams']) === 1 && $dest($res, $l) === 'n:U1', json_encode(array_keys($res['new_teams'])));
+$bad = RSL_Placement::violations($all, array($team(1, 'unranked', 10, 2.0)), array_merge($S, array('capacity' => array('unranked' => 3, 'ranked' => null), 'held' => array('unranked' => 2, 'ranked' => 0))),
+    $hand(array('U1' => $all)));
+$check('violations(): a new team in a held place is a broken rule', (bool) preg_grep('/1 new unranked teams but places for 0/', $bad), implode('; ', $bad));
+
 // --- Locked units (an admin's moves) -----------------------------------------------------------------------
 $l = $unit(4.0, array('locked' => 't:2')); $f = $unit(4.0);
 $res = $run(array($l, $f), array($team(1, 'unranked', 6, 4.0, array('spots_open' => 2)), $team(2, 'unranked', 7, 1.0)));
@@ -399,6 +435,10 @@ foreach (array(20, 40, 60, 80, 120) as $n) {
         if ($i % 3 === 0) {
             $s['capacity'] = array('unranked' => mt_rand(2, 8), 'ranked' => mt_rand(2, 8));
         }
+        if ($i === 6) {
+            // Some of those places held for applications waiting for approval (violations() checks new teams leave them).
+            $s['held'] = array('unranked' => mt_rand(0, 3), 'ranked' => mt_rand(0, 3));
+        }
         $res = RSL_Placement::propose($units, $teams, $s);
         foreach (RSL_Placement::violations($units, $teams, $s, $res) as $v) {
             $broken[] = "pool $n/$i: $v";
@@ -473,7 +513,7 @@ foreach (array(20, 40, 60, 80, 120) as $n) {
         $counts['new'] += $sum['new_teams'];
     }
 }
-$check('the rules hold over ' . $counts['runs'] . ' random pools (groups whole, divisions, no\'s, maximum, new teams 7–10, volunteers, places, locks)', !$broken, implode(' | ', array_slice($broken, 0, 8)));
+$check('the rules hold over ' . $counts['runs'] . ' random pools (groups whole, divisions, no\'s, maximum, new teams 7–10, volunteers, places, held places, locks)', !$broken, implode(' | ', array_slice($broken, 0, 8)));
 $check('and most people are placed (' . round(100 * $counts['placed'] / max(1, $counts['players'])) . '%)', $counts['placed'] > 0.6 * $counts['players']);
 
 // --- Capacity of the engine ------------------------------------------------------------------------------------------

@@ -136,6 +136,7 @@ $draft = RSL_Placement::draft($season);
 $new = isset($draft['new'][0]) ? $draft['new'][0] : null;
 $check('draft() groups it for the admin screen', $draft['version'] === $v1 && count($draft['existing']) === 2 && count($draft['new']) === 1 && $new['ref'] === 'U1'
     && count($new['rows']) === 9 && count($draft['none']) === 1 && !$draft['unproposed']);
+$check('...with no held-places line, as a season with no game nights isn\'t checked (0.19.0)', isset($draft['held']) && $draft['held'] === array());
 $check('the new team\'s draft: placeholder name, the volunteer as captain', $new && RSL_Placement::is_placeholder($new['draft']['name']) && intval($new['draft']['captain_user_id']) === $f[5]);
 $check('the placeholder name is a blocker', (bool) array_filter(RSL_Placement::blockers($season)['blockers'], function ($m) { return stripos($m, 'placeholder') !== false; }));
 

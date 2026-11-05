@@ -23,7 +23,10 @@
  *     team or has no places left), everyone's sorted by level and cut into
  *     teams of near-equal size (friend groups kept whole), then each team
  *     gets a volunteer captain (and a setter) swapped in where one can be —
- *     trading whole units when a team is all friend groups.
+ *     trading whole units when a team is all friend groups. New teams take
+ *     only the places left that no application waiting for approval is in
+ *     line for (settings held; club decision, 5 Nov 2026: first come, first
+ *     served).
  *  3. Leftovers top up any team in their division to the maximum (within 2
  *     bands), "either" players can cross divisions, and anyone still left
  *     gets a plain reason.
@@ -81,7 +84,7 @@ class RSL_Placement {
     }
 
     private static function setting_defaults() {
-        return array('min_roster' => 7, 'target_roster' => 8, 'new_team_target' => 8, 'max_roster' => 10, 'capacity' => array(), 'allowance' => array(), 'no_slots' => array(), 'used_refs' => array());
+        return array('min_roster' => 7, 'target_roster' => 8, 'new_team_target' => 8, 'max_roster' => 10, 'capacity' => array(), 'held' => array(), 'allowance' => array(), 'no_slots' => array(), 'used_refs' => array());
     }
 
     /** A draft new team's name until the admin names it: "Unranked New 1". */
@@ -129,7 +132,10 @@ class RSL_Placement {
      *   pref_time, lacks (positions), spots_open.
      * $settings: min_roster, target_roster, new_team_target, max_roster,
      *   gap_fill, gap_short, capacity (division => the division's places,
-     *   RSL_Capacity; null = unknown), allowance (division => the most nights
+     *   RSL_Capacity; null = unknown), held (division => the places left that
+     *   applications waiting for approval are in line for, RSL_Capacity::
+     *   held(): new teams never take them; 0 when not given or not checked),
+     *   allowance (division => the most nights
      *   a team sits out that its places were worked out with, or null: only
      *   for the unplaced reason's words), no_slots (division => true when it
      *   has no game slot on any night: the reason says no court space),
@@ -233,7 +239,8 @@ class RSL_Placement {
             foreach ($T as $t) {
                 $count += $t['division'] === $d && ($t['new'] ? (bool) $t['units'] : true) ? 1 : 0;
             }
-            $full[$d] = $s['capacity'][$d] !== null && $count >= $s['capacity'][$d];
+            $open = self::open_places($s, $d);
+            $full[$d] = $open !== null && $count >= $open;
         }
         $out = array('units' => array(), 'new_teams' => array(), 'teams' => array(), 'summary' => array());
         foreach ($order as $ref) {
@@ -284,6 +291,12 @@ class RSL_Placement {
             $cap[$d] = $v === null || $v === '' ? null : max(0, intval($v));
         }
         $s['capacity'] = $cap;
+        $held = array();
+        foreach (array('unranked', 'ranked') as $d) {
+            $v = is_array($s['held']) && isset($s['held'][$d]) && is_numeric($s['held'][$d]) ? max(0, intval($s['held'][$d])) : 0;
+            $held[$d] = $cap[$d] === null ? 0 : $v;
+        }
+        $s['held'] = $held;
         $allow = array();
         foreach (array('unranked', 'ranked') as $d) {
             $v = is_array($s['allowance']) && isset($s['allowance'][$d]) ? $s['allowance'][$d] : null;
@@ -325,6 +338,15 @@ class RSL_Placement {
 
     private static function by_order($a, $b) {
         return $a['order'] === $b['order'] ? 0 : ($a['order'] < $b['order'] ? -1 : 1);
+    }
+
+    /**
+     * The places a division's teams may fill, new teams included: its places
+     * less those held for applications waiting for approval (club decision,
+     * 5 Nov 2026: first come, first served). null = not checked.
+     */
+    private static function open_places($s, $d) {
+        return $s['capacity'][$d] === null ? null : max(0, $s['capacity'][$d] - $s['held'][$d]);
     }
 
     private static function norm_unit($u, $i) {
@@ -688,15 +710,18 @@ class RSL_Placement {
             $home[$ref] = self::home($U[$ref]);
             $count[$home[$ref]] += $U[$ref]['size'];
         }
-        $room = array(); // new teams each division's places can still take (null = not checked)
+        // New teams each division's places can still take (null = not checked): the places less the
+        // ones applications waiting for approval hold, less the teams there (an admin's new teams too).
+        $room = array();
         foreach (array('unranked', 'ranked') as $d) {
             $room[$d] = null;
-            if ($s['capacity'][$d] !== null) {
+            $open = self::open_places($s, $d);
+            if ($open !== null) {
                 $have = 0;
                 foreach ($T as $t) {
                     $have += $t['division'] === $d ? 1 : 0;
                 }
-                $room[$d] = max(0, $s['capacity'][$d] - $have);
+                $room[$d] = max(0, $open - $have);
             }
         }
         $moved = array();
@@ -1252,7 +1277,8 @@ class RSL_Placement {
             return array($players . ' — no court space for another ' . $label . ' team; ' . $label . ' teams full', array('capacity'));
         }
         if ($full[$home]) {
-            // The division's places are taken (RSL_Capacity, 0.19.0). Players may see this reason.
+            // The division's places are taken, or the ones left are held for applications waiting for approval
+            // (RSL_Capacity, 0.19.0). Players see this reason (unplaced_words()), so it never mentions other teams' applications.
             $allow = $s['allowance'][$home];
             return array($players . ' — no place for another ' . $label . ' team'
                 . ($allow !== null ? ' without teams ' . RSL_Capacity::limit_words($allow) : '')
@@ -1450,7 +1476,8 @@ class RSL_Placement {
      * the maximum, new teams min–max (except ones an admin started), a
      * volunteer captain on every new team when another new team in the
      * division could have spared one without splitting a group or breaking
-     * min–max (could_share_captain()), the places respected, locked units
+     * min–max (could_share_captain()), the places respected (no new team in a
+     * place held for an application waiting for approval), locked units
      * where the admin put them. Returns a list of problems (empty = fine).
      */
     public static function violations($units, $teams, $settings, $result) {
@@ -1545,14 +1572,15 @@ class RSL_Placement {
             }
         }
         foreach ($count_new as $div => $c) {
-            if ($s['capacity'][$div] === null) {
+            $open = self::open_places($s, $div);
+            if ($open === null) {
                 continue;
             }
             $have = $seeded[$div];
             foreach ($T as $t) {
                 $have += $t['division'] === $div ? 1 : 0;
             }
-            $room = max(0, $s['capacity'][$div] - $have);
+            $room = max(0, $open - $have);
             if ($c > $room) {
                 $bad[] = "$c new $div teams but places for $room";
             }
@@ -1604,7 +1632,8 @@ class RSL_Placement {
     /**
      * Units from the waiting rows (RSL_Free_Agents::pool(): looking and
      * unplaced), teams from the season's active teams, settings with court
-     * space. Also returns the team list it read.
+     * space. Also returns the team list and the places it read
+     * (RSL_Capacity::season()).
      */
     private static function build($season, $rows) {
         global $wpdb;
@@ -1785,17 +1814,18 @@ class RSL_Placement {
         }
 
         $used = array_map('strval', array_keys($made));
-        list($capacity, $allowance, $no_slots) = self::capacity($season);
+        list($capacity, $held, $allowance, $no_slots, $places) = self::capacity($season);
         $settings = array_merge($fa, array(
             'gap_fill' => isset($fa['gap_fill']) ? (float) $fa['gap_fill'] : (float) $w['gap_fill'],
             'gap_short' => isset($fa['gap_short']) ? (float) $fa['gap_short'] : (float) $w['gap_short'],
             'capacity' => $capacity,
+            'held' => $held,
             'allowance' => $allowance,
             'no_slots' => $no_slots,
             'weights' => $w,
             'used_refs' => $used,
         ));
-        return array($units, $teams, $settings, $list);
+        return array($units, $teams, $settings, $list, $places);
     }
 
     /**
@@ -1804,24 +1834,32 @@ class RSL_Placement {
      * of the season's regular nights; the Most teams per division setting
      * wins). null = no regular nights yet (not checked). Before 0.19.0 this
      * was 2 × the first regular night's slots, so no sit-outs at all.
-     * Returns array(capacity, allowance, no_slots): allowance is division =>
-     * the nights it was worked out with, or null where the setting decided
-     * it, the ceiling did (the most places a division takes), the division
-     * has no slot on any night, or there are no nights (the unplaced reason
-     * names it only when it's a number); no_slots is division => true for a
-     * division with no slot on any night.
+     * Returns array(capacity, held, allowance, no_slots, places): held is
+     * division => the places left that applications waiting for approval
+     * hold (RSL_Capacity::held(); the waiting list holds none), which
+     * propose() never fills with new teams (club decision, 5 Nov 2026: first
+     * come, first served); allowance is division => the nights it was worked
+     * out with, or null where the setting decided it, the ceiling did (the
+     * most places a division takes), the division has no slot on any night,
+     * or there are no nights (the unplaced reason names it only when it's a
+     * number); no_slots is division => true for a division with no slot on
+     * any night; places is the RSL_Capacity::season() read itself, so
+     * check() and the screen's lines use the same numbers.
      */
     private static function capacity($season) {
         $out = array('unranked' => null, 'ranked' => null);
+        $held = array('unranked' => 0, 'ranked' => 0);
         $allow = array('unranked' => null, 'ranked' => null);
         $none = array('unranked' => false, 'ranked' => false);
-        foreach (RSL_Capacity::season($season)['divisions'] as $d => $info) {
+        $places = RSL_Capacity::season($season);
+        foreach ($places['divisions'] as $d => $info) {
             $out[$d] = $info['places'];
+            $held[$d] = RSL_Capacity::held($info);
             // Named only when the allowance decided it: not the override, the ceiling, nor a division with no slot at all.
             $allow[$d] = $info['places'] !== null && empty($info['set_by_hand']) && empty($info['clamped']) && empty($info['no_slots']) ? intval($info['allowance']) : null;
             $none[$d] = !empty($info['no_slots']);
         }
-        return array($out, $allow, $none);
+        return array($out, $held, $allow, $none, $places);
     }
 
     // ------------------------------------------------------------------
@@ -1956,13 +1994,14 @@ class RSL_Placement {
     /**
      * Everything the season's draft needs in one read: the waiting rows
      * (each with ->band, ->unit_ref, ->unit_size, ->first_name added), units,
-     * teams, team bands, rows by destination, and who is on a team already.
+     * teams, team bands, rows by destination, who is on a team already, and
+     * the places (RSL_Capacity::season(), the read the settings came from).
      */
     private static function state($season) {
         global $wpdb;
         $rows = RSL_Free_Agents::pool($season);
-        list($units, $teams, $settings, $list) = self::build($season, $rows);
-        $st = array('season' => $season, 'b' => RSL_Free_Agents::building($season), 's' => $settings, 'rows' => $rows, 'units' => array(), 'unit_of' => array(),
+        list($units, $teams, $settings, $list, $places) = self::build($season, $rows);
+        $st = array('season' => $season, 'b' => RSL_Free_Agents::building($season), 's' => $settings, 'places' => $places, 'rows' => $rows, 'units' => array(), 'unit_of' => array(),
             'row_of' => array(), 'team_band' => array(), 'teams' => array(), 'by_dest' => array(), 'on_team' => array());
         foreach ($units as $u) {
             $st['units'][$u['ref']] = $u;
@@ -2048,11 +2087,20 @@ class RSL_Placement {
      * The draft for the admin screen: version; existing teams with the people
      * proposed for each (team, n = members now, rows); new teams (ref, draft,
      * rows); not placed; waiting but not in the proposal; blockers and
-     * warnings. Rows come from RSL_Free_Agents::pool() with ->band added.
+     * warnings; held (RSL_Capacity::held_line() for each division where
+     * applications waiting for approval hold places, so the admin sees why
+     * placement made fewer new teams; admin only). Rows come from
+     * RSL_Free_Agents::pool() with ->band added.
      */
     public static function draft($season) {
         $st = self::state($season);
-        $out = array('version' => intval($st['b']['draft_version']), 'existing' => array(), 'new' => array(), 'none' => array(), 'unproposed' => array(), 'blockers' => array(), 'warnings' => array());
+        $out = array('version' => intval($st['b']['draft_version']), 'existing' => array(), 'new' => array(), 'none' => array(), 'unproposed' => array(), 'blockers' => array(), 'warnings' => array(), 'held' => array());
+        foreach ($st['places']['divisions'] as $info) {
+            $line = RSL_Capacity::held_line($info);
+            if ($line !== '') {
+                $out['held'][] = $line;
+            }
+        }
         foreach ($st['teams'] as $id => $t) {
             if (!empty($st['by_dest']['t:' . $id])) {
                 $out['existing'][] = array('team' => $t, 'n' => intval($t->member_count), 'rows' => $st['by_dest']['t:' . $id]);
@@ -2546,7 +2594,8 @@ class RSL_Placement {
 
         // The places in each division (RSL_Capacity, 0.19.0): going over is allowed, with the nights it costs,
         // and the admin hears when the new teams take places that applications waiting for approval are in line for.
-        $places = null;
+        // propose() keeps those places free (club decision, 5 Nov 2026), so that warning comes only when an admin's
+        // moves go past the room it planned, or an application has come in since the proposal.
         foreach (array_keys($divs) as $div) {
             $cap = isset($s['capacity'][$div]) ? $s['capacity'][$div] : null;
             if ($cap === null) {
@@ -2559,8 +2608,8 @@ class RSL_Placement {
             foreach (self::draft_refs($st) as $ref) {
                 $count += self::division_of_ref($ref) === $div ? 1 : 0;
             }
-            $places = $places ? $places : RSL_Capacity::season($st['season']);
-            $info = $places['divisions'][$div];
+            // The read the settings came from (state()), so the warning and the proposal agree.
+            $info = $st['places']['divisions'][$div];
             $info['places'] = $cap;
             if ($count > $cap) {
                 $allow = intval($info['allowance']);

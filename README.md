@@ -63,10 +63,10 @@ finals (see `CLAUDE.md`).
   worked out on every read, so approving, declining, withdrawing and a
   team leaving move it. An admin change can also put an ordinary
   application on the waiting list: a team added or approved ahead of it,
-  an older application moved into its division, or new teams from
-  placement. Each says so (below).
-- **Where it applies.** Placement (no new team past the places left, as
-  before with the old number), Start a team (at registration and on the
+  an older application moved into its division, or new teams an admin
+  put in placement's draft by hand. Each says so (below).
+- **Where it applies.** Placement (no new team in a place an application
+  is in line for, below), Start a team (at registration and on the
   league page's application card), applying, the captain's application
   card, and the Teams screen: approving, *Add a team* and a division
   change. Placement confirm says when the new teams it made put a division
@@ -125,11 +125,28 @@ finals (see `CLAUDE.md`).
   season; Ranked teams full". Neither names the allowance when the
   override or the ceiling set the places, or the division has no slot on
   any night; there the reason keeps 0.18.2's "no court space for another
-  Unranked team". Placement's room is the places less the active teams,
-  as before, so new teams can take places that applications waiting for
-  approval are next in line for. The warning before confirming says so:
+  Unranked team".
+- **Placement keeps the places applications are in line for** (the
+  club's decision, 5 Nov 2026: first come, first served). Its new teams go
+  only in the places left that no application waiting for approval holds:
+  the places, less the active teams, less the ordinary applications. With
+  27 active teams for 30 places and 2 ordinary applications, placement can
+  make 1 new team there. An application on the waiting list holds no
+  place, nor does one in a season with no game nights, where places
+  aren't checked. Either players go to the other division when every
+  place left in theirs is held. A free agent left out because the places
+  left are all held gets the reason above ("no place for another Ranked
+  team without teams sitting out more than 2 nights a season"). Players
+  see that reason, so it never mentions another team's application. On
+  the placement screen, under *New teams*, an admin sees a line for each
+  division where places are held: "Ranked, 2027 Pre-season: 2 of the 3
+  places left are held for applications waiting for approval, so
+  placement can make 1 new Ranked team." An admin can still move people
+  into new teams by hand past that room. The warning before confirming
+  says what that takes:
   "Confirming fills places that 2 Ranked applications waiting for
-  approval are next in line for, so they go on the waiting list." The
+  approval are next in line for, so they go on the waiting list." (It
+  shows too when an application has come in since the proposal.) The
   confirm notice then says "2 applications in Ranked, 2027 Pre-season are
   now on the waiting list."
 - **Before 0.19.0** only placement looked at courts, as 2 × the game slots
@@ -144,8 +161,10 @@ finals (see `CLAUDE.md`).
   `sit_out_words()` (the one writer of the numbers), `over_words()`,
   `over_line()`, `limit_words()` (the allowance in words: "sitting out
   more than 2 nights a season", or "sitting out" at 0), `queue()`,
-  `bumped()`, `bumped_words()`, `would_bump()`, `places_line()`,
-  `full_words()`, `waiting_words()`. The one wrapper is
+  `bumped()`, `bumped_words()`, `would_bump()`, `held()` (the places
+  left the ordinary applications hold), `held_line()` (the placement
+  screen's line), `places_line()`, `full_words()`, `waiting_words()`.
+  The one wrapper is
   `season()` (`seasons()` for several at once, as the Start a team form
   and the Teams screen need), with `on_waiting_list()`, `waiting_note()`
   and `allowance()` over it; nothing works out places
@@ -155,15 +174,18 @@ finals (see `CLAUDE.md`).
   returns the application with `waiting_list` (`with_waiting_list()`); the
   flashes read it, so only an application on the waiting list reads the
   places again for its words. `RSL_Placement::capacity()` reads `season()`
-  and passes `allowance` and `no_slots` to `propose()` for the reason's
-  words; `check()` warns from `would_bump()`; `confirm()` returns `new_in`
-  (division => new teams made), and the Free Agents notice compares the
-  places before and after (`bumped()`).
+  once and passes `held` to `propose()` (its new teams' room, the
+  leftover reason, Either players crossing and `violations()` all take it
+  off the places), with `allowance` and `no_slots` for the reason's
+  words; `check()` reads the same `season()` read and warns from
+  `would_bump()`; `draft()` returns `held` (the screen's lines);
+  `confirm()` returns `new_in` (division => new teams made), and the Free
+  Agents notice compares the places before and after (`bumped()`).
 - **Tests** (`test-capacity.php`): `places_detail()` against brute force on
   3,000 random seasons at allowances 0 to 4 (15,000 checks: nights with 0
   slots, the ceiling, clamped), the table above, the numbers and their
   words, the queue (a tie on applied time goes by id), the bump helpers,
-  the admin line and the captain's words;
+  `held()` and `held_line()`, the admin line and the captain's words;
   `season_slot_counts()` against `slots_for_night()`; applying into a full
   division (the flash, the card, at registration too), the form's words for
   one division full and both full, nothing on the season preview or for a
@@ -178,11 +200,23 @@ finals (see `CLAUDE.md`).
   form), what `RSL_Teams::apply()` returns and a second submit, a later
   season named once in the flashes, the success notice after approving
   over the cap, and the Teams screen's counts over the test's own rows
-  only. A fourth season runs placement: an older application moved into a
-  division bumping a newer one, the warning that new teams take places
-  applications are in line for, *Add a team* bumping one, and a confirm
-  over the places (the notice's numbers and the bump).
-  `test-placement.php` checks the free agent's new reasons.
+  only; placement holding a place for an application under the override,
+  and none in a season with no nights. A fourth season runs placement: an
+  older application moved into a division bumping a newer one; with the
+  one place left in each division held, no new team, every free agent
+  given the capacity reason, and the placement screen's line; with 3
+  places set by hand, one new team (1 of the 2 left held); an application
+  on the waiting list holding no place; an admin's new teams past the
+  room and the warning that they take places applications are in line
+  for; *Add a team* bumping one, after which Ranked holds none; and a
+  confirm over the places (the notice's numbers and the bump).
+  `test-placement.php` checks the free agent's new reasons, and held
+  places: room for exactly the places nobody holds, no new team when all
+  are held (the capacity reason), Either players crossing, a season not
+  checked holding nothing, an admin's new team in a held place kept,
+  `violations()` catching a new team in one, and held places in the
+  random pools. Run standalone, it loads `RSL_Capacity` too (the reason's
+  words need it).
 
 ## Fair sit-outs when courts are short (0.18.2)
 
@@ -1137,7 +1171,8 @@ finals (see `CLAUDE.md`).
   level and game time, friend groups never split, a volunteer captain in
   each, Unranked-only players never in Ranked, nobody over 10. New teams
   stay within the division's places (since 0.19.0 the places of
-  `RSL_Capacity`; before, 2 × the first night's game slots). The admin
+  `RSL_Capacity`, less those held for applications waiting for approval;
+  before, 2 × the first night's game slots). The admin
   reviews it on **Social League → Free Agents → Placement**, moves anyone
   (whole groups move together; a stale tab is refused), names new teams,
   and confirms (safe to run twice). Anyone not placed is told why, charged

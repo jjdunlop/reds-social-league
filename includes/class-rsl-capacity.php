@@ -34,13 +34,17 @@
  * beyond the places left. Nothing is stored: it's worked out from the teams
  * table on each read, so approving, declining, withdrawing and a team leaving
  * move it on their own. An admin change that takes a place an ordinary
- * application was in line for says so (bumped(), would_bump()).
+ * application was in line for says so (bumped(), would_bump()). Placement
+ * keeps the places the ordinary applications are in line for free (held(),
+ * club decision, 5 Nov 2026: first come, first served), so its new teams
+ * take only the places left that nobody holds.
  *
  * Pure core (no database, so tests call it directly): places(),
  * places_detail(), ceiling(), sit_outs(), sit_out_numbers(), sit_out_words(),
  * over_words(), over_line(), queue(), bumped(), bumped_words(), would_bump(),
- * places_line(), full_words(), waiting_words(). season() / seasons() are the
- * one wrapper, and every reader goes through it: placement
+ * held(), held_line(), places_line(), full_words(), waiting_words().
+ * season() / seasons() are the one wrapper, and every reader goes through
+ * it: placement
  * (RSL_Placement::capacity() and check()), the Start a team form
  * (RSL_Portal::team_fields()), RSL_Teams::apply(), the captain's application
  * card and the admin screens. Nothing works out places another way.
@@ -266,8 +270,46 @@ class RSL_Capacity {
         if (!is_array($info) || $info['places'] === null) {
             return 0;
         }
-        $ordinary = count((array) $info['order']) - count((array) $info['waiting']);
-        return max(0, $ordinary - max(0, intval($info['places']) - intval($active_after)));
+        return max(0, self::held($info) - max(0, intval($info['places']) - intval($active_after)));
+    }
+
+    /**
+     * The places left that the ordinary applications hold ($info from
+     * season()): one each, oldest first, so at most the places left. An
+     * application on the waiting list holds nothing. 0 when not checked.
+     * Placement makes new teams only in the places left that nobody holds
+     * (club decision, 5 Nov 2026: first come, first served).
+     */
+    public static function held($info) {
+        if (!is_array($info) || !array_key_exists('places', $info) || $info['places'] === null) {
+            return 0;
+        }
+        return max(0, count((array) $info['order']) - count((array) $info['waiting']));
+    }
+
+    /**
+     * The placement screen's line for one season and division ($info from
+     * season()) while applications waiting for approval hold places, else '':
+     * "Ranked, 2027 Pre-season: 2 of the 3 places left are held for
+     * applications waiting for approval, so placement can make 1 new Ranked
+     * team." Admin only: it counts other teams' applications.
+     */
+    public static function held_line($info) {
+        $held = self::held($info);
+        if (!$held) {
+            return '';
+        }
+        $left = max($held, isset($info['left']) ? intval($info['left']) : 0);
+        $room = $left - $held;
+        $label = $info['label'];
+        if ($room === 0) {
+            $what = $left === 1 ? 'the 1 place left is held for an application'
+                : ($left === 2 ? 'both places left are held for applications' : 'all ' . $left . ' places left are held for applications');
+        } else {
+            $what = $held . ' of the ' . $left . ' places left ' . ($held === 1 ? 'is held for an application' : 'are held for applications');
+        }
+        return $label . ', ' . RSL_Seasons::short_label($info['season']) . ': ' . $what . ' waiting for approval, so placement '
+            . ($room === 0 ? 'can\'t make a new ' . $label . ' team' : 'can make ' . $room . ' new ' . $label . ' team' . ($room === 1 ? '' : 's')) . '.';
     }
 
     /**

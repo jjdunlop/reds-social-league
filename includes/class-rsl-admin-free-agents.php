@@ -958,7 +958,7 @@ class RSL_Admin_Free_Agents {
         return is_array($block) && isset($block['rows']) && is_array($block['rows']) ? array_values(array_filter($block['rows'], 'is_object')) : array();
     }
 
-    /** The draft's blocker or warning lines, each once. */
+    /** The draft's blocker, warning or held-places lines, each once. */
     private static function strings_of($draft, $key) {
         $out = array();
         if (is_array($draft) && isset($draft[$key]) && is_array($draft[$key])) {
@@ -1018,6 +1018,7 @@ class RSL_Admin_Free_Agents {
         // draft() already carries blockers() — same state, same checks — so it isn't asked twice.
         $blockers = self::strings_of($draft, 'blockers');
         $warnings = self::strings_of($draft, 'warnings');
+        $held = self::strings_of($draft, 'held');
         $existing = self::list_of($draft, 'existing');
         $new = self::list_of($draft, 'new');
         $none = array_values(array_filter(self::list_of($draft, 'none'), 'is_object'));
@@ -1112,8 +1113,12 @@ class RSL_Admin_Free_Agents {
             $h .= '<p class="description">Nobody is proposed for an existing team.</p>';
         }
 
-        // (B) New teams.
+        // (B) New teams. Placement keeps free the places applications waiting for approval are in line for
+        // (club decision, 5 Nov 2026); a line per division where any are held says how many, as that's why it made fewer teams.
         $h .= '<h2>New teams</h2>';
+        foreach ($held as $line) {
+            $h .= '<p class="description">' . esc_html($line) . '</p>';
+        }
         $any = false;
         $levels = RSL_Teams::levels();
         foreach ($new as $block) {
