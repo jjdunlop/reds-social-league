@@ -31,18 +31,21 @@
  * or not enough courts), the teams that sit out are the ones with the
  * lowest sit-out count (sat_out_counts()): each night sat out counts 1,
  * and each night away (a week off, a can't-make-it, a night left out for
- * owing, a night before the team joined) counts that night's share of
- * sit-outs in its division, so the count measures sit-outs per night
- * available. A team that sits out has a count no more than $w['sit_level']
- * (half a night) above any team in its division that plays: counts that
- * close are level. For teams available every night the counts are whole
- * numbers, so among them a team out is never above a team that plays. A
- * team that sat out its last night doesn't sit out again while a team in
- * its division that has never sat out plays. A night with a double-header
- * is one night played. Among level teams, the draw's whole cost for the
- * teams that play decides, link term included: for who sits out, the link
- * term only decides between level teams, and never puts a team out ahead
- * of one whose count is lower by more than sit_level.
+ * owing, a night before the team joined or one drawn before it did) counts
+ * that night's share of sit-outs in its division, so the count measures
+ * sit-outs per night available. A team that sits out has a count no more
+ * than $w['sit_level'] (0.3 of a night) above any team in its division that
+ * plays: counts that close are level. For teams available every night the
+ * counts are whole numbers, so among them a team out is never above a team
+ * that plays. A team that sat out its last night doesn't sit out again
+ * while a team in its division that has never sat out plays. A night with
+ * a double-header is one night played. Among level teams, the draw's whole
+ * cost for the teams that play decides, link term included: for who sits
+ * out, the link term only decides between level teams, and never puts a
+ * team out ahead of one whose count is lower by more than sit_level. That
+ * cost prefers fresh games, so among level teams one back from nights away
+ * or new to the league tends to play: the narrow level (0.3) keeps that
+ * drift small (README 0.18.2).
  * On an odd night with a spare court the odd team plays a team that opted
  * into double-headers when one qualifies (the fill game), and then nobody
  * sits out, unless every way to give that game needs a third meeting or
@@ -78,6 +81,7 @@ class RSL_Pairing {
     const EDGE_UNIT = 1 / 3;  // a 67/33 set-win chance: the favourite's edge (0.67 − 0.33) that costs 1
     const EXACT_LIMIT = 18;   // up to this many teams (plus sit-out places) the matching is exact; above, a strong local search
     const NEVER = 1e9;        // the cost of a pairing that may not happen (match_out(): a team that must play, sitting out)
+    const FIRST_WORDS = '; it has never sat out, so it goes before a team that sat out its last night'; // the twice-in-a-row guard's reason, for admins
 
     /** The trade-offs, in "2-to-1 matchups" (1.0 = as bad as a 67/33 game). */
     public static function weights() {
@@ -89,7 +93,7 @@ class RSL_Pairing {
             'last_week' => 1000.0,    // met last round
             'odd_double' => 8.0,      // odd night, among teams tied on nights sat out: a double-header team costs this much more to be the odd one out (the old +2 on its count)
             'odd_sit' => 20.0,        // odd night with a spare court where some team could have a fill game: the odd team sitting out instead costs this much, above any normal game but below a third meeting or last week's opponent, so a fill game is taken unless it needs one of those
-            'sit_level' => 0.5,       // who sits out: sit-out counts within this of each other count as level (a night away adds a fraction); at most 0.5, so whole counts are never level (simulated against 0 and 0.25: fairer per night available and closer games, README 0.18.2)
+            'sit_level' => 0.3,       // who sits out: sit-out counts within this of each other count as level (a night away adds a fraction); at most 0.5, so whole counts are never level. Simulated on the same nights (README 0.18.2): 0.3 is closest to each team's share across 28 shapes; 0.5 lets the draw's cost keep late joiners and returning teams playing, so they sit out less than their share; 0 puts a team a fraction behind out first and costs closer games
             'double_max' => 2.25,     // a spare-slot double-header only if its closeness cost is at most this (75/25)
             'double_max_asked' => 4.0, // ...or this when a team asked for two games that week (about 83/17); also the limit for the odd team's fill game
             'link' => 2.25,           // Ranked: a game between groups the results haven't connected costs this much less (a 75/25 game), × nights in a row split; for who sits out it only decides between teams level on the sit-out count, never putting a team out ahead of one whose count is lower by more than sit_level
@@ -596,19 +600,25 @@ class RSL_Pairing {
      * built by context()). $nights: the earlier nights that count, in date
      * order, each array(date 'Y-m-d', games => list of array(division, home,
      * away), off => team id => true for a week off, an automatic owing
-     * record or a can't-make-it). $teams: id => array(division => its
-     * division now, joined => 'Y-m-d' or '').
+     * record or a can't-make-it, made => when its fixtures were made, the
+     * earliest of its games ('Y-m-d H:i:s'; optional)). $teams: id =>
+     * array(division => its division now, joined => 'Y-m-d' or '',
+     * joined_at => when it was approved or created ('Y-m-d H:i:s';
+     * optional)).
      *
      * Each night a team is in a division: the one of its last game on or
      * before that night, else of its first game after it, else its division
      * now. So a team that moved is judged by the division it was in, except
      * on a night between its last game in the old division and its first in
-     * the new, which is judged by the old; a night before a team joined is
-     * judged by the division it joined into. A night its division had no
-     * games counts nothing. Otherwise the team was away (not in the league
-     * by then, or off) or available, and an available team played (a game
-     * in any division; two games are one double-header night) or sat out.
-     * The night's share, per division: its teams that sat out ÷ its teams
+     * the new, which is judged by the old (and counted among the old
+     * division's teams for that night's share); a night before a team joined
+     * is judged by the division of its first game, else its division now. A
+     * night its division had no games counts nothing. Otherwise the team was
+     * away (not in the league by then: joined after the night's date, or
+     * after its fixtures were made, so the draw couldn't have had it; or
+     * off) or available, and an available team played (a game in any
+     * division; two games are one double-header night) or sat out. The
+     * night's share, per division: its teams that sat out ÷ its teams
      * available.
      *
      * The count: 1 for each night sat out, and for each night away that
@@ -671,7 +681,8 @@ class RSL_Pairing {
                 }
                 if (isset($played[$id])) {
                     $s = 'played';
-                } elseif (!empty($n['off'][$id]) || ($t['joined'] !== '' && $t['joined'] > $n['date'])) {
+                } elseif (!empty($n['off'][$id]) || ($t['joined'] !== '' && $t['joined'] > $n['date'])
+                    || (!empty($t['joined_at']) && !empty($n['made']) && $t['joined_at'] > $n['made'])) {
                     $s = 'away';
                 } else {
                     $s = 'sat';
@@ -1053,9 +1064,12 @@ class RSL_Pairing {
      * earlier night its division at the time had games, it was in the
      * league (approved by then), it had no game in any division, and it
      * wasn't away; for each night away, that night's share of sit-outs in
-     * its division. Away: not in the league yet, a week off, a night the
-     * automatic draw left it out for owing (both RSL_Requests::weeks_off()),
-     * or a can't-make-it. A double-header night is one night played. sat:
+     * its division. Away: not in the league yet (approved after the night's
+     * date, or after its fixtures were made: the earliest of its games, so a
+     * remake after the approval counts the night as usual), a week off, a
+     * night the automatic draw left it out for owing (both
+     * RSL_Requests::weeks_off()), or a can't-make-it. A double-header night
+     * is one night played. sat:
      * team => nights it actually sat out; last: team => true when it sat
      * out its last night (sit_out()'s guard). The draw can't tell other
      * reasons afterwards: a team taken out of a night by hand counts as
@@ -1112,7 +1126,14 @@ class RSL_Pairing {
             $off = isset($weeks_off[$games[0]->night_date]) ? $weeks_off[$games[0]->night_date] : array();
             // A team that said it couldn't make it (its game since removed) didn't sit out for the fixtures' sake either.
             $off += RSL_Requests::for_night($night_id, 'cant_make', array('active', 'handled'));
-            $counted[] = array('date' => $games[0]->night_date, 'off' => array_fill_keys(array_keys($off), true),
+            // When its fixtures were made (the earliest game): a team approved after that wasn't in the draw.
+            $made = '';
+            foreach ($games as $g) {
+                if (!empty($g->created_at) && ($made === '' || $g->created_at < $made)) {
+                    $made = (string) $g->created_at;
+                }
+            }
+            $counted[] = array('date' => $games[0]->night_date, 'off' => array_fill_keys(array_keys($off), true), 'made' => $made,
                 'games' => array_map(function ($g) { return array($g->division, intval($g->home_team_id), intval($g->away_team_id)); }, $games));
             foreach (array_keys(RSL_Teams::DIVISIONS) as $division) {
                 $in = array_filter($games, function ($g) use ($division) { return $g->division === $division; });
@@ -1139,7 +1160,8 @@ class RSL_Pairing {
         $joined = array();
         foreach ($teams as $t) {
             // Approved (or created) by then — not just applied.
-            $joined[intval($t->id)] = array('division' => $t->division, 'joined' => RSL_Stats::joined_date($t));
+            $joined[intval($t->id)] = array('division' => $t->division, 'joined' => RSL_Stats::joined_date($t),
+                'joined_at' => (string) (!empty($t->decided_at) ? $t->decided_at : $t->created_at));
         }
         $counts = self::sat_out_counts($counted, $joined);
         $ctx['byes'] = $counts['byes'];
@@ -1319,7 +1341,32 @@ class RSL_Pairing {
         return ($why === 'courts' ? 'Not enough courts' : 'Bye, odd number of teams')
             . ' (nights sat out before: this team ' . self::count_words($before)
             . ($fewest === null ? '' : ', the teams playing ' . self::count_words($fewest) . ' or more')
-            . ($first ? '; it has never sat out, so it goes before a team that sat out its last night' : '') . ')';
+            . ($first ? self::FIRST_WORDS : '') . ')';
+    }
+
+    /**
+     * A resting team's line under *Not playing this night*, for admins
+     * (pure): its count before the night against the lowest among the teams
+     * playing in its division ($fewest, null: none play), and the guard's
+     * reason when it went first ($first, explain_night()'s _first).
+     */
+    public static function resting_words($before, $fewest, $first = false) {
+        return 'bye — odd numbers or not enough courts; nights sat out before: ' . self::count_words($before)
+            . ($fewest === null ? '' : ', the teams playing ' . self::count_words($fewest) . ' or more')
+            . ($first ? self::FIRST_WORDS : '');
+    }
+
+    /**
+     * Whether the twice-in-a-row guard put a resting team first, as far as a
+     * saved night shows it (pure; explain_night()): the team has never sat
+     * out ($never), a team in its division that sat out its last night plays
+     * ($last_plays), and its count ($before) is more than sit_level above the
+     * lowest among the teams playing ($fewest), which the count alone never
+     * allows.
+     */
+    public static function went_first($before, $fewest, $never, $last_plays, $w) {
+        $level = isset($w['sit_level']) ? min(0.5, max(0.0, (float) $w['sit_level'])) : 0.0;
+        return $never && $last_plays && $fewest !== null && (float) $before > (float) $fewest + $level + 1e-9;
     }
 
     /**
@@ -1394,9 +1441,10 @@ class RSL_Pairing {
      * array(p (home wins a set), edge, count (earlier meetings), last (rounds ago),
      * link (the link bonus it got, negative, or 0), doubles, time_ok per team),
      * plus _resting (teams with no game), _sat_out (resting team => its
-     * sit-out count before this night, context()'s byes, a float) and
-     * _fewest (division => the lowest count before this night among its
-     * teams with a game).
+     * sit-out count before this night, context()'s byes, a float), _fewest
+     * (division => the lowest count before this night among its teams with
+     * a game) and _first (resting team => true when the twice-in-a-row guard
+     * put it first, went_first()).
      */
     public static function explain_night($night_id) {
         $night = RSL_Courts::get_night($night_id);
@@ -1439,10 +1487,23 @@ class RSL_Pairing {
             $out['_sat_out'][$t] = isset($ctx['byes'][$t]) ? (float) $ctx['byes'][$t] : 0.0;
         }
         $out['_fewest'] = array();
+        $last_plays = array(); // division => true when a team with a game sat out its last night
         foreach ($games as $g) {
             foreach (array(intval($g->home_team_id), intval($g->away_team_id)) as $t) {
                 $sat = isset($ctx['byes'][$t]) ? (float) $ctx['byes'][$t] : 0.0;
                 $out['_fewest'][$g->division] = isset($out['_fewest'][$g->division]) ? min($out['_fewest'][$g->division], $sat) : $sat;
+                if (!empty($ctx['last'][$t])) {
+                    $last_plays[$g->division] = true;
+                }
+            }
+        }
+        // A resting team the guard put first: its count is above the line, and the reason says why.
+        $out['_first'] = array();
+        foreach ($out['_resting'] as $t) {
+            $division = $ctx['teams'][$t]->division;
+            if (self::went_first($out['_sat_out'][$t], isset($out['_fewest'][$division]) ? $out['_fewest'][$division] : null,
+                empty($ctx['sat'][$t]), !empty($last_plays[$division]), $w)) {
+                $out['_first'][$t] = true;
             }
         }
         return $out;

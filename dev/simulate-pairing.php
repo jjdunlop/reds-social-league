@@ -10,7 +10,7 @@
  * three sets drawn from the true strengths. Reports how close the games
  * were and how often teams met again.
  *
- *   wp eval-file dev/simulate-pairing.php courts [rounds=10] [runs=200] [seed=0] [slots=some|every|roomy|tight] [outliers=0] [size=N] [off=7] [join=6] [away=4] [level=0]
+ *   wp eval-file dev/simulate-pairing.php courts [rounds=10] [runs=200] [seed=0] [slots=some|every|roomy|tight] [outliers=0] [size=N] [off=7] [join=6] [away=4] [level=0,0.5]
  *
  * courts (0.18.2): who sits out when courts are short. Each season is a
  * Ranked division of 12 to 14 teams over 10 nights: 5 game slots on 30% of
@@ -22,10 +22,11 @@
  * size=N fixes the number of teams (size=13 slots=roomy off=0: an odd
  * division with a court to spare every night). join=6 has the last team
  * join on night 6 (join=4,6: the last joins on night 4, the one before it
- * on night 6); away=N takes team 3 away for nights 2 to N + 1; level=X sets
- * the sit_level of the last row (at most 0.5).
+ * on night 6); away=N takes team 3 away for nights 2 to N + 1; level=X,Y
+ * sets the sit_level of the last rows (each at most 0.5; by default 0 and
+ * 0.5, the ends of the range, leaving out the live one).
  *
- * The same season is played four times from the same teams, strengths,
+ * The same season is played under each rule from the same teams, strengths,
  * slots, weeks off and joiners: with the rule before 0.18.2 (the odd team
  * by a soft cost, 4 × (1 + nights sat out), +2 on the count for a
  * double-header team; then the dearest games dropped to fit the slots; the
@@ -33,14 +34,24 @@
  * build (RSL_Pairing::pair_division() on the nights each team actually sat
  * out); with the live rule (pair_division() on sat_out_counts()'s count,
  * which credits each night away with that night's share of sit-outs, and
- * the twice-in-a-row guard); and the same with the other sit_level (0 when
- * the live one is above 0, else 0.25), to show what counting close counts
- * as level buys. Every rule uses the fixtures rating and the link term,
- * plays games rally by rally (dev/lib-sim.php), gives the odd team its fill
- * game when one qualifies, and then fills spare slots with double-headers
- * as plan() does (fairest first). A sit-out is a night a team was
- * available and had no game, as RSL_Pairing::context() counts it; the
- * tables count actual sit-outs, whatever count the rule ran on.
+ * the twice-in-a-row guard); and the same at the other sit_levels, to show
+ * what counting close counts as level buys. Every rule uses the fixtures
+ * rating and the link term, plays games rally by rally (dev/lib-sim.php),
+ * gives the odd team its fill game when one qualifies, and then fills spare
+ * slots with double-headers as plan() does (fairest first). A sit-out is a
+ * night a team was available and had no game, as RSL_Pairing::context()
+ * counts it; the tables count actual sit-outs, whatever count the rule ran
+ * on.
+ *
+ * Fairness for teams that miss nights is measured on the same nights: a
+ * late joiner's or a team with nights away's sit-outs per night it was
+ * there, beside the sit-outs per night of the teams there every night on
+ * those same nights (nights early in a season can have fewer sit-outs, so
+ * a whole-season rate is no yardstick); its excess, the sit-outs it had
+ * minus the sum of the shares (sit-outs ÷ teams available) of the nights it
+ * was there, which is 0 for a team that sat out exactly its share; and its
+ * first night (or first night back), beside the chance a team there every
+ * night sat out that same night.
  */
 
 if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production' && !getenv('RSL_DEV'))) {
@@ -53,8 +64,8 @@ foreach ((array) $args as $a) {
         $opt[$m[1]] = intval($m[2]);
     } elseif (preg_match('/^slots=(some|every|roomy|tight)$/', $a, $m)) {
         $opt['slots'] = $m[1];
-    } elseif (preg_match('/^level=(\d+(\.\d+)?)$/', $a, $m)) {
-        $opt['level'] = min(0.5, floatval($m[1]));
+    } elseif (preg_match('/^level=(\d+(\.\d+)?(,\d+(\.\d+)?)*)$/', $a, $m)) {
+        $opt['level'] = array_map(function ($x) { return min(0.5, floatval($x)); }, explode(',', $m[1]));
     } elseif (preg_match('/^join=(\d+(,\d+)*)$/', $a, $m)) {
         $opt['join'] = array_values(array_filter(array_map('intval', explode(',', $m[1])), function ($x) { return $x > 1; }));
     }
@@ -64,15 +75,20 @@ if (in_array('courts', (array) $args, true)) {
     require_once __DIR__ . '/lib-sim.php';
     $w = RSL_Pairing::weights();
     $levels = array(1200, 1350, 1500, 1650, 1800);
-    $live_level = $w['sit_level'];
-    $alt_level = isset($opt['level']) ? $opt['level'] : ($live_level > 0 ? 0.0 : 0.25);
+    $live_level = min(0.5, max(0.0, (float) $w['sit_level']));
+    $alt_levels = isset($opt['level']) ? $opt['level'] : array_values(array_filter(array(0.0, 0.5), function ($x) use ($live_level) { return abs($x - $live_level) > 1e-9; }));
     $level_words = function ($x) { return $x > 0 ? 'counts within ' . rtrim(rtrim(sprintf('%.2f', $x), '0'), '.') . ' level' : 'counts compared exactly'; };
+    // Rule key => sit_level for the count with shares (old and raw: none).
+    $levels_by = array('old' => null, 'raw' => null, 'credit' => $live_level);
     $rules = array(
         'Before 0.18.2: dearest games sit out' => 'old',
-        'Nights sat out only (first 0.18.2 build)' => 'raw',
-        'Live (0.18.2): credited, ' . $level_words($live_level) => 'credit',
-        'Credited, ' . $level_words($alt_level) => 'alt',
+        'Nights sat out only (9aa99da)' => 'raw',
+        'Live (0.18.2): with shares, ' . $level_words($live_level) => 'credit',
     );
+    foreach ($alt_levels as $i => $x) {
+        $levels_by["alt$i"] = $x;
+        $rules['With shares, ' . $level_words($x)] = "alt$i";
+    }
     $night_date = function ($round) { return date('Y-m-d', mktime(0, 0, 0, 1, 7 * $round, 2030)); };
     $sum = array();
     foreach ($rules as $name => $rule) {
@@ -80,7 +96,11 @@ if (in_array('courts', (array) $args, true)) {
             'games' => 0, 'closeness' => 0.0, 'over' => 0, 'main' => 0, 'main_closeness' => 0.0, 'main_over' => 0, 'third' => 0, 'fills' => 0, 'doubles' => 0,
             'opted_sat' => 0, 'opted_n' => 0, 'other_sat' => 0, 'other_n' => 0, 'both' => 0, 'outlier_sat' => 0, 'dh_spread' => 0, 'dh_spread_n' => 0,
             'rate' => array('aa' => array(0.0, 0, 0.0), 'off' => array(0.0, 0, 0.0), 'late' => array(0.0, 0, 0.0)),
-            'late_first' => 0, 'late_n' => 0, 'back_first' => 0, 'back_n' => 0, 'twice' => 0, 'first' => 0);
+            // Same nights: group => array(its sit-outs per night there, the teams there every night's on those nights, teams).
+            'same' => array('off' => array(0.0, 0.0, 0), 'late' => array(0.0, 0.0, 0)),
+            // Excess: group => array(sum, teams, lowest, highest) of sit-outs minus the sum of the shares of the nights there.
+            'excess' => array('aa' => array(0.0, 0, INF, -INF), 'off' => array(0.0, 0, INF, -INF), 'late' => array(0.0, 0, INF, -INF)),
+            'late_first' => 0, 'late_n' => 0, 'late_aa' => 0.0, 'back_first' => 0, 'back_n' => 0, 'back_aa' => 0.0, 'twice' => 0, 'first' => 0);
     }
     for ($run = 1; $run <= $opt['runs']; $run++) {
         $eff = $run + $opt['seed'];
@@ -127,6 +147,7 @@ if (in_array('courts', (array) $args, true)) {
             $seq = array();    // team => list of P (played) / O (sat out), nights available only
             $status = array(); // team => round => P / O
             $history = array(); // sat_out_counts()'s nights
+            $record = array();  // round => array(avail => ids, out => id => true, share => sit-outs ÷ teams available)
             $avail_all = array_fill_keys(array_filter($teams, function ($t) use ($join) { return $join[$t] === 1; }), true);
             for ($round = 1; $round <= $opt['rounds']; $round++) {
                 $hist = array_map(function ($g) use ($round) { return array($g[0], $g[1], $g[2], $round - 1 - $g[3]); }, $games);
@@ -157,7 +178,7 @@ if (in_array('courts', (array) $args, true)) {
                 if ($rule !== 'old') {
                     $count = $rule === 'raw' ? $byes : $counts['byes'];
                     $guard = $rule === 'raw' ? array() : array('sat' => $counts['sat'], 'last' => $counts['last']);
-                    $wr = $rule === 'alt' ? array('sit_level' => $alt_level) + $w : $w;
+                    $wr = $levels_by[$rule] !== null ? array('sit_level' => $levels_by[$rule]) + $w : $w;
                     $p = RSL_Pairing::pair_division($ids, $ratings, $now, $count, $wr, $salt, $link, $room[$round], $opted, $doubles, $guard);
                     foreach ($p['pairs'] as $g) { $tonight[] = array($g[0], $g[1], $g[2], 'main'); }
                     if ($p['fill']) { $tonight[] = array($p['bye'], $p['fill'][0], $p['fill'][1], 'fill'); }
@@ -243,20 +264,38 @@ if (in_array('courts', (array) $args, true)) {
                 $again = array_filter($last, function ($t) use ($in) { return !isset($in[$t]); });
                 $playing_never = array_filter($never, function ($t) use ($in) { return isset($in[$t]); });
                 $sum[$rule]['twice'] += $again && $playing_never ? 1 : 0;
+                $record[$round] = array('avail' => $ids, 'out' => array(), 'share' => 0.0);
                 foreach ($ids as $t) {
                     $avail[$t] = (isset($avail[$t]) ? $avail[$t] : 0) + 1;
                     $seq[$t][] = $status[$t][$round] = isset($in[$t]) ? 'P' : 'O';
                     if (!isset($in[$t])) {
                         $byes[$t] = (isset($byes[$t]) ? $byes[$t] : 0) + 1;
+                        $record[$round]['out'][$t] = true;
                     } elseif ($in[$t] > 1) {
                         $doubles[$t] = (isset($doubles[$t]) ? $doubles[$t] : 0) + 1;
                     }
                 }
+                $record[$round]['share'] = $ids ? count($record[$round]['out']) / count($ids) : 0.0;
                 $history[] = array('date' => $night_date($round), 'off' => isset($off[$round]) ? $off[$round] : array(), 'games' => $played);
             }
             $s = &$sum[$rule];
             $s['seasons']++;
             $get = function ($t) use ($byes) { return isset($byes[$t]) ? $byes[$t] : 0; };
+            // The nights each team was there, and the teams there every night.
+            $there = array();
+            foreach ($record as $round => $rec) {
+                foreach ($rec['avail'] as $t) { $there[$t][] = $round; }
+            }
+            $aa_ids = array_keys($avail_all);
+            // The teams there every night: the share of them that sat out on these nights, per night.
+            $aa_rate = function ($rounds) use ($record, $aa_ids) {
+                if (!$aa_ids || !$rounds) { return null; }
+                $out = 0;
+                foreach ($rounds as $round) {
+                    foreach ($aa_ids as $u) { $out += isset($record[$round]['out'][$u]) ? 1 : 0; }
+                }
+                return $out / count($aa_ids) / count($rounds);
+            };
             foreach ($teams as $t) {
                 $s['sat'] += $get($t);
                 $s['team_seasons']++;
@@ -276,17 +315,38 @@ if (in_array('courts', (array) $args, true)) {
                     $s['rate'][$group][1]++;
                     $s['rate'][$group][2] = max($s['rate'][$group][2], $rate);
                 }
-                if ($group === 'late' && !empty($seq[$t])) {
+                if (empty($there[$t])) {
+                    continue;
+                }
+                // Excess: its sit-outs minus the sum of the shares of the nights it was there.
+                $share_sum = 0.0;
+                foreach ($there[$t] as $round) { $share_sum += $record[$round]['share']; }
+                $x = $get($t) - $share_sum;
+                $s['excess'][$group][0] += $x;
+                $s['excess'][$group][1]++;
+                $s['excess'][$group][2] = min($s['excess'][$group][2], $x);
+                $s['excess'][$group][3] = max($s['excess'][$group][3], $x);
+                // On the same nights: its sit-outs per night there, and the teams there every night's.
+                if ($group !== 'aa' && ($same = $aa_rate($there[$t])) !== null) {
+                    $s['same'][$group][0] += $get($t) / count($there[$t]);
+                    $s['same'][$group][1] += $same;
+                    $s['same'][$group][2]++;
+                }
+                if ($group === 'late' && ($same = $aa_rate(array($there[$t][0]))) !== null) {
                     $s['late_n']++;
                     $s['late_first'] += $seq[$t][0] === 'O' ? 1 : 0;
+                    $s['late_aa'] += $same;
                 }
             }
             if ($opt['away'] && $join[3] === 1) {
-                // Team 3's first night back from its block away.
+                // Team 3's first night back from its block away, beside the teams there every night that night.
                 for ($round = $opt['away'] + 2; $round <= $opt['rounds']; $round++) {
                     if (isset($status[3][$round])) {
-                        $s['back_n']++;
-                        $s['back_first'] += $status[3][$round] === 'O' ? 1 : 0;
+                        if (($same = $aa_rate(array($round))) !== null) {
+                            $s['back_n']++;
+                            $s['back_first'] += $status[3][$round] === 'O' ? 1 : 0;
+                            $s['back_aa'] += $same;
+                        }
                         break;
                     }
                 }
@@ -332,15 +392,30 @@ if (in_array('courts', (array) $args, true)) {
         echo sprintf("%-50s %10.2f %10.2f %10.1f%% %9.2f %10.2f%s\n", $name, $s['opted_sat'] / max(1, $s['opted_n']), $s['other_sat'] / max(1, $s['other_n']),
             100 * $s['both'] / max(1, $s['opted_n']), $s['doubles'] / $s['seasons'], $s['dh_spread'] / max(1, $s['dh_spread_n']), $opt['outliers'] ? sprintf('  %11.2f', $s['outlier_sat'] / (2 * $s['seasons'])) : '');
     }
-    echo "\n" . sprintf("%-50s %8s %8s %8s %8s %8s %8s %8s %8s %8s %8s\n", 'Rule', 'Always', 'worst', 'Off', 'worst', 'Late', 'worst', '1st out', 'Back out', 'Twice', 'First');
-    echo str_repeat('-', 140) . "\n";
+    $f3 = function ($sum, $n) { return $n ? sprintf('%.3f', $sum / $n) : '-'; };
+    $pct = function ($sum, $n) { return $n ? sprintf('%.1f%%', 100 * $sum / $n) : '-'; };
+    echo "\n" . sprintf("%-50s %8s %8s %8s %8s %10s %8s %8s %10s\n", 'Rule', 'Always', 'worst', 'Off', 'worst', 'Always on', 'Late', 'worst', 'Always on');
+    echo sprintf("%-50s %8s %8s %8s %8s %10s %8s %8s %10s\n", '', '', '', '', '', 'its nights', '', '', 'its nights');
+    echo str_repeat('-', 122) . "\n";
     foreach ($rules as $name => $rule) {
         $s = $sum[$rule];
         $r = $s['rate'];
-        echo sprintf("%-50s %8.3f %8.3f %8.3f %8.3f %8s %8s %8s %8s %8d %8d\n", $name,
-            $r['aa'][0] / max(1, $r['aa'][1]), $r['aa'][2], $r['off'][0] / max(1, $r['off'][1]), $r['off'][2],
-            $r['late'][1] ? sprintf('%.3f', $r['late'][0] / $r['late'][1]) : '-', $r['late'][1] ? sprintf('%.3f', $r['late'][2]) : '-',
-            $s['late_n'] ? sprintf('%.1f%%', 100 * $s['late_first'] / $s['late_n']) : '-', $s['back_n'] ? sprintf('%.1f%%', 100 * $s['back_first'] / $s['back_n']) : '-',
+        $sm = $s['same'];
+        echo sprintf("%-50s %8s %8s %8s %8s %10s %8s %8s %10s\n", $name,
+            $f3($r['aa'][0], $r['aa'][1]), $r['aa'][1] ? sprintf('%.3f', $r['aa'][2]) : '-', $f3($r['off'][0], $r['off'][1]), $r['off'][1] ? sprintf('%.3f', $r['off'][2]) : '-',
+            $f3($sm['off'][1], $sm['off'][2]),
+            $f3($r['late'][0], $r['late'][1]), $r['late'][1] ? sprintf('%.3f', $r['late'][2]) : '-',
+            $f3($sm['late'][1], $sm['late'][2]));
+    }
+    echo "\n" . sprintf("%-50s %7s %15s %15s %15s %8s %8s %8s %8s %6s %6s\n", 'Rule', 'Ex. aa', 'Excess, off', 'Excess, late', 'aa (low/high)', '1st out', 'aa then', 'Back out', 'aa then', 'Twice', 'First');
+    echo str_repeat('-', 140) . "\n";
+    foreach ($rules as $name => $rule) {
+        $s = $sum[$rule];
+        $e = $s['excess'];
+        $ex = function ($g) use ($e) { return $e[$g][1] ? sprintf('%+.2f (%+.1f/%+.1f)', $e[$g][0] / $e[$g][1], $e[$g][2], $e[$g][3]) : '-'; };
+        echo sprintf("%-50s %7s %15s %15s %15s %8s %8s %8s %8s %6d %6d\n", $name,
+            $e['aa'][1] ? sprintf('%+.2f', $e['aa'][0] / $e['aa'][1]) : '-', $ex('off'), $ex('late'), $ex('aa'),
+            $pct($s['late_first'], $s['late_n']), $pct($s['late_aa'], $s['late_n']), $pct($s['back_first'], $s['back_n']), $pct($s['back_aa'], $s['back_n']),
             $s['twice'], $s['first']);
     }
     echo "\nSat/team = sit-outs per team per season (nights available with no game). Spread = most minus fewest sit-outs\n";
@@ -355,7 +430,12 @@ if (in_array('courts', (array) $args, true)) {
     echo "double-header nights (fill or spare slot) among the double-header teams available every night, per season." . ($opt['outliers'] ? "\nOutlier sat = sit-outs per season of teams 1 and 2 (each)." : '') . "\n";
     echo "Always / Off / Late = sit-outs per night available, the mean over teams available every night, teams there from\n";
     echo "night 1 with a night or more away, and late joiners; worst = the highest of any one such team in any season.\n";
-    echo "1st out = late joiners that sat out their first night. Back out = team 3 sat out its first night back (away=).\n";
+    echo "Always on its nights = the sit-outs per night of the teams available every night, on the nights each team away\n";
+    echo "some nights (Off) or late joiner (Late) was there: the yardstick for that team's rate beside it.\n";
+    echo "Excess = sit-outs minus the sum of the shares (sit-outs / teams available) of the nights the team was there:\n";
+    echo "0 when it sat out exactly its share, below 0 when less (the lowest and highest of any one team in brackets).\n";
+    echo "1st out = late joiners that sat out their first night; aa then = the teams available every night that sat\n";
+    echo "out that same night. Back out = team 3 sat out its first night back (away=), aa then likewise.\n";
     echo "Twice = nights a team that sat out its last night sat out again while a team that had never sat out played.\n";
     echo "First = sit-outs the guard moved first (a team that had never sat out, ahead of one that sat out its last night).\n";
     return;

@@ -332,6 +332,20 @@ $check('credited count: a week off, a can\'t-make-it and an owing night add the 
     wp_json_encode($cc));
 $check('...a team available every night has a whole count (the nights it sat out), and one that never sat out none',
     !isset($cc['byes'][1]) && !isset($cc['byes'][20]) && $cc['byes'][12] === 2.0);
+// A team approved after a night's fixtures were made, though before the night itself: the draw couldn't have
+// had it, so that night is a night before it joined (the night's share), not a sit-out. Ranked 1-6; 5 joined
+// on 2030-03-02 at 10:00, after night 1's fixtures (made 2030-03-01) and before its date (2030-03-03); 6 was
+// in the league and sat out. Night 2 was made after 5 joined, and 5 sat out it: a sit-out. Team 4, approved
+// before night 1 was made, sat out it as usual.
+$ja = RSL_Pairing::sat_out_counts(array(
+    array('date' => '2030-03-03', 'made' => '2030-03-01 09:00:00', 'off' => array(), 'games' => array(array('ranked', 1, 2))),
+    array('date' => '2030-03-10', 'made' => '2030-03-08 09:00:00', 'off' => array(), 'games' => array(array('ranked', 1, 3), array('ranked', 2, 6))),
+), array(1 => array('division' => 'ranked', 'joined' => '', 'joined_at' => '2030-02-01 09:00:00'), 2 => array('division' => 'ranked', 'joined' => ''),
+    3 => array('division' => 'ranked', 'joined' => ''), 4 => array('division' => 'ranked', 'joined' => '2030-02-28', 'joined_at' => '2030-02-28 18:00:00'),
+    5 => array('division' => 'ranked', 'joined' => '2030-03-02', 'joined_at' => '2030-03-02 10:00:00'), 6 => array('division' => 'ranked', 'joined' => '')));
+$check('a team approved after a night\'s fixtures were made (before its date) is away that night, not sat out: 5 gets night 1\'s share (3 of 5 sat out), then a sit-out on night 2 (made after it joined); 4, approved before night 1 was made, sat out it',
+    $near($ja['byes'], array(3 => 1, 4 => 2, 5 => 0.6 + 1, 6 => 1)) && $ja['sat'] === array(3 => 1, 4 => 2, 6 => 1, 5 => 1)
+    && $ja['last'] === array(4 => true, 5 => true), wp_json_encode($ja));
 $check('count_words(): whole counts as they are, fractions to one decimal place',
     RSL_Pairing::count_words(2.0) === '2' && RSL_Pairing::count_words(0) === '0' && RSL_Pairing::count_words(1.25) === '1.3'
     && RSL_Pairing::count_words(1 / 7) === '0.1' && RSL_Pairing::count_words(1.96) === '2'
@@ -346,11 +360,11 @@ $subsets = function ($list, $k) use (&$subsets) {
     return array_merge($with, $subsets($list, $k));
 };
 
-// The rule on fractional counts: a team sits out only when its count is at most sit_level (0.5) above
-// every team that plays. Six teams on two courts (two sit out): 1 on 0, 2 on 0.3, 3 on 0.6, 4-6 on 1.
-// 1 and 2 may sit out, or 1 and 3 (0.6 is within 0.5 of 2's 0.3); never 2 and 3 (1 would play on 0,
-// more than 0.5 below 3), nor any of 4-6 while 1 plays. With sit_level 0, 1 and 2 only.
-$frac = array(1 => 0, 2 => 0.3, 3 => 0.6, 4 => 1, 5 => 1, 6 => 1);
+// The rule on fractional counts: a team sits out only when its count is at most sit_level (0.3) above
+// every team that plays. Six teams on two courts (two sit out): 1 on 0, 2 on 0.3, 3 on 0.55, 4-6 on 1.
+// 1 and 2 may sit out, or 1 and 3 (0.55 is within 0.3 of 2's 0.3); never 2 and 3 (1 would play on 0,
+// more than 0.3 below 3), nor any of 4-6 while 1 plays. With sit_level 0.2, or 0, 1 and 2 only.
+$frac = array(1 => 0, 2 => 0.3, 3 => 0.55, 4 => 1, 5 => 1, 6 => 1);
 $family = function ($rule) use (&$subsets) {
     $sets = array();
     foreach ($rule['options'] as $o) {
@@ -363,8 +377,9 @@ $family = function ($rule) use (&$subsets) {
     ksort($sets);
     return array_keys($sets);
 };
-$check('fractional counts: 1 and 2, or 1 and 3 may sit out (counts within 0.5 are level); with sit_level 0, 1 and 2 only',
-    $family(RSL_Pairing::sit_out(range(1, 6), $frac, 2, array(), array(), $w, 'fr')) === array('1,2', '1,3')
+$check('fractional counts: sit_level is 0.3; 1 and 2, or 1 and 3 may sit out (counts within 0.3 are level); with sit_level 0.2 or 0, 1 and 2 only',
+    $w['sit_level'] === 0.3 && $family(RSL_Pairing::sit_out(range(1, 6), $frac, 2, array(), array(), $w, 'fr')) === array('1,2', '1,3')
+    && $family(RSL_Pairing::sit_out(range(1, 6), $frac, 2, array(), array(), array('sit_level' => 0.2) + $w, 'fr')) === array('1,2')
     && $family(RSL_Pairing::sit_out(range(1, 6), $frac, 2, array(), array(), array('sit_level' => 0.0) + $w, 'fr')) === array('1,2'));
 // Whole counts are never level: with 1 on 0 and 2-6 on 1, 1 always sits out.
 $check('...whole counts are never level with each other: 1 (on 0) always sits out first, whatever sit_level allows',
@@ -392,7 +407,7 @@ $kept = RSL_Pairing::pair_division(range(1, 7), $r7g, array(), $g7, $w, 'gd', nu
 $check('twice in a row: without the guard the far team 7 (sat out last night) would sit out again while 6 (never sat out) plays; with it 7 plays and another team level on the count sits out',
     array_keys($free['out']) === array(7) && count($kept['out']) === 1 && !isset($kept['out'][7]) && $kept['first'] === array(),
     wp_json_encode(array($free['out'], $kept['out'])));
-// When the count alone would put 7 out (its 1 is the lowest by more than 0.5) and 6, never sat out, is on
+// When the count alone would put 7 out (its 1 is the lowest by more than sit_level) and 6, never sat out, is on
 // 1.6: 6 goes first (first), 7 plays, and the reason says why.
 $g7b = array(1 => 2, 2 => 2, 3 => 2, 4 => 2, 5 => 2, 6 => 1.6, 7 => 1);
 $sat7b = array(1 => 2, 2 => 2, 3 => 2, 4 => 2, 5 => 2, 7 => 1);
@@ -404,6 +419,18 @@ $check('...and when the count would put 7 out again, the team that has never sat
 $odd5 = RSL_Pairing::pair_division(range(1, 5), $r(array(1 => 1500, 2 => 1500, 3 => 1500, 4 => 1500, 5 => 1900)), array(), array(1 => 1, 2 => 1, 3 => 1, 4 => 0.8, 5 => 1), $w, 'g5',
     null, null, array(), array(), array('sat' => array(1 => 1, 2 => 1, 3 => 1, 5 => 1), 'last' => array(5 => true)));
 $check('...on an odd night too: the team that sat out last night is never the bye while one that has never sat out plays', $odd5['bye'] !== 5 && count($odd5['out']) === 1, wp_json_encode($odd5['out']));
+// Not playing this night (explain_night()'s _first, went_first()) names the guard as the generate notice does: a
+// resting team that has never sat out, above the line by more than sit_level while a team that sat out its last
+// night plays. The count alone never puts a team out that far above one that plays, so that is the guard.
+$wl = array('sit_level' => 0.5) + $w;
+$check('went_first(): never sat out, 0.8 above the lowest team playing, and a team that sat out its last night plays; not within sit_level, not a team that has sat out, not with no such team playing',
+    RSL_Pairing::went_first(1.8, 1.0, true, true, $wl) && !RSL_Pairing::went_first(1.5, 1.0, true, true, $wl) && !RSL_Pairing::went_first(1.8, 1.0, false, true, $wl)
+    && !RSL_Pairing::went_first(1.8, 1.0, true, false, $wl) && !RSL_Pairing::went_first(1.8, null, true, true, $wl)
+    && RSL_Pairing::went_first(1.3, 1.0, true, true, array('sit_level' => 0.25) + $w));
+$check('resting_words(): the count against the teams playing, and the guard\'s reason when it put the team first',
+    RSL_Pairing::resting_words(1.0, 0.0) === 'bye — odd numbers or not enough courts; nights sat out before: 1, the teams playing 0 or more'
+    && RSL_Pairing::resting_words(1.8, 1.0, true) === 'bye — odd numbers or not enough courts; nights sat out before: 1.8, the teams playing 1 or more; it has never sat out, so it goes before a team that sat out its last night'
+    && RSL_Pairing::resting_words(0.4, null) === 'bye — odd numbers or not enough courts; nights sat out before: 0.4');
 
 // The rule against brute force: 400 small random nights (3 to 9 teams, 1 to 5 courts or no limit, counts
 // whole or with a share of nights away, random ratings, meetings, double-header teams and their
@@ -737,13 +764,17 @@ $check('context(): round 3 with only week one\'s results has no link term (one n
 
 // Byes: a team only sat out for the fixtures' sake if it was in the league by then (approved, not
 // just applied) and wasn't away: a week off, left out for owing, or said it couldn't make that night.
-// A night away counts its share of sit-outs instead (0.18.2). Five teams that weren't in week one.
+// A night away counts its share of sit-outs instead (0.18.2). Six teams that weren't in week one's draw,
+// all in the league before it was made except Late (approved the day after the night) and Drawn (approved
+// after week one's fixtures were made, before the night: the draw couldn't have had it).
 $extra = array();
-foreach (array('Bye', 'Late', 'Cant', 'Off', 'Owes') as $tag) {
+foreach (array('Bye', 'Late', 'Cant', 'Off', 'Owes', 'Drawn') as $tag) {
     $extra[$tag] = RSL_Teams::create($season, array('name' => "Pair $tag $suffix", 'division' => 'ranked', 'level' => 'solid'));
-    $wpdb->update(RSL_Database::table('teams'), array('created_at' => date('Y-m-d H:i:s', strtotime($nights[0]->night_date . ' -3 days'))), array('id' => $extra[$tag]->id));
+    $wpdb->update(RSL_Database::table('teams'), array('created_at' => date('Y-m-d H:i:s', strtotime($today . ' -3 days'))), array('id' => $extra[$tag]->id));
 }
 $wpdb->update(RSL_Database::table('teams'), array('decided_at' => date('Y-m-d 10:00:00', strtotime($nights[0]->night_date . ' +1 day'))), array('id' => $extra['Late']->id));
+$week1_made = $wpdb->get_var($wpdb->prepare("SELECT MIN(created_at) FROM " . RSL_Database::table('games') . " WHERE night_id = %d", $nights[0]->id));
+$wpdb->update(RSL_Database::table('teams'), array('decided_at' => date('Y-m-d H:i:s', strtotime($week1_made . ' +1 minute'))), array('id' => $extra['Drawn']->id));
 foreach (array('Cant' => array('cant_make', 'handled'), 'Off' => array('off', 'active'), 'Owes' => array('unpaid', 'handled')) as $tag => $req) {
     $wpdb->insert(RSL_Database::table('requests'), array('team_id' => $extra[$tag]->id, 'night_id' => $nights[0]->id, 'type' => $req[0], 'status' => $req[1],
         'requested_by' => 0, 'requested_at' => current_time('mysql')));
@@ -753,11 +784,11 @@ $bye_id = intval($extra['Bye']->id);
 $check('a team in the league but left out of a night has sat out once (and sat out its last night)', isset($ctx['byes'][$bye_id]) && abs($ctx['byes'][$bye_id] - 1) < 1e-9
     && $ctx['sat'][$bye_id] === 1 && !empty($ctx['last'][$bye_id]), wp_json_encode($ctx['byes']));
 $away_ok = true;
-foreach (array('Late', 'Cant', 'Off', 'Owes') as $tag) {
+foreach (array('Late', 'Cant', 'Off', 'Owes', 'Drawn') as $tag) {
     $id = intval($extra[$tag]->id);
     $away_ok = $away_ok && isset($ctx['byes'][$id]) && abs($ctx['byes'][$id] - 1 / 7) < 1e-6 && !isset($ctx['sat'][$id]) && empty($ctx['last'][$id]);
 }
-$check('...one away that night (approved after it, can\'t make it, a week off, left out for owing) gets the night\'s share instead: 1/7, as one of the seven Ranked teams available sat out',
+$check('...one away that night (approved after it, approved after its fixtures were made, can\'t make it, a week off, left out for owing) gets the night\'s share instead: 1/7, as one of the seven Ranked teams available sat out',
     $away_ok, wp_json_encode($ctx['byes']));
 // A game in any division counts (0.18.2). A team moved from Unranked to Ranked after week one played
 // that night: before, Ranked was judged first and on its own games only, so the move counted week one
@@ -816,6 +847,8 @@ $ux = array();
 foreach (array(1, 2, 3, 4, 5) as $i) {
     $ux[] = intval(RSL_Teams::create($season, array('name' => "Pair UX$i $suffix", 'division' => 'unranked', 'level' => 'new'))->id);
 }
+// In the league before week one's fixtures were made, so it counts as a night they sat out.
+$wpdb->query("UPDATE " . RSL_Database::table('teams') . " SET created_at = '" . esc_sql(date('Y-m-d H:i:s', strtotime($today . ' -3 days'))) . "' WHERE id IN (" . implode(',', $ux) . ")");
 $plan2 = RSL_Pairing::plan($nights[1]->id);
 $uout = isset($plan2['divisions']['unranked']) ? $plan2['divisions']['unranked']['out'] : array();
 $ugames = isset($plan2['divisions']['unranked']) ? $plan2['divisions']['unranked']['games'] : array();
@@ -960,6 +993,7 @@ $check('admin page offers automatic fixtures on an empty night', strpos($html, '
 $_GET = array('page' => 'rsl-fixtures', 'season' => $season, 'night' => $nights[1]->id);
 // A team with no game that night (in the league for week one too, with no game then either).
 $rest = RSL_Teams::create($season, array('name' => "Pair Rest $suffix", 'division' => 'unranked', 'level' => 'new'));
+$wpdb->update(RSL_Database::table('teams'), array('created_at' => date('Y-m-d H:i:s', strtotime($today . ' -3 days'))), array('id' => $rest->id)); // in the league before week one was drawn
 // And one that said it can't make that night: its own choice, so no count.
 $cant_team = RSL_Teams::create($season, array('name' => "Pair Cant2 $suffix", 'division' => 'unranked', 'level' => 'new'));
 $wpdb->insert(RSL_Database::table('requests'), array('team_id' => $cant_team->id, 'night_id' => $nights[1]->id, 'type' => 'cant_make', 'status' => 'handled',
