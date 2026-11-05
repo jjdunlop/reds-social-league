@@ -118,7 +118,11 @@ finals (see `CLAUDE.md`).
     out of a night by hand (its game removed, or a night's fixtures made
     by hand without it) counts as having sat out that night, not as away.
     Whether a night was drawn before a team joined goes by the night's
-    earliest game, so a game added by hand later doesn't change it.
+    earliest game, so a game added by hand later doesn't change it. On
+    *Not playing this night* the same goes: a team taken out by hand, or
+    one whose week off was cancelled after the draw, is listed with its
+    count as if the draw had rested it, and can get the guard's words
+    (below).
   - A team that moved division is judged by its old division on a night
     between its last game there and its first game in the new one, and
     counts among the old division's teams for that night's share, which
@@ -154,15 +158,22 @@ finals (see `CLAUDE.md`).
   teams playing 1 or more)", or "Bye, odd number of teams (...)". A team
   the twice-in-a-row rule put first adds "it has never sat out, so it
   goes before a team that sat out its last night", in the reason and on
-  *Not playing this night* (there, a resting team that has never sat out
-  and is more than 0.3 above the teams playing while one that sat out its
-  last night plays: the count alone never allows that). After *Make
-  fixtures automatically* the notice lists who isn't playing and why
-  (week off and owing reasons unchanged). *Not playing this night* gives
-  each resting team's count and the lowest among the teams playing in its
-  division; a team that said it can't make the night is listed as that,
-  with no count. *How automatic fixtures are made* has a *Sitting out*
-  item.
+  *Not playing this night* (there, a resting team that was in the draw,
+  has never sat out and is more than 0.3 above the teams playing while
+  one that sat out its last night plays: the count alone never allows
+  that). After *Make fixtures automatically* the notice lists who isn't
+  playing and why (week off and owing reasons unchanged). *Not playing
+  this night* gives each resting team's count and the lowest among the
+  teams playing in its division; a team that said it can't make the night
+  is listed as that, with no count. A team that joined after the night's
+  fixtures were made is listed as "joined the league after this night was
+  drawn", with "remake the night to give it a game" while the night is a
+  draft with no results, and one that joined after the night as "joined
+  the league after this night": no count, and never the guard's words,
+  as the draw never had it. In the earlier builds of this release such a
+  team got a count made of its shares of earlier nights and, from
+  f60fc11, when a team that sat out its last night played, the guard's
+  words too. *How automatic fixtures are made* has a *Sitting out* item.
 - **Code.** `RSL_Pairing::pair_division()` takes the night's slots
   (`$room`), the double-header teams (`$opted`), their double-header
   nights (`$doubles`) and the twice-in-a-row guard (`$guard`: each team's
@@ -173,22 +184,38 @@ finals (see `CLAUDE.md`).
   each top count from the line up) and the guard. `sat_out_counts()` is
   the count (`byes`, with the shares), `sat` (nights actually sat out),
   `last` and `doubles`; a night may carry `made` (its earliest game's
-  time) and a team `joined_at` (its approval or creation time).
+  time) and a team `joined_at` (its approval or creation time);
+  `joined_after()` is the one rule for whether a team wasn't in the
+  league yet for a night (after its date, or after its fixtures were
+  made), read by the count and by `explain_night()`.
   `fill_for()` is the fill game, `can_play_twice()` the one-start-time
   check, `match_out()` the matching with k sit-out places (exact up to
   `EXACT_LIMIT` teams and places together, the local search above, both
   kept within the rule by `NEVER`), `sit_out_words()` the admin reason,
-  `resting_words()` the *Not playing this night* line, `went_first()`
-  whether the guard put a resting team first (`explain_night()`'s
-  `_first`), `FIRST_WORDS` the guard's words and `count_words()` the
-  numbers. `trim()` is gone: the draw never makes more games than slots.
-  The `bye` weight is gone; `odd_double` (8) takes over its one remaining
-  job, the double-header preference; `odd_sit` (20) and `sit_level`
-  (0.3) are new. A `rsl_pairing_weights` filter that sets `bye` no longer
-  does anything; a `sit_level` above 0.5 is taken as 0.5. An even
-  division with a slot for every game is drawn exactly as before
+  `resting_words()` the *Not playing this night* line, `late_words()` the
+  line for a team that joined after the night was drawn (`explain_night()`'s
+  `_late`), `went_first()` whether the guard put a resting team first
+  (`explain_night()`'s `_first`, never for a `_late` team), `FIRST_WORDS`
+  the guard's words and `count_words()` the numbers. `trim()` is gone:
+  the draw never makes more games than slots. `plan()` still puts the
+  games cheapest first, as `trim()` did, because `assign_slots()` starts
+  from the games in that order and its search can end on different courts
+  and times from a different start (the earlier builds of this release,
+  17a3aa2 to abce4d3, left them in the matching's order: the same games
+  and home teams, but most even nights then got different courts and
+  some different start times). The `bye` weight is gone; `odd_double` (8)
+  takes over its one remaining job, the double-header preference;
+  `odd_sit` (20) and `sit_level` (0.3) are new. A `rsl_pairing_weights`
+  filter that sets `bye` no longer does anything; a `sit_level` above 0.5
+  is taken as 0.5. An even division with a slot for every game is drawn
+  exactly as before: the same games, home teams, courts and times
   (checked: `simulate-ratings.php ladder rounds=9 runs=40 seed=3000
-  age=0` and `simulate-pairing.php runs=6` print the same as 0.18.1).
+  age=0` and `simulate-pairing.php runs=6` print the same as 0.18.1, and
+  0.18.1's and 0.18.2's `plan()`, run on the same history in random
+  seasons of 5 to 14 Ranked and 3 to 10 Unranked teams with weeks off,
+  late joiners and owing teams, gave the same draw on every such night:
+  1514, 1534 and, on PHP 7.4, 1581 nights in 300 seasons each, and 296
+  nights with 19 to 21 Ranked teams).
 - **Simulated** (`wp eval-file dev/simulate-pairing.php courts runs=1000
   join=6`: a Ranked division of 12 to 14 teams over 10 nights, 5 game
   slots on 30% of nights, 6 on 30%, room for everyone on the rest, a week
@@ -300,15 +327,20 @@ finals (see `CLAUDE.md`).
   there every night. With shares and counts within 0.3 level, the team
   back from away sits out its first night back in 28.2% of seasons
   against 24.6%, and 0.05 of a night under its share; the late joiner
-  0.19 under (0.191 against 0.234 a night). Its credited count (about
-  0.9) is level with the teams on 1, so the cost decides, and it almost
-  never sits out its first night (0.8%). With counts within 0.5 level
-  both drift further under (0.24 and 0.34), and the team back from away
-  sits out its first night back in 6.9% of seasons. The spread among the
-  teams there every night stays at most 1 under every 0.18.2 rule, and
-  ordinary games are about as close as with nights sat out only (0.897
-  against 0.891). Where courts are short only some nights, or weeks off are
-  scattered, the shares are small and the counts draw almost alike.
+  0.19 under (0.191 against 0.234 a night). It almost never sits out its
+  first night (0.8%), for a reason that depends on the team count (the
+  run has 12 to 14 teams). With 14 teams its credited count is about
+  0.9, level with the teams on 1, so the cost decides. With 13 it is
+  about 0.5, more than 0.3 above teams on 0 that play, so the count
+  itself keeps it playing. With 12 it is about 0.1, level with the teams
+  on 0, and the cost decides among nearly all of them. With counts
+  within 0.5 level both drift further under (0.24 and 0.34), and the team
+  back from away sits out its first night back in 6.9% of seasons. The
+  spread among the teams there every night stays at most 1 under every
+  0.18.2 rule, and ordinary games are about as close as with nights sat
+  out only (0.897 against 0.891). Where courts are short only some
+  nights, or weeks off are scattered, the shares are small and the counts
+  draw almost alike.
 
   Across shapes (`courts runs=1000` with each of these options, and again
   with `seed=20000`; `level=0,0.2,0.25,0.35,0.5` for the other rows):
@@ -379,7 +411,8 @@ finals (see `CLAUDE.md`).
   counts within it level, at 0.2 and 0 not, whole counts never level, the
   cost choosing among level teams); the twice-in-a-row guard (kept within
   the count, the never-sat-out team put first when the count leaves no
-  choice, an odd night), `went_first()` and `resting_words()`; the rule
+  choice, an odd night), `went_first()`, `resting_words()`,
+  `joined_after()` and `late_words()`; the rule
   against brute force on 400 random nights with fractional counts and the
   guard (every choice that keeps it, every pairing, the exact cost); every
   season the rule allows on 60 small random seasons with weeks off and
@@ -389,9 +422,13 @@ finals (see `CLAUDE.md`).
   `context()` for a team moved from Unranked to Ranked, for the share of
   a night away (approved after the night, approved after its fixtures
   were made, can't make it, a week off, left out for owing), for a night
-  left out for owing and for a called-off night; `plan()`'s court sit-out
-  reason, the admin *Not playing this night* line (with a can't-make-it
-  team), and the *Make fixtures automatically* notice.
+  left out for owing and for a called-off night; `explain_night()` for a
+  team approved after the night or after its fixtures were made (`_late`,
+  never `_first`, also where its count and a team that sat out its last
+  night playing would make `went_first()` say so); `plan()`'s court
+  sit-out reason, the admin *Not playing this night* line (with a
+  can't-make-it team, and a team approved after the night was drawn),
+  and the *Make fixtures automatically* notice.
 
 ## A results-only ladder, finals on games played, no protected tier, and finished sets count whole (0.18.1)
 

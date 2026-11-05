@@ -431,6 +431,18 @@ $check('resting_words(): the count against the teams playing, and the guard\'s r
     RSL_Pairing::resting_words(1.0, 0.0) === 'bye — odd numbers or not enough courts; nights sat out before: 1, the teams playing 0 or more'
     && RSL_Pairing::resting_words(1.8, 1.0, true) === 'bye — odd numbers or not enough courts; nights sat out before: 1.8, the teams playing 1 or more; it has never sat out, so it goes before a team that sat out its last night'
     && RSL_Pairing::resting_words(0.4, null) === 'bye — odd numbers or not enough courts; nights sat out before: 0.4');
+// A team that joined after a night, or after its fixtures were made, wasn't in that draw (joined_after(), the one
+// rule for the count and the board): the board says so with no count, and never names the guard for it.
+$check('joined_after(): after the night\'s date is night, after its fixtures were made is draw, before both (or a time unknown) is neither',
+    RSL_Pairing::joined_after('2030-03-04', '2030-03-04 10:00:00', '2030-03-03', '2030-03-01 09:00:00') === 'night'
+    && RSL_Pairing::joined_after('2030-03-02', '2030-03-02 10:00:00', '2030-03-03', '2030-03-01 09:00:00') === 'draw'
+    && RSL_Pairing::joined_after('2030-03-01', '2030-03-01 08:59:59', '2030-03-03', '2030-03-01 09:00:00') === ''
+    && RSL_Pairing::joined_after('2030-03-02', '2030-03-02 10:00:00', '2030-03-03', '') === ''
+    && RSL_Pairing::joined_after('', '', '2030-03-03', '2030-03-01 09:00:00') === '');
+$check('late_words(): joined after the night was drawn, and how to give it a game while the night can be remade; joined after the night itself',
+    RSL_Pairing::late_words('draw', true) === 'joined the league after this night was drawn; remake the night to give it a game'
+    && RSL_Pairing::late_words('draw', false) === 'joined the league after this night was drawn'
+    && RSL_Pairing::late_words('night', true) === 'joined the league after this night');
 
 // The rule against brute force: 400 small random nights (3 to 9 teams, 1 to 5 courts or no limit, counts
 // whole or with a share of nights away, random ratings, meetings, double-header teams and their
@@ -790,6 +802,16 @@ foreach (array('Late', 'Cant', 'Off', 'Owes', 'Drawn') as $tag) {
 }
 $check('...one away that night (approved after it, approved after its fixtures were made, can\'t make it, a week off, left out for owing) gets the night\'s share instead: 1/7, as one of the seven Ranked teams available sat out',
     $away_ok, wp_json_encode($ctx['byes']));
+// The board for week one says the same: Drawn joined after the night was drawn and Late after the night, so
+// neither has a count to show or was put first by the guard; Bye was in the draw.
+$why_w1 = RSL_Pairing::explain_night($nights[0]->id);
+$drawn_id = intval($extra['Drawn']->id);
+$late_id = intval($extra['Late']->id);
+$check('explain_night(): on week one, the team approved after its fixtures were made is _late (draw), the one approved after the night _late (night), neither _first; the team in the league all along is not _late',
+    in_array($drawn_id, $why_w1['_resting'], true) && isset($why_w1['_late'][$drawn_id]) && $why_w1['_late'][$drawn_id] === 'draw'
+    && isset($why_w1['_late'][$late_id]) && $why_w1['_late'][$late_id] === 'night' && !isset($why_w1['_first'][$drawn_id]) && !isset($why_w1['_first'][$late_id])
+    && in_array($bye_id, $why_w1['_resting'], true) && !isset($why_w1['_late'][$bye_id]),
+    wp_json_encode(array($why_w1['_resting'], $why_w1['_late'], $why_w1['_first'])));
 // A game in any division counts (0.18.2). A team moved from Unranked to Ranked after week one played
 // that night: before, Ranked was judged first and on its own games only, so the move counted week one
 // as a sit-out. And a double-header night is one night played, not a sit-out.
@@ -839,6 +861,22 @@ $cx_byes = (array) $cx['byes'];
 ksort($cx_byes);
 $check('...published, the same past night counts: 3 and 4 sat out it too, and 1 met 2',
     $cx_byes === array($pt[2] => 1.0, $pt[3] => 1.0, $pt[4] => 2.0) && isset($cx['meetings'][RSL_Pairing::meeting_key($pt[1], $pt[2])]), wp_json_encode($cx['byes']));
+// Not playing this night for a team approved after the night was drawn (0.18.2 review): the fourth night's draft
+// (1 v 3) was made before Joiner was approved. Joiner has never sat out and its share of the first night (2 of
+// 4 sat out) puts it on 0.5, more than sit_level above 1 (on 0, playing), while 3 (sat out its last night)
+// plays: went_first() alone would say the guard put it first. It was never in that draw, so it is _late instead.
+$joiner = 0;
+if (count($pn) === 5) {
+    $joiner = intval(RSL_Teams::create($season_past, array('name' => "Pair Joiner $suffix", 'division' => 'ranked', 'level' => 'solid'))->id);
+    $made4 = $wpdb->get_var($wpdb->prepare("SELECT MIN(created_at) FROM " . RSL_Database::table('games') . " WHERE night_id = %d", $pn[3]->id));
+    $wpdb->update(RSL_Database::table('teams'), array('created_at' => date('Y-m-d H:i:s', strtotime($made4 . ' +1 minute')), 'decided_at' => null), array('id' => $joiner));
+}
+$why4 = $joiner ? RSL_Pairing::explain_night($pn[3]->id) : array('_sat_out' => array(), '_fewest' => array(), '_late' => array(), '_first' => array());
+$check('explain_night(): a team approved after the night was drawn, never sat out, 0.5 against the teams playing on 0 while a team that sat out its last night plays, is _late (draw) and never _first',
+    $joiner && isset($why4['_sat_out'][$joiner]) && abs($why4['_sat_out'][$joiner] - 0.5) < 1e-6 && isset($why4['_fewest']['ranked']) && $why4['_fewest']['ranked'] == 0
+    && RSL_Pairing::went_first($why4['_sat_out'][$joiner], $why4['_fewest']['ranked'], true, true, $w)
+    && isset($why4['_late'][$joiner]) && $why4['_late'][$joiner] === 'draw' && !isset($why4['_first'][$joiner]),
+    wp_json_encode(array($why4['_sat_out'], $why4['_fewest'], $why4['_late'], $why4['_first'])));
 // plan() with too few courts (0.18.2): five more Unranked teams for three Unranked slots. The five new
 // teams were in the league for week one with no game (one night sat out each); the three that played
 // week one are on none (the double-header team owes for its two games, so it's out for that), so the
@@ -1009,6 +1047,16 @@ $check('admin page shows set chances (not expected scores) and meetings', strpos
 $check('admin page: Not playing this night gives a resting team\'s nights sat out before, against the teams playing in its division',
     strpos($html, esc_html("Pair Rest $suffix (bye — odd numbers or not enough courts; nights sat out before: 1, the teams playing 0 or more)")) !== false
     && strpos($html, 'Sitting out:') !== false);
+// The past season's fourth night (a draft) with the team approved after it was drawn (above).
+$html_j = '';
+if ($joiner) {
+    $_GET = array('page' => 'rsl-fixtures', 'season' => $season_past, 'night' => $pn[3]->id);
+    ob_start(); (new RSL_Admin_Fixtures())->render(); $html_j = ob_get_clean();
+}
+$check('admin page: Not playing this night lists a team approved after the night was drawn as that, with no count and no guard words, and says to remake the night',
+    $joiner && strpos($html_j, esc_html("Pair Joiner $suffix (joined the league after this night was drawn; remake the night to give it a game)")) !== false
+    && strpos($html_j, esc_html("Pair Joiner $suffix (bye")) === false && strpos($html_j, esc_html(RSL_Pairing::FIRST_WORDS)) === false,
+    $joiner ? '' : 'no joiner');
 $_GET = array('page' => 'rsl-fixtures', 'season' => $season, 'night' => $n3->id);
 ob_start(); (new RSL_Admin_Fixtures())->render(); $html = ob_get_clean();
 $check('admin page shows the link term on a game it brought about, and explains it', strpos($html, 'Links two groups that haven') !== false

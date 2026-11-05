@@ -66,8 +66,8 @@
  * there is no fill game and no double-header (can_play_twice()).
  *
  * The core (pair_division, sit_out, fill_for, match, match_out,
- * sat_out_counts, can_play_twice, assign_slots, set_win_probability) is
- * pure — no database — so it can be tested and
+ * sat_out_counts, joined_after, can_play_twice, assign_slots,
+ * set_win_probability) is pure — no database — so it can be tested and
  * simulated over whole seasons (dev/simulate-pairing.php). plan()/generate()
  * wrap it for a real night.
  */
@@ -681,8 +681,8 @@ class RSL_Pairing {
                 }
                 if (isset($played[$id])) {
                     $s = 'played';
-                } elseif (!empty($n['off'][$id]) || ($t['joined'] !== '' && $t['joined'] > $n['date'])
-                    || (!empty($t['joined_at']) && !empty($n['made']) && $t['joined_at'] > $n['made'])) {
+                } elseif (!empty($n['off'][$id])
+                    || self::joined_after($t['joined'], isset($t['joined_at']) ? $t['joined_at'] : '', $n['date'], isset($n['made']) ? $n['made'] : '') !== '') {
                     $s = 'away';
                 } else {
                     $s = 'sat';
@@ -710,6 +710,26 @@ class RSL_Pairing {
             $out['byes'][$id] = round($x, 6);
         }
         return $out;
+    }
+
+    /**
+     * Whether a team wasn't in the league yet for a night (pure; the one rule
+     * for sat_out_counts() and explain_night()). A team joins when it is
+     * approved, or for a team an admin made, when it is created. $joined:
+     * that date ('Y-m-d' or ''); $joined_at: that time ('Y-m-d H:i:s' or '');
+     * $date: the night's date; $made: when its fixtures were made, the
+     * earliest of its games ('' when unknown). Returns 'night' when the team
+     * joined after the night's date, 'draw' when it joined after the night's
+     * fixtures were made (so the draw couldn't have had it), else ''.
+     */
+    public static function joined_after($joined, $joined_at, $date, $made) {
+        if ((string) $joined !== '' && (string) $joined > (string) $date) {
+            return 'night';
+        }
+        if ((string) $joined_at !== '' && (string) $made !== '' && (string) $joined_at > (string) $made) {
+            return 'draw';
+        }
+        return '';
     }
 
     /**
@@ -1236,9 +1256,13 @@ class RSL_Pairing {
             // Who sits out, if anyone: the teams with the lowest sit-out counts (sit_out()).
             $result = self::pair_division($ids, $ratings, $ctx['meetings'], $ctx['byes'], $w, $salt, $link, count($slots), $opted, $ctx['doubles'],
                 array('sat' => $ctx['sat'], 'last' => $ctx['last']));
+            // Cheapest games first, as trim() put them before 0.18.2: assign_slots() starts from the games
+            // in this order, so a division with a slot for every game gets the same courts and times as before.
+            $pairs = $result['pairs'];
+            usort($pairs, function ($x, $y) { return $x[2]['cost'] <=> $y[2]['cost']; });
             $games = array();
             $tonight = array();
-            foreach ($result['pairs'] as $p) {
+            foreach ($pairs as $p) {
                 $games[] = array($p[0], $p[1], 'single', $p[2]);
                 $tonight[$p[0]][] = $p[1];
                 $tonight[$p[1]][] = $p[0];
@@ -1357,12 +1381,28 @@ class RSL_Pairing {
     }
 
     /**
+     * A resting team's line under *Not playing this night* when it joined
+     * after the night was drawn (explain_night()'s _late; pure, for admins).
+     * The draw never had it, so there's no count and no guard. $when: 'night'
+     * (joined after the night's date) or 'draw' (after its fixtures were
+     * made, joined_after()); $remake: the night can still be remade (not
+     * published, no results), so the words say how to give it a game.
+     */
+    public static function late_words($when, $remake) {
+        if ($when === 'night') {
+            return 'joined the league after this night';
+        }
+        return 'joined the league after this night was drawn' . ($remake ? '; remake the night to give it a game' : '');
+    }
+
+    /**
      * Whether the twice-in-a-row guard put a resting team first, as far as a
      * saved night shows it (pure; explain_night()): the team has never sat
      * out ($never), a team in its division that sat out its last night plays
      * ($last_plays), and its count ($before) is more than sit_level above the
      * lowest among the teams playing ($fewest), which the count alone never
-     * allows.
+     * allows. explain_night() asks only for a team that was in the league
+     * when the night was drawn: one that joined later is _late, never first.
      */
     public static function went_first($before, $fewest, $never, $last_plays, $w) {
         $level = isset($w['sit_level']) ? min(0.5, max(0.0, (float) $w['sit_level'])) : 0.0;
@@ -1443,8 +1483,11 @@ class RSL_Pairing {
      * plus _resting (teams with no game), _sat_out (resting team => its
      * sit-out count before this night, context()'s byes, a float), _fewest
      * (division => the lowest count before this night among its teams with
-     * a game) and _first (resting team => true when the twice-in-a-row guard
-     * put it first, went_first()).
+     * a game), _late (resting team => 'night' or 'draw' when it joined the
+     * league after the night or after the night's fixtures were made, the
+     * earliest of its games, joined_after(): the draw never had it) and
+     * _first (resting team, never a _late one => true when the
+     * twice-in-a-row guard put it first, went_first()).
      */
     public static function explain_night($night_id) {
         $night = RSL_Courts::get_night($night_id);
@@ -1497,9 +1540,30 @@ class RSL_Pairing {
                 }
             }
         }
+        // A resting team that joined after the night, or after its fixtures were made (the earliest game, as
+        // context() takes it for earlier nights), wasn't in the draw: it has no count to show and the guard
+        // never put it first.
+        $made = '';
+        foreach ($games as $g) {
+            if (!empty($g->created_at) && ($made === '' || $g->created_at < $made)) {
+                $made = (string) $g->created_at;
+            }
+        }
+        $out['_late'] = array();
+        foreach ($out['_resting'] as $t) {
+            $team = $ctx['teams'][$t];
+            $late = self::joined_after(RSL_Stats::joined_date($team), (string) (!empty($team->decided_at) ? $team->decided_at : $team->created_at),
+                $night->night_date, $made);
+            if ($late !== '') {
+                $out['_late'][$t] = $late;
+            }
+        }
         // A resting team the guard put first: its count is above the line, and the reason says why.
         $out['_first'] = array();
         foreach ($out['_resting'] as $t) {
+            if (isset($out['_late'][$t])) {
+                continue;
+            }
             $division = $ctx['teams'][$t]->division;
             if (self::went_first($out['_sat_out'][$t], isset($out['_fewest'][$division]) ? $out['_fewest'][$division] : null,
                 empty($ctx['sat'][$t]), !empty($last_plays[$division]), $w)) {
