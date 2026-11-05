@@ -8,31 +8,73 @@ finals (see `CLAUDE.md`).
 
 ## Fair sit-outs when courts are short (0.18.2)
 
-- **Sitting out goes by nights.** When a division has more teams than the
-  night's games can hold (an odd number, or not enough courts), the teams
-  that sit out are the ones that have sat out the fewest nights so far. A
-  team that sits out has sat out no more nights before than any team in
-  its division that plays, so nobody sits out a second time while an
-  available team in the division has never sat out. A night with a
-  double-header counts as one night played. Before, the court trim
-  dropped the dearest games by the draw's cost and never looked at who
-  had sat out, so the teams hardest to match (the top and bottom of
-  Ranked, teams with many rematches) could sit out night after night.
-- **Ties go by cost.** Among the teams on the same count, the draw's own
-  cost decides: the cheapest games for the teams that play, link term
-  included. For who sits out, the link term only decides between teams
-  on the same count; it never puts a team out ahead of one that has sat
-  out fewer nights. It still shapes the games of the teams that play.
+- **Sitting out goes by a count of nights.** When a division has more
+  teams than the night's games can hold (an odd number, or not enough
+  courts), the teams that sit out are the ones with the lowest sit-out
+  count. Each night a team sat out counts 1. A night with a double-header
+  counts as one night played. Before, the court trim dropped the dearest
+  games by the draw's cost and never looked at who had sat out, so the
+  teams hardest to match (the top and bottom of Ranked, teams with many
+  rematches) could sit out night after night.
+- **Nights away count their share.** Each night a team was away (a week
+  off, a night it said it couldn't make, a night the automatic draw left
+  it out for owing money, or a night before it joined) adds that night's
+  share of sit-outs in its division: the teams that sat out divided by the
+  teams available. If 3 of the 12 teams there sat out, the team away gets
+  0.25. So the count measures sit-outs per night a team was there, as if
+  it had sat out its share of the nights it missed, and a team that joins
+  late or comes back from time away isn't first in line for having been
+  away. A night with no sit-outs adds nothing, so a team there every night
+  has a whole count: the nights it sat out. In the first 0.18.2 build the
+  count was nights sat out only, and in a season short of courts a team
+  joining on night 6 sat out its first night in 37% of seasons (simulated
+  below); now 1.1%.
+- **Counts within half a night are level.** A team sits out only when its
+  count is at most 0.5 above every team in its division that plays (weight
+  `sit_level`). Teams there every night have whole counts, a night apart,
+  so none of them sits out while one of them that has sat out fewer nights
+  plays, and their counts stay at most one apart. Why half a night and not
+  exact: counts with shares rarely tie, and compared exactly a share just
+  under a whole number puts the team out first for a whole night. In the
+  tight run below (with 14 teams a late joiner is credited about 0.9, just
+  under the 1 most teams there every night are on, and a team back from
+  four nights away about 0.67), compared exactly the late joiner sat out
+  its first night in 34% of seasons and the team back from away in 28%,
+  and both sat out more per night than the teams there every night. With
+  counts within 0.5 level, the cost chooses among them: 1.1% and 6.9%,
+  sit-outs per night that match the teams there every night (0.162 and
+  0.179 against 0.176), and closer games (ordinary games 0.880, against
+  0.916 exact and 0.891 for nights sat out only). A quarter of a night
+  (0.25) sits in between (0.8% and 28.2%; 0.191 and 0.210; ordinary games
+  0.897). Half a night is the most allowed: at 1, whole counts would be
+  level and teams there every night could drift two nights apart.
+- **No twice in a row while a team has never sat out.** A team that sat
+  out its last night (the last night it was there) doesn't sit out again
+  while a team in its division that has never sat out plays. A team that
+  has never sat out can still have a count level with or above one that
+  has, from its shares of nights away, so this is a rule of its own (with
+  nights sat out only it followed from the count): among the choices the
+  count allows, the draw takes one where no such team sits out, or one
+  where every team that has never sat out sits out too. When the count
+  leaves no such choice, the teams that have never sat out go first, and
+  the reason says so. Without this rule the tight run below had 249 such
+  nights in 1000 seasons; with it, none, and the count never had to give
+  way (no team was put first).
+- **Ties go by cost.** Among level teams, the draw's own cost decides: the
+  cheapest games for the teams that play, link term included. For who
+  sits out, the link term only decides between level teams; it never
+  puts a team out ahead of one whose count is more than half a night
+  lower. It still shapes the games of the teams that play.
 - **Odd nights.** With a court to spare, the odd team plays a team that
   opted into double-headers when one qualifies (the fill game, with the
   same checks as before: never a third meeting, last week's opponent, or
   a game more lopsided than about 83/17), and then nobody sits out. When
-  the team with the fewest nights sat out has no such game but another
-  team has, that other team is the odd team. The exception: when every
-  way to give a fill game would need a third meeting or last week's
-  opponent in another game, a team on the fewest nights sat out sits out
-  instead (weight `odd_sit`, 20: above any normal game, below those two).
-  Among tied teams a double-header team costs 8 more to be the odd one out
+  the team with the lowest count has no such game but another team has,
+  that other team is the odd team. The exception: when every way to give
+  a fill game would need a third meeting or last week's opponent in
+  another game, a team level with the lowest count sits out instead
+  (weight `odd_sit`, 20: above any normal game, below those two). Among
+  level teams a double-header team costs 8 more to be the odd one out
   (weight `odd_double`: the old +2 on its count, at 4 a count), so it is
   the last picked unless that saves more than 8 in the night's games.
 - **Fill games are shared.** The fill partner is the double-header team
@@ -48,105 +90,172 @@ finals (see `CLAUDE.md`).
   that opted in, fairest first, as before. They are never handed out to
   make up for a sit-out, and the count never looks at them. They do add
   rematches, so on a tie a team that has had them is a little more likely
-  to be the one that sits out, never by more than the one night the rule
-  allows (simulated below: 0.66 nights a season for a double-header team
-  against 0.60 for the others).
-- **What counts as a night sat out** (`RSL_Pairing::sat_out_counts()`,
-  `context()`'s `byes`): a night the team's division at the time had
-  games, the team was in the league, it had no game in any division, and
-  it hadn't asked for the week off, said it couldn't make it, or been left
-  out for owing money by the automatic draw (recorded like a week off). A
+  to be the one that sits out (simulated below: 0.51 nights a season for
+  a double-header team against 0.46 for the others).
+- **What counts** (`RSL_Pairing::sat_out_counts()`, `context()`'s
+  `byes`): only nights the team's division at the time had games. A
   team's division on a night is the one of its last game on or before it,
-  else of its first game after it, else its division now. Fixed: a team
-  moved from Unranked to Ranked had the nights it played in Unranked
-  counted as sat out, and a night its old division had no courts too.
+  else of its first game after it, else its division now; a night before
+  a team joined is judged by the division it joined into. On such a night
+  the team played (a game in any division), sat out (in the league, no
+  game, not away) or was away. Fixed: a team moved from Unranked to
+  Ranked had the nights it played in Unranked counted as sat out, and a
+  night its old division had no courts too.
 - **Called-off nights don't count.** An earlier night that was never
   published and has started was called off (or never happened). Its draft
-  games add no sit-outs, meetings, home games or double-headers. Before,
-  the teams left out of that draft counted as having sat out a night
-  nobody played. A draft for a night still to come counts.
-- **Known limits.** The draw can't tell afterwards why a team had no game.
-  A team taken out of a night by hand (its game removed, or a night's
-  fixtures made by hand without it) counts as having sat out that night.
-  The count is nights, not a share of nights: a team that joins late or
-  comes back from weeks off has sat out fewer nights, so it sits out first
-  when courts are short, sometimes two nights running. A team that moved
-  division is judged by its old division on a night between its last game
-  there and its first game in the new one.
+  games add no sit-outs, shares, meetings, home games or double-headers.
+  Before, the teams left out of that draft counted as having sat out a
+  night nobody played. A draft for a night still to come counts.
+- **Known limits.** The draw can't tell afterwards why a team had no
+  game: a team taken out of a night by hand (its game removed, or a
+  night's fixtures made by hand without it) counts as having sat out that
+  night, not as away. A team that moved division is judged by its old
+  division on a night between its last game there and its first game in
+  the new one. A share is the night's average, so a team away on a night
+  short of courts is counted as an average team that night, whatever it
+  would have drawn. Sit-outs are whole nights and shares are fractions,
+  so in one season a team with a share sits out a little more or less
+  than its share. And teams with few games look like close games against
+  anyone (their ratings are uncertain), so among level teams the cost
+  prefers them to play: a late joiner sits out a little less per night
+  than the teams there every night (0.034 against 0.055 in the standard
+  run below, 0.041 with nights sat out only; 0.162 against 0.176 in the
+  tight run). A double-header team's extra rematches make it a little
+  more likely to lose a tie.
 - **Admins can see the rule hold.** A sit-out's reason gives the team's
-  count against the teams playing: "Not enough courts (nights sat out
-  before: this team 1, the teams playing 1 or more)", or "Bye, odd number
-  of teams (...)". After *Make fixtures automatically* the notice lists who
-  isn't playing and why (week off and owing reasons unchanged). *Not
-  playing this night* gives each resting team's count and the fewest among
-  the teams playing in its division; a team that said it can't make the
-  night is listed as that, with no count. *How automatic fixtures are
-  made* has a *Sitting out* item.
+  count against the teams playing, to one decimal place when it has a
+  share: "Not enough courts (nights sat out before: this team 1.3, the
+  teams playing 1 or more)", or "Bye, odd number of teams (...)". A team
+  the twice-in-a-row rule put first adds "it has never sat out, so it
+  goes before a team that sat out its last night". After *Make fixtures
+  automatically* the notice lists who isn't playing and why (week off and
+  owing reasons unchanged). *Not playing this night* gives each resting
+  team's count and the lowest among the teams playing in its division; a
+  team that said it can't make the night is listed as that, with no
+  count. *How automatic fixtures are made* has a *Sitting out* item.
 - **Code.** `RSL_Pairing::pair_division()` takes the night's slots
-  (`$room`), the double-header teams (`$opted`) and their double-header
-  nights (`$doubles`), and returns `bye`, `fill` and `out` (team =>
-  `courts` or `odd`) beside `pairs`. `sit_out()` is the rule (pure),
-  `fill_for()` the fill game, `can_play_twice()` the one-start-time check,
-  `sat_out_counts()` the count, `match_out()` the matching with k sit-out
+  (`$room`), the double-header teams (`$opted`), their double-header
+  nights (`$doubles`) and the twice-in-a-row guard (`$guard`: each team's
+  nights actually sat out and whether it sat out its last night), and
+  returns `bye`, `fill`, `out` (team => `courts` or `odd`) and `first`
+  (teams the guard put first) beside `pairs`. `sit_out()` is the rule
+  (pure): its options (teams that must sit out and teams that may, for
+  each top count from the line up) and the guard. `sat_out_counts()` is
+  the count (`byes`, with the shares), `sat` (nights actually sat out),
+  `last` and `doubles`. `fill_for()` is the fill game, `can_play_twice()`
+  the one-start-time check, `match_out()` the matching with k sit-out
   places (exact up to `EXACT_LIMIT` teams and places together, the local
   search above, both kept within the rule by `NEVER`), `sit_out_words()`
-  the admin reason. `trim()` is gone: the draw never makes more games than
-  slots. The `bye` weight is gone; `odd_double` (8) takes over its one
-  remaining job, the double-header preference, and `odd_sit` (20) is new.
-  A `rsl_pairing_weights` filter that sets `bye` no longer does anything.
-  An even division with a slot for every game is drawn exactly as before
-  (checked: `simulate-ratings.php ladder rounds=9 runs=40 seed=3000 age=0`
-  and `simulate-pairing.php runs=6` print the same as 0.18.1).
-- **Simulated** (`wp eval-file dev/simulate-pairing.php courts runs=1000`:
-  a Ranked division of 12 to 14 teams over 10 nights, 5 game slots on 30%
-  of nights, 6 on 30%, room for everyone on the rest, a week off on 7% of
-  team-nights, three double-header teams, the fixtures rating and link
-  term, fill games and spare-slot double-headers; each season played
-  under both rules from the same teams, slots and weeks off; spread =
-  most minus fewest nights sat out among the teams available every night;
-  most by one team = the season's highest count; closeness = the
-  closeness cost of the games played by the draw's rating, 0 for 50/50, 1
-  for 67/33, for every game and for the night's ordinary games (no fill
-  or double-header games); favourite over 0.80 = games whose favourite
-  had over a 0.80 set chance by true strength):
+  the admin reason and `count_words()` its numbers. `trim()` is gone: the
+  draw never makes more games than slots. The `bye` weight is gone;
+  `odd_double` (8) takes over its one remaining job, the double-header
+  preference; `odd_sit` (20) and `sit_level` (0.5) are new. A
+  `rsl_pairing_weights` filter that sets `bye` no longer does anything; a
+  `sit_level` above 0.5 is taken as 0.5. An even division with a slot for
+  every game is drawn exactly as before (checked:
+  `simulate-ratings.php ladder rounds=9 runs=40 seed=3000 age=0` and
+  `simulate-pairing.php runs=6` print the same as 0.18.1).
+- **Simulated** (`wp eval-file dev/simulate-pairing.php courts runs=1000
+  join=6`: a Ranked division of 12 to 14 teams over 10 nights, 5 game
+  slots on 30% of nights, 6 on 30%, room for everyone on the rest, a week
+  off on 7% of team-nights, one team joining on night 6, three
+  double-header teams, the fixtures rating and link term, fill games and
+  spare-slot double-headers; each season played under four rules from the
+  same teams, slots, weeks off and joiners: before 0.18.2, nights sat out
+  only (the first 0.18.2 build), the live count, and the live count
+  compared exactly (`level=0` would set another); spread = most minus
+  fewest nights sat out among the teams available every night; most by
+  one team = the season's highest; closeness = the closeness cost of the
+  games played by the draw's rating, 0 for 50/50, 1 for 67/33, for every
+  game and for the night's ordinary games (no fill or double-header
+  games); favourite over 0.80 = games whose favourite had over a 0.80 set
+  chance by true strength):
 
   | Rule | Sat out per team | Spread | Worst spread | Seasons with a 2+ gap | Most by one team | Closeness, every game | Closeness, ordinary games | Favourite over 0.80 |
   |---|---|---|---|---|---|---|---|---|
-  | Before 0.18.2: dearest games sit out | 0.67 | 1.82 | 7 | 54.2% | 2.23 | 0.921 | 0.902 | 11.8% |
-  | Live (0.18.2): fewest nights sat out first | 0.62 | 0.79 | 1 | 0.0% | 1.11 | 0.989 | 1.009 | 12.9% |
+  | Before 0.18.2: dearest games sit out | 0.54 | 1.60 | 6 | 45.7% | 1.99 | 0.955 | 0.935 | 12.4% |
+  | Nights sat out only (first 0.18.2 build) | 0.47 | 0.73 | 1 | 0.0% | 1.00 | 1.014 | 1.037 | 13.3% |
+  | Live (0.18.2): count with shares, within 0.5 level | 0.47 | 0.74 | 1 | 0.0% | 1.01 | 1.013 | 1.036 | 13.3% |
+  | Count with shares, compared exactly | 0.47 | 0.69 | 1 | 0.0% | 1.00 | 1.024 | 1.046 | 13.4% |
 
   | Rule | Nights sat out, double-header team | Nights sat out, other team | Double-header teams with 2+ sat out and 2+ double-header nights | Double-header spread |
   |---|---|---|---|---|
-  | Before 0.18.2: dearest games sit out | 0.51 | 0.72 | 3.4% | 1.32 |
-  | Live (0.18.2): fewest nights sat out first | 0.66 | 0.60 | 0.6% | 1.25 |
+  | Before 0.18.2: dearest games sit out | 0.36 | 0.60 | 2.1% | 1.31 |
+  | Nights sat out only (first 0.18.2 build) | 0.51 | 0.46 | 0.2% | 1.19 |
+  | Live (0.18.2): count with shares, within 0.5 level | 0.51 | 0.46 | 0.3% | 1.19 |
 
   (Double-header spread = most minus fewest double-header nights among
-  the double-header teams available every night.) Under the old rule more
-  than half of seasons had a team sit out two or more nights more than
+  the double-header teams available every night.) Under the old rule
+  nearly half of seasons had a team sit out two or more nights more than
   another team that was available every night, and in one season the gap
-  was 7. Under the new rule it is never more than 1. The season a
+  was 6. Under every 0.18.2 rule it is never more than 1. The season a
   double-header team sits out two or more nights and also gets two or
-  more double-headers goes from 3.4% to 0.6%; the old +2 on the count
+  more double-headers goes from 2.1% to 0.3%; the old +2 on the count
   kept double-header teams out of the bye, so they now sit out their
-  share. The price is closeness: ordinary games cost 0.11 more (0.902 to
-  1.009), every game together 0.07 more, and games with a favourite over
-  0.80 go from 11.8% to 12.9%. Teams sit out a little less in all (0.62
-  nights a season against 0.67), because the odd team gets a fill game
-  more often (2.59 a season against 1.89). Neither rule gave a third
-  meeting.
+  share. The price is closeness: ordinary games cost 0.10 more (0.935 to
+  1.036), every game together 0.06 more, and games with a favourite over
+  0.80 go from 12.4% to 13.3%. Teams sit out a little less in all (0.47
+  nights a season against 0.54), because the odd team gets a fill game
+  more often (3.07 a season against 2.15). No rule gave a third meeting.
+  In this run nights away are few and short, and the count with shares
+  draws almost exactly as nights sat out only.
 
-  Other shapes (same command plus the options): with a very strong and a
-  very weak Ranked team (`outliers=650`), those two sit out half as often
-  (1.05 nights a season each against 2.09) and the price is larger:
-  ordinary games cost 0.24 more and games with a favourite over 0.80 go
-  from 31.8% to 35.1%. With courts short every night as well
-  (`slots=every outliers=650`): 0.28 more, 30.5% to 34.5%. In an odd
-  division with a court to spare every night (`size=13 slots=roomy off=0
-  outliers=650`), those two teams almost never take the bye now (0.01
-  nights a season against 1.21): another team is the odd team with a fill
-  game. There, ordinary games cost 0.42 more, games with a favourite over
-  0.80 go from 33.2% to 39.4%, fill games from 5.6 to 10.0 a season, and
-  the double-header spread from 3.25 to 3.96 nights.
+  Sit-outs per night available, by team (mean over the teams in the
+  group, with the highest of any one team in any season in brackets;
+  there every night = teams available all ten nights; away = teams there
+  from night 1 with a night or more away; late joiner = teams that joined
+  after night 1; out its first night = late joiners that sat out their
+  first night; out first night back = team 3 sat out its first night back
+  from nights 2 to 5 away; twice in a row = nights a team that sat out its
+  last night sat out again while a team that had never sat out played).
+  Standard = the run above. Tight = `slots=tight off=0 join=6 away=4`: 5
+  slots every night, no random weeks off, a team joining on night 6, team
+  3 away nights 2 to 5 (the shape where nights sat out only went wrong).
+  Short every night = `slots=every join=4,6 off=15`: 5 or 6 slots every
+  night, weeks off on 15% of team-nights, teams joining on nights 4 and
+  6. All with `runs=1000`:
+
+  | Run | Rule | There every night | Away | Late joiner | Out its first night | Out first night back | Spread | Closeness, ordinary games | Favourite over 0.80 | Twice in a row |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | Standard | Nights sat out only | 0.055 (0.200) | 0.051 (0.250) | 0.041 (0.400) | 0.7% | – | 0.73 | 1.037 | 13.3% | 0 |
+  | Standard | Live: with shares, within 0.5 level | 0.055 (0.200) | 0.051 (0.250) | 0.034 (0.400) | 0.5% | – | 0.74 | 1.036 | 13.3% | 0 |
+  | Standard | With shares, compared exactly | 0.058 (0.200) | 0.050 (0.250) | 0.021 (0.333) | 0.2% | – | 0.69 | 1.046 | 13.4% | 0 |
+  | Tight | Before 0.18.2 | 0.177 (0.900) | 0.163 (0.833) | 0.142 (1.000) | 7.7% | 11.4% | 4.51 | 0.705 | 9.5% | 3589 |
+  | Tight | Nights sat out only | 0.168 (0.300) | 0.232 (0.500) | 0.259 (0.600) | 37.4% | 32.9% | 0.80 | 0.891 | 12.3% | 0 |
+  | Tight | Live: with shares, within 0.5 level | 0.176 (0.300) | 0.179 (0.333) | 0.162 (0.400) | 1.1% | 6.9% | 0.80 | 0.880 | 12.2% | 0 |
+  | Tight | With shares, compared exactly | 0.171 (0.300) | 0.224 (0.333) | 0.205 (0.400) | 34.2% | 28.2% | 0.68 | 0.916 | 12.6% | 0 |
+  | Short every night | Nights sat out only | 0.053 (0.200) | 0.046 (0.333) | 0.036 (0.500) | 0.5% | – | 0.35 | 0.995 | 13.1% | 0 |
+  | Short every night | Live: with shares, within 0.5 level | 0.053 (0.200) | 0.046 (0.333) | 0.035 (0.333) | 0.5% | – | 0.35 | 0.994 | 13.1% | 0 |
+  | Short every night | With shares, compared exactly | 0.058 (0.200) | 0.046 (0.250) | 0.024 (0.500) | 0.3% | – | 0.29 | 1.012 | 13.3% | 0 |
+
+  In the tight run, counting nights sat out only made a late joiner sit
+  out 0.259 times per night against 0.176 for the teams there every
+  night, and a team back from four nights away 0.232; with shares and
+  counts within half a night level, 0.162 and 0.179, the late joiner sat
+  out its first night in 1.1% of seasons instead of 37.4%, the team back
+  from away its first night back in 6.9% instead of 32.9%, the spread
+  among the teams there every night stayed at most 1, and ordinary games
+  were a little closer (0.880 against 0.891). The worst season for a late
+  joiner went from 3 nights out of 5 to 2. Where courts are short only
+  some nights, or weeks off are scattered, the shares are small and the
+  two counts draw almost alike. Compared exactly, the shares push teams a
+  fraction behind out first (34.2% and 28.2%) and cost closeness (ordinary
+  games 0.916 in the tight run, 1.046 in the standard one).
+
+  Other shapes (`courts runs=1000` plus the options, no late joiner; the
+  live count gives the same numbers as nights sat out only in all three):
+  with a very strong and a very weak Ranked team (`outliers=650`), those
+  two sit out half as often as before 0.18.2 (1.05 nights a season each
+  against 2.09) and the price is larger: ordinary games cost 0.24 more and
+  games with a favourite over 0.80 go from 31.8% to 35.1%. With courts
+  short every night as well (`slots=every outliers=650`): 0.28 more, 30.5%
+  to 34.5%. In an odd division with a court to spare every night
+  (`size=13 slots=roomy off=0 outliers=650`), those two teams almost never
+  take the bye now (0.01 nights a season against 1.21): another team is
+  the odd team with a fill game. There, ordinary games cost 0.42 more,
+  games with a favourite over 0.80 go from 33.2% to 39.4%, fill games from
+  5.6 to 10.0 a season, and the double-header spread from 3.25 to 3.96
+  nights.
 - **Public pages:** nothing public describes who sits out, so no public
   words change.
 - **Tests** (`test-pairing.php`): rotation (ten teams on four courts: each
@@ -156,14 +265,27 @@ finals (see `CLAUDE.md`).
   odd-night fill kept when the lowest-count team has none, the
   double-header preference, no fill game that leaves last week's game or
   forces a third meeting, fill games shared by double-header nights,
-  `can_play_twice()`, `sat_out_counts()` (a moved team, a division with no
-  courts, a double-header night, a week off, a late joiner), the rule
-  against brute force on 400 random nights (every choice that keeps it,
-  every pairing), the local search above `EXACT_LIMIT`, `context()` for a
-  team moved from Unranked to Ranked, for a night left out for owing and
-  for a called-off night, `plan()`'s court sit-out reason, the admin *Not
-  playing this night* line (with a can't-make-it team), and the *Make
-  fixtures automatically* notice.
+  `can_play_twice()`; `sat_out_counts()` (a moved team, a division with no
+  courts, a double-header night, a week off, a late joiner) and the count
+  with shares (a week off, a can't-make-it, an owing night, a late
+  joiner, a night with no sit-outs adding 0, a moved team getting its old
+  division's share, whole counts for a team there every night);
+  `count_words()` and the reasons with decimals; the rule on fractional
+  counts (counts within 0.5 level, whole counts never level, the cost
+  choosing among level teams); the twice-in-a-row guard (kept within the
+  count, the never-sat-out team put first when the count leaves no
+  choice, an odd night); the rule against brute force on 400 random
+  nights with fractional counts and the guard (every choice that keeps
+  it, every pairing, the exact cost); every season the rule allows on 60
+  small random seasons with weeks off and late joiners, walked choice by
+  choice (the rule's choices are exactly those that keep it, the teams
+  there every night end at most one sit-out apart, no twice in a row);
+  the local search above `EXACT_LIMIT`; `context()` for a team moved from
+  Unranked to Ranked, for the share of a night away (approved later,
+  can't make it, a week off, left out for owing), for a night left out
+  for owing and for a called-off night; `plan()`'s court sit-out reason,
+  the admin *Not playing this night* line (with a can't-make-it team),
+  and the *Make fixtures automatically* notice.
 
 ## A results-only ladder, finals on games played, no protected tier, and finished sets count whole (0.18.1)
 
