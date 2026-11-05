@@ -38,13 +38,22 @@ finals (see `CLAUDE.md`).
   *Most nights a team sits out in a season* (`sit_out_nights`, default 2,
   0 to 10). *Most teams per division* (`capacity_override`) moved there
   from *Placement*; above 0 it still wins over the worked-out places.
-- **Edges.** A division with no slot on any regular night has 0 places. A
+- **Edges.** A division with no slot on any regular night has 0 places,
+  and the words say it has no game slots rather than that it's full. A
   season with no regular nights yet isn't checked, and the admin words
   stay as before: "This season has no game nights yet, so court space
-  isn't checked." Places never go above 50, the most the override takes.
-  An allowance at or above the number of nights with a slot never binds,
-  so it gives 50. A large result is cut to 50 too: 12 slots on 3 nights
-  at allowance 2 would be 72.
+  isn't checked." Places stop at a ceiling: 50, the most the override
+  takes, or twice the fewest slots on a night when that's more. An
+  allowance at or above the number of nights with a slot never binds, so
+  it gives the ceiling. A large result is cut to it too: 12 slots on 3
+  nights at allowance 2 would be 72, so it's 50. The second part of the
+  ceiling keeps two things true for any courts: allowance 0 is always
+  twice the fewest slots (30 slots a night gives 60), and a bigger
+  allowance never gives fewer places. When the ceiling sets the places,
+  no word blames the allowance: the admin line says "(the most a division
+  takes)", placement's warning says "50 is the most places a division
+  takes.", and the free agent's reason leaves the allowance out. None of
+  this shows with the 2027 courts (29 to 32 places at allowance 2).
 - **Taken places and the waiting list.** Active teams take places. The
   pending applications in a season and division are lined up oldest first
   (applied time, then id). The first ones up to the places left are
@@ -52,7 +61,10 @@ finals (see `CLAUDE.md`).
   teams for 30 places and 4 applications, the two oldest are ordinary and
   the two newest wait. Nothing is stored (no schema change): the list is
   worked out on every read, so approving, declining, withdrawing and a
-  team leaving move it.
+  team leaving move it. An admin change can also put an ordinary
+  application on the waiting list: a team added or approved ahead of it,
+  an older application moved into its division, or new teams from
+  placement. Each says so (below).
 - **Where it applies.** Placement (no new team past the places left, as
   before with the old number), Start a team (at registration and on the
   league page's application card), applying, the captain's application
@@ -68,7 +80,12 @@ finals (see `CLAUDE.md`).
   works. After applying, and on their application card while it's on the
   waiting list: "Ranked is full for 2027 Pre-season, so your application
   is on the waiting list. If a place opens and the league approves it,
-  you'll get the approval email with your team's invite link." The card
+  you'll get the approval email with your team's invite link." A flash for
+  a later season names it once, in brackets after the team ("Ranked is
+  full, so your application is on the waiting list."). A division with no
+  game slots all season says "Unranked has no game slots for 2027
+  Post-season" in both places, and the card says the approval email comes
+  if the league adds Unranked courts and then approves it. The card
   never names another team and gives no place in the queue: a place
   would tell the captain how many other applications there are, which no
   page shows anyone else, and the league doesn't have to approve in that
@@ -76,7 +93,12 @@ finals (see `CLAUDE.md`).
 - **What an admin sees.** Above *Team applications*, a line for each season
   and division with applications: "Ranked, 2027 Mid-season 2: 28 of 30
   places taken, 4 applications waiting (2 on the waiting list)." Those two
-  are labelled *On the waiting list*. On each application whose approval
+  are labelled *On the waiting list*. A note in brackets says when the
+  places didn't come from the allowance: "(set by hand)", "(no game slots
+  this season)" or "(the most a division takes)". The sentence under the
+  lines describes only what they show: the allowance when a line's places
+  were worked out, Most teams per division when one was set by hand, and
+  nothing when no line is checked. On each application whose approval
   would go over the places, from the nights still to come: "Approving makes
   31 teams for 30 places: about 2.3 nights each sat out this season, so
   some sit out 3." Its button reads *Approve over the cap*, and approving
@@ -87,18 +109,29 @@ finals (see `CLAUDE.md`).
   because teams away and odd numbers move it. *Add a team*, a division
   change and placement confirm are allowed over the places too, with the
   same numbers in the notice. An application moved into a full division
-  says "Its application is on the waiting list in Ranked."
+  says "Its application is on the waiting list in Ranked." When a change
+  puts an ordinary application on the waiting list, the notice adds "1
+  application in Ranked, 2027 Pre-season is now on the waiting list." ("1
+  other application" when the change was about an application itself,
+  such as approving one ahead of older ones). It never names the team.
 - **Placement's words.** The warning before confirming: "Ranked would have
   31 teams for 30 places: about 2.3 nights each sat out this season, so
   some sit out 3. 30 is the most it takes with no team sitting out more
   than 2 nights a season." (or "30 is the Most teams per division
-  setting."). Before, it set the count against the first night's slots
-  alone. A free agent not placed for want of a place is told:
-  "8 Ranked players left — no place for another Ranked team without teams
-  sitting out more than 2 nights a season; Ranked teams full". Neither
-  names the allowance when the override set the places or the division
-  has no slot on any night. Placement counts active teams only, as before,
-  not applications waiting.
+  setting.", or "50 is the most places a division takes."). Before, it set
+  the count against the first night's slots alone. A free agent not placed
+  for want of a place is told: "8 Ranked players left — no place for
+  another Ranked team without teams sitting out more than 2 nights a
+  season; Ranked teams full". Neither names the allowance when the
+  override or the ceiling set the places, or the division has no slot on
+  any night; there the reason keeps 0.18.2's "no court space for another
+  Unranked team". Placement's room is the places less the active teams,
+  as before, so new teams can take places that applications waiting for
+  approval are next in line for. The warning before confirming says so:
+  "Confirming fills places that 2 Ranked applications waiting for
+  approval are next in line for, so they go on the waiting list." The
+  confirm notice then says "2 applications in Ranked, 2027 Pre-season are
+  now on the waiting list."
 - **Before 0.19.0** only placement looked at courts, as 2 × the game slots
   of the season's first regular night, so no sit-outs at all and blind to
   a later night with fewer courts. Applying and approving checked nothing.
@@ -106,21 +139,29 @@ finals (see `CLAUDE.md`).
   teams only, and a logged-out visitor or a cached page never sees whether
   a division is full. No admin email goes out about a new application, so
   there's none to change.
-- **Code.** `RSL_Capacity` (new). Pure: `places()`, `sit_outs()`,
-  `sit_out_numbers()`, `sit_out_words()` (the one writer of the numbers),
-  `over_words()`, `queue()`, `places_line()`, `full_words()`,
-  `waiting_words()`. The one wrapper is `season()`, with `places_by_division()`,
-  `on_waiting_list()`, `waiting_note()`, `over_notice()` and `allowance()`
-  over it; nothing works out places another way. `RSL_Courts::season_slot_counts()`
-  and the shared `plans_for()` behind `night_plan()`. `RSL_Teams::apply()`
-  returns the application with `waiting_list` (`with_waiting_list()`).
-  `RSL_Placement::capacity()` reads `season()` and passes `allowance` to
-  `propose()` for the reason's words; `confirm()` returns `new_in` (division
-  => new teams made).
-- **Tests** (`test-capacity.php`): `places()` against brute force on 15,000
-  random seasons (nights with 0 slots, allowances 0 to 4, the clamp), the
-  table above, the numbers and their words, the queue (a tie on applied
-  time goes by id), the admin line and the captain's words;
+- **Code.** `RSL_Capacity` (new). Pure: `places()`, `places_detail()`
+  (with `clamped`), `ceiling()`, `sit_outs()`, `sit_out_numbers()`,
+  `sit_out_words()` (the one writer of the numbers), `over_words()`,
+  `over_line()`, `queue()`, `bumped()`, `bumped_words()`, `would_bump()`,
+  `places_line()`, `full_words()`, `waiting_words()`. The one wrapper is
+  `season()` (`seasons()` for several at once, as the Start a team form
+  and the Teams screen need), with `on_waiting_list()`, `waiting_note()`,
+  `over_notice()` and `allowance()` over it; nothing works out places
+  another way. `RSL_Courts::season_slot_counts()` and
+  `seasons_slot_counts()` (the venues and courts read once for several
+  seasons) share `plans_for()` with `night_plan()`. `RSL_Teams::apply()`
+  returns the application with `waiting_list` (`with_waiting_list()`); the
+  flashes read it, so only an application on the waiting list reads the
+  places again for its words. `RSL_Placement::capacity()` reads `season()`
+  and passes `allowance` and `no_slots` to `propose()` for the reason's
+  words; `check()` warns from `would_bump()`; `confirm()` returns `new_in`
+  (division => new teams made), and the Free Agents notice compares the
+  places before and after (`bumped()`).
+- **Tests** (`test-capacity.php`): `places_detail()` against brute force on
+  3,000 random seasons at allowances 0 to 4 (15,000 checks: nights with 0
+  slots, the ceiling, clamped), the table above, the numbers and their
+  words, the queue (a tie on applied time goes by id), the bump helpers,
+  the admin line and the captain's words;
   `season_slot_counts()` against `slots_for_night()`; applying into a full
   division (the flash, the card, at registration too), the form's words for
   one division full and both full, nothing on the season preview or for a
@@ -130,8 +171,16 @@ finals (see `CLAUDE.md`).
   application moved into a full division, placement's capacity and
   warning, a season with no nights, a season that has started, the
   override, the allowance setting (saves, clamps at 0 and 10, moves the
-  places), a division with no slot on any night (0 places, no allowance
-  named). `test-placement.php` checks the free agent's new reason.
+  places), the ceiling (clamped, no allowance named), a division with no
+  slot on any night (0 places, no allowance named, its own words on the
+  form), what `RSL_Teams::apply()` returns and a second submit, a later
+  season named once in the flashes, the success notice after approving
+  over the cap, and the Teams screen's counts over the test's own rows
+  only. A fourth season runs placement: an older application moved into a
+  division bumping a newer one, the warning that new teams take places
+  applications are in line for, *Add a team* bumping one, and a confirm
+  over the places (the notice's numbers and the bump).
+  `test-placement.php` checks the free agent's new reasons.
 
 ## Fair sit-outs when courts are short (0.18.2)
 

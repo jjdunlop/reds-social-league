@@ -239,9 +239,11 @@ class RSL_Portal_FA {
                     $retry = RSL_Portal::apply_retry($team); // the card will be there to send it again
                     return array('type' => 'error', 'message' => 'You\'re registered, but your team application didn\'t go through: ' . $team->get_error_message() . ($retry ? ' Check the details below and send it again.' : ''), 'open_apply' => $retry);
                 }
-                // A full division never refuses it (0.19.0): the captain hears it's on the waiting list instead.
-                $waiting = RSL_Capacity::waiting_note($team);
-                return self::result('success', 'You\'re registered and your application for ' . $team->name . RSL_Portal::season_aside($team->season) . ' is in. '
+                // A full division never refuses it (0.19.0): the captain hears it's on the waiting list instead
+                // (apply_from_post() says whether it is; the words leave out a season the aside has just named).
+                $aside = RSL_Portal::season_aside($team->season);
+                $waiting = !empty($team->waiting_list) ? RSL_Capacity::waiting_note($team, $aside === '') : '';
+                return self::result('success', 'You\'re registered and your application for ' . $team->name . $aside . ' is in. '
                     . ($waiting !== '' ? $waiting : 'Once the league approves it you\'ll get an invite link for your players.'));
             case 'later':
                 // With nothing open for sign-up (0.18.0) an invite code is the only way onto a team.

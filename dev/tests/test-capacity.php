@@ -3,11 +3,13 @@
  * Places in each division (0.19.0, RSL_Capacity): the rule, the sit-out
  * numbers, the waiting list, and every place that reads them.
  *
- * Pure (no database): places() against brute force on random per-night slot
- * lists (nights with 0 slots included, allowances 0 to 4, the clamp at 50),
- * the 2027 table, sit_out_numbers() / sit_out_words() / over_words(), the
- * waiting-list queue (ties on applied_at go by id), places_line(),
- * full_words(), waiting_words().
+ * Pure (no database): places_detail() against brute force on 3,000 random
+ * per-night slot lists at allowances 0 to 4 (nights with 0 slots included, the
+ * ceiling of 50 or twice the fewest slots, clamped), the 2027 table,
+ * sit_out_numbers() / sit_out_words() / over_words() / over_line(), the
+ * waiting-list queue (ties on applied_at go by id), bumped() /
+ * would_bump() / bumped_words(), places_line(), full_words() (a division with
+ * no game slots too), waiting_words() (with and without the season).
  *
  * Database: a far-future season whose nights have exactly the slots the test
  * sets (two throwaway venues, one court each; every other court off on those
@@ -20,7 +22,14 @@
  * team and a division change over the cap; an application moved into a full
  * division; placement's capacity and its warning; a season with no nights;
  * a season that has started; the override; the allowance setting (saves,
- * clamps, moves the places).
+ * clamps, moves the places); the ceiling (clamped, no allowance named); a
+ * division with no slot (its words); what RSL_Teams::apply() returns and a
+ * second submit; a later season named once in the flashes; the success
+ * notice after approving over the cap; the Teams screen's counts scoped to
+ * this test's rows. Then a fourth season for placement: an older application
+ * moved into a division bumping a newer one, the warning that new teams take
+ * places applications are in line for, Add a team bumping one, and a
+ * placement confirm over the places (the notice's numbers and the bump).
  *
  *   wp eval-file dev/tests/test-capacity.php
  *   php dev/tests/test-capacity.php        (standalone: the pure part only)
@@ -66,37 +75,43 @@ $check = function ($label, $ok, $detail = '') use (&$fails, $hold) {
 // ======================================================================================================
 
 // --- The rule against brute force -----------------------------------------------------------------------
+// Every n from 0 to 1000 tried: with at most 30 slots a night and an allowance under the nights, no
+// answer is above 300, so 1000 fits only when the sum never binds. The ceiling is 50, or twice the
+// fewest slots on a night when that's more; clamped when the ceiling, not the allowance, stopped it.
 $brute = function ($slots, $a) {
-    if (!$slots) { return null; }
+    if (!$slots) { return array('places' => null, 'clamped' => false); }
     $on = array_values(array_filter($slots, function ($s) { return $s > 0; }));
-    if (!$on) { return 0; }
+    if (!$on) { return array('places' => 0, 'clamped' => false); }
     $best = 0;
-    for ($n = 0; $n <= 400; $n++) {
+    for ($n = 0; $n <= 1000; $n++) {
         $sum = 0;
         foreach ($on as $s) { $sum += max(0, $n - 2 * $s); }
         if ($sum <= $a * $n) { $best = $n; }
     }
-    return min(RSL_Capacity::MAX_PLACES, $best); // 400 fits only when it never binds: the clamp
+    $top = max(RSL_Capacity::MAX_PLACES, 2 * min($on));
+    return array('places' => min($top, $best), 'clamped' => $best > $top);
 };
 mt_srand(19019);
 $bad = array();
 $runs = 0;
-for ($i = 0; $i < 3000; $i++) {
+$seasons = 3000;
+for ($i = 0; $i < $seasons; $i++) {
     $len = mt_rand(0, 12);
     $slots = array();
     for ($k = 0; $k < $len; $k++) {
-        $slots[] = mt_rand(0, 4) === 0 ? 0 : mt_rand(1, 14);
+        // Mostly up to 14 slots a night; one season in ten has big nights (up to 30), so the ceiling goes above 50.
+        $slots[] = mt_rand(0, 4) === 0 ? 0 : mt_rand(1, $i % 10 === 0 ? 30 : 14);
     }
     for ($a = 0; $a <= 4; $a++) {
         $runs++;
         $want = $brute($slots, $a);
-        $got = RSL_Capacity::places($slots, $a);
-        if ($want !== $got) {
-            $bad[] = json_encode($slots) . " a=$a want " . var_export($want, true) . ' got ' . var_export($got, true);
+        $got = RSL_Capacity::places_detail($slots, $a);
+        if ($want !== $got || RSL_Capacity::places($slots, $a) !== $want['places']) {
+            $bad[] = json_encode($slots) . " a=$a want " . json_encode($want) . ' got ' . json_encode($got);
         }
     }
 }
-$check("places() matches brute force on $runs random seasons (nights with 0 slots, allowances 0 to 4, the clamp)", !$bad, implode(' | ', array_slice($bad, 0, 5)));
+$check("places_detail() matches brute force on $seasons random seasons at allowances 0 to 4 ($runs checks: nights with 0 slots, the ceiling, clamped)", !$bad, implode(' | ', array_slice($bad, 0, 5)));
 $table = array();
 foreach (array(8, 9, 10, 11) as $n) {
     foreach (array(0, 1, 2) as $a) {
@@ -110,7 +125,16 @@ $check('no slot on any night: 0 places', RSL_Capacity::places(array(0, 0, 0), 2)
 $check('allowance 0: twice the fewest slots on a night with any', RSL_Capacity::places(array(6, 0, 4, 9), 0) === 8);
 $check('a night with no slot is no sit-out (5 slots, then none: 10 at allowance 0, not 0)', RSL_Capacity::places(array(5, 0), 0) === 10);
 $check('an allowance at or above the nights with a slot never binds: 50', RSL_Capacity::places(array(3, 0, 3), 2) === 50 && RSL_Capacity::places(array(12, 12, 12), 3) === 50);
-$check('...and nothing goes above 50 (12 slots on 3 nights at allowance 2 would be 72)', RSL_Capacity::places(array(12, 12, 12), 2) === 50);
+$x = RSL_Capacity::places_detail(array(12, 12, 12), 2);
+$check('...and nothing goes above 50 (12 slots on 3 nights at allowance 2 would be 72): clamped, so no word blames the allowance', $x === array('places' => 50, 'clamped' => true), json_encode($x));
+$check('...51 teams there still sit out at most 2 nights (why it says clamped)', RSL_Capacity::sit_out_numbers(51, array(12, 12, 12))['most'] <= 2);
+$check('the 2027 seasons at allowance 2 aren\'t clamped (32 over 8 nights)', RSL_Capacity::places_detail(array_fill(0, 8, 12), 2) === array('places' => 32, 'clamped' => false));
+$check('allowance 0 is twice the fewest slots even above 50 (30 slots: 60, not clamped)', RSL_Capacity::places_detail(array(30, 40), 0) === array('places' => 60, 'clamped' => false));
+$check('...and a bigger allowance never gives fewer (30 slots on 1 night at allowance 1: 60, clamped)', RSL_Capacity::places_detail(array(30), 1) === array('places' => 60, 'clamped' => true)
+    && RSL_Capacity::places_detail(array(30, 30, 30), 2) === array('places' => 60, 'clamped' => true));
+$check('ceiling(): 50, twice the fewest slots when that\'s more, 0 with no slot', RSL_Capacity::ceiling(array(12, 0, 12)) === 50 && RSL_Capacity::ceiling(array(30, 0, 40)) === 60
+    && RSL_Capacity::ceiling(array(0, 0)) === 0 && RSL_Capacity::ceiling(array()) === 0);
+$check('allowance 0 is never clamped', RSL_Capacity::places_detail(array(3, 3), 0) === array('places' => 6, 'clamped' => false));
 $check('one more night lowers the places or keeps them', RSL_Capacity::places(array_fill(0, 10, 12), 2) <= RSL_Capacity::places(array_fill(0, 9, 12), 2));
 $check('sit_outs(): the sum of max(0, n − 2 × slots) over nights with a slot', RSL_Capacity::sit_outs(31, array(12, 0, 12, 15)) === 15);
 
@@ -155,6 +179,24 @@ $q = RSL_Capacity::queue(30, 31, $apps);
 $check('over the places already: everyone waits', count($q['waiting']) === 4 && $q['ordinary'] === array());
 $q = RSL_Capacity::queue(0, 0, array((object) array('id' => 5, 'applied_at' => '2026-11-01')));
 $check('no places: rows (objects) wait too', $q['waiting'] === array(5));
+// An admin change that takes a place an ordinary application was in line for.
+$at = function ($active, $list) use ($apps) {
+    $q = RSL_Capacity::queue(30, $active, $list);
+    return array('label' => 'Ranked', 'season' => '2027-pre', 'places' => 30, 'active' => $active, 'order' => $q['order'], 'waiting' => $q['waiting']);
+};
+$check('bumped(): a new active team puts the newest ordinary application on the waiting list', RSL_Capacity::bumped($at(28, $apps), $at(29, $apps)) === array(41));
+$older = array_merge($apps, array(array('id' => 3, 'applied_at' => '2026-11-01 08:00:00')));
+$check('...an older application moved in bumps one too, and the moved one isn\'t counted', RSL_Capacity::bumped($at(28, $apps), $at(28, $older), 3) === array(41));
+$check('...approving an ordinary application bumps nobody', RSL_Capacity::bumped($at(28, $apps), $at(29, array_slice($apps, 1)), 41) === array());
+$check('...nor does a change with nobody ordinary before', RSL_Capacity::bumped($at(30, $apps), $at(31, $apps)) === array());
+$check('would_bump(): 2 ordinary applications, 30 places, 30 teams after: 2; 29 after: 1; not checked: 0', RSL_Capacity::would_bump($at(28, $apps), 30) === 2
+    && RSL_Capacity::would_bump($at(28, $apps), 29) === 1 && RSL_Capacity::would_bump(array_merge($at(28, $apps), array('places' => null)), 30) === 0);
+$check('bumped_words(): one, several, other', RSL_Capacity::bumped_words($at(28, $apps), 1) === '1 application in Ranked, 2027 Pre-season is now on the waiting list.'
+    && RSL_Capacity::bumped_words($at(28, $apps), 2) === '2 applications in Ranked, 2027 Pre-season are now on the waiting list.'
+    && RSL_Capacity::bumped_words($at(28, $apps), 1, true) === '1 other application in Ranked, 2027 Pre-season is now on the waiting list.');
+$ol = array_merge($info, array('season' => '2027-pre', 'active' => 31));
+$check('over_line(): over the places gives the numbers; within them, nothing', RSL_Capacity::over_line($ol) === 'Ranked, 2027 Pre-season now has 31 teams for 30 places: about 2.3 nights each sat out this season, so some sit out 3.'
+    && RSL_Capacity::over_line(array_merge($ol, array('active' => 30))) === '' && RSL_Capacity::over_line(array_merge($ol, array('places' => null))) === '', RSL_Capacity::over_line($ol));
 
 // --- Words for people -------------------------------------------------------------------------------------
 $di = function ($o = array()) {
@@ -166,14 +208,29 @@ $check('places line: one application, none waiting, set by hand', RSL_Capacity::
 $check('places line: over the places', RSL_Capacity::places_line($di(array('active' => 31))) === 'Ranked, 2027 Pre-season: 31 teams for 30 places, 4 applications waiting (2 on the waiting list).');
 $check('places line: not checked keeps today\'s words', RSL_Capacity::places_line($di(array('places' => null, 'waiting' => array())))
     === 'Ranked, 2027 Pre-season: 28 teams, 4 applications waiting. This season has no game nights yet, so court space isn\'t checked.');
-$si = function ($r, $u) {
-    return array('season' => '2027-pre', 'divisions' => array('ranked' => array('label' => 'Ranked', 'full' => $r), 'unranked' => array('label' => 'Unranked', 'full' => $u)));
+$check('places line: the ceiling says so', RSL_Capacity::places_line($di(array('places' => 50, 'active' => 50, 'clamped' => true)))
+    === 'Ranked, 2027 Pre-season: 50 of 50 places taken (the most a division takes), 4 applications waiting (2 on the waiting list).');
+$check('places line: no game slots says so', RSL_Capacity::places_line($di(array('label' => 'Unranked', 'season' => '2027-post', 'places' => 0, 'active' => 0, 'pending' => 1, 'waiting' => array(5), 'no_slots' => true)))
+    === 'Unranked, 2027 Post-season: 0 of 0 places taken (no game slots this season), 1 application waiting (1 on the waiting list).');
+$si = function ($r, $u, $rn = false, $un = false) {
+    return array('season' => '2027-pre', 'divisions' => array('ranked' => array('label' => 'Ranked', 'full' => $r || $rn, 'no_slots' => $rn),
+        'unranked' => array('label' => 'Unranked', 'full' => $u || $un, 'no_slots' => $un)));
 };
 $check('full words: Ranked full', RSL_Capacity::full_words($si(true, false)) === 'Ranked is full for 2027 Pre-season. An Unranked team can still get a place; a new Ranked team goes on the waiting list.');
 $check('full words: Unranked full', RSL_Capacity::full_words($si(false, true)) === 'Unranked is full for 2027 Pre-season. A Ranked team can still get a place; a new Unranked team goes on the waiting list.');
 $check('full words: both full', RSL_Capacity::full_words($si(true, true)) === 'Ranked and Unranked are both full for 2027 Pre-season. A new team goes on the waiting list.');
 $check('full words: neither full, nothing', RSL_Capacity::full_words($si(false, false)) === '');
+$w = RSL_Capacity::full_words($si(false, false, false, true));
+$check('full words: a division with no game slots says that, not full', $w === 'Unranked has no game slots for 2027 Pre-season. A Ranked team can still get a place; a new Unranked team goes on the waiting list.', $w);
+$w = RSL_Capacity::full_words($si(true, false, false, true));
+$check('full words: one full, the other with no game slots', $w === 'Ranked is full and Unranked has no game slots for 2027 Pre-season. A new team goes on the waiting list.', $w);
+$w = RSL_Capacity::full_words($si(false, false, true, true));
+$check('full words: neither has game slots', $w === 'Ranked and Unranked have no game slots for 2027 Pre-season. A new team goes on the waiting list.', $w);
 $check('the captain\'s waiting words', RSL_Capacity::waiting_words($di()) === 'Ranked is full for 2027 Pre-season, so your application is on the waiting list. If a place opens and the league approves it, you\'ll get the approval email with your team\'s invite link.');
+$check('...without the season, for a message that has just named it', RSL_Capacity::waiting_words($di(), false) === 'Ranked is full, so your application is on the waiting list. If a place opens and the league approves it, you\'ll get the approval email with your team\'s invite link.');
+$w = RSL_Capacity::waiting_words($di(array('label' => 'Unranked', 'no_slots' => true)));
+$check('...a division with no game slots gives the real reason', $w === 'Unranked has no game slots for 2027 Pre-season, so your application is on the waiting list. If the league adds Unranked courts and then approves your application, you\'ll get the approval email with your team\'s invite link.', $w);
+$check('...and without the season', strpos(RSL_Capacity::waiting_words($di(array('label' => 'Unranked', 'no_slots' => true)), false), 'Unranked has no game slots that season, so') === 0);
 
 if ($standalone) {
     echo "SKIP: the database part needs wp eval-file\n";
@@ -188,6 +245,7 @@ global $wpdb;
 $A = '2097-pre';   // nights with exactly the slots set below; the sign-up season
 $B = '2097-mid1';  // dates, no nights: not checked; open too
 $C = '2097-mid2';  // nights from two weeks ago: started
+$D = '2097-post';  // placement: nights with 1 slot a division (this test's venues only), 2 places each at allowance 0
 $today = current_time('Y-m-d');
 $day = function ($n) use ($today) { return date('Y-m-d', strtotime($today . ' ' . ($n < 0 ? '' : '+') . intval($n) . ' days')); };
 // Everything the cleanup reads, set before the try.
@@ -200,6 +258,7 @@ $venue_ids = array();
 $made_portal = 0;
 $cands = null;
 $admin = 0;
+$sent_ok = null;
 $mk = function ($tag, $role = 'subscriber') use ($suffix, &$users) {
     $u = wp_insert_user(array('user_login' => "rslcap-$tag-$suffix", 'user_email' => "rslcap-$tag-$suffix@example.test", 'user_pass' => wp_generate_password(),
         'display_name' => "RSLCap $tag $suffix", 'role' => $role));
@@ -305,6 +364,20 @@ $admin_page = function () use ($A, $admin) {
     $_GET = array();
     return $html;
 };
+// The Team applications table's rows that are this test's own (the screen lists every pending
+// application on the site, so counts over the whole page would include real ones).
+$app_rows = function ($html) use ($suffix) {
+    $from = strpos($html, '<h2>Team applications');
+    if ($from === false) {
+        return '';
+    }
+    $to = strpos($html, '</table>', $from);
+    $out = '';
+    foreach (explode('<tr', substr($html, $from, $to === false ? null : $to - $from)) as $row) {
+        $out .= strpos($row, (string) $suffix) !== false ? '<tr' . $row : '';
+    }
+    return $out;
+};
 $apply = function ($as, $name, $division, $season) use ($front) {
     return $front($as, array('do' => 'apply', 'team_name' => $name, 'team_level' => 'social', 'team_division' => $division, 'team_season' => $season));
 };
@@ -324,7 +397,7 @@ $v = $view($c[1]);
 $check('1 of 2 places taken, nothing waiting: the form says nothing about full divisions', strpos($v, 'name="team_division"') !== false && strpos($v, 'is full for') === false);
 list($to, $msg) = $apply($c[1], "C1 Team $suffix", 'ranked', $A);
 $app1 = RSL_Teams::pending_application_for_user($c[1], $A);
-$check('an application within the places: the usual flash', $app1 && empty($app1->waiting_list) && $msg === "Application sent for C1 Team $suffix. We'll email you when it's approved.", $msg);
+$check('an application within the places: the usual flash', $app1 && !RSL_Capacity::on_waiting_list($app1) && $msg === "Application sent for C1 Team $suffix. We'll email you when it's approved.", $msg);
 $v = $view($c[2]);
 $check('Ranked full (1 team, 1 application, 2 places): the form says so beside the division and offers Unranked', strpos($v, esc_html($full_r)) !== false
     && strpos($v, 'is full for 2097 Mid-season 1') === false && strpos($v, 'Unranked are both full') === false, $v);
@@ -344,7 +417,11 @@ list($to, $msg) = $front($c[3], array('do' => 'register', 'level' => 'social', '
 $app3 = RSL_Teams::pending_application_for_user($c[3], $A);
 $check('Start a team at registration into a full division: on the waiting list, and the flash says so', $app3 && RSL_Capacity::on_waiting_list($app3)
     && $msg === "You're registered and your application for C3 Team $suffix is in. " . $wait, $msg);
+$r4 = RSL_Teams::apply($A, $c[4], array('name' => "C4 Team $suffix", 'division' => 'ranked', 'level' => 'social'));
+$check('RSL_Teams::apply() into a full division returns the application with waiting_list true', is_object($r4) && $r4->status === 'pending' && $r4->waiting_list === true,
+    is_wp_error($r4) ? $r4->get_error_message() : json_encode($r4));
 list($to, $msg) = $apply($c[4], "C4 Team $suffix", 'ranked', $A);
+$check('...the same application sent again from the form is its success, with the waiting-list words', $msg === "Application sent for C4 Team $suffix. " . $wait, $msg);
 $app4 = RSL_Teams::pending_application_for_user($c[4], $A);
 $q = RSL_Capacity::season($A)['divisions']['ranked'];
 $check('the queue: oldest first, the places left go to the oldest', $app4 && $q['order'] === array(intval($app1->id), intval($app2->id), intval($app3->id), intval($app4->id))
@@ -354,8 +431,11 @@ $check('the queue: oldest first, the places left go to the oldest', $app4 && $q[
 $html = $admin_page();
 $check('admin: the places line for the season and division with applications', strpos($html, esc_html('Ranked, 2097 Pre-season: 1 of 2 places taken, 4 applications waiting (3 on the waiting list).')) !== false
     && strpos($html, 'Unranked, 2097 Pre-season') === false, substr($html, 0, 3000));
-$check('admin: applications on the waiting list are labelled (3), and nobody is over the cap yet', substr_count($html, 'On the waiting list') === 3
-    && strpos($html, 'Approve over the cap') === false && strpos($html, 'Approving makes') === false);
+$rows = $app_rows($html);
+$check('admin: applications on the waiting list are labelled (3), and nobody is over the cap yet', substr_count($rows, 'On the waiting list') === 3
+    && substr_count($rows, '<tr') === 4 && strpos($rows, 'Approve over the cap') === false && strpos($rows, 'Approving makes') === false, $rows);
+$check('admin: the words under the places lines name the allowance (0 here), with nothing set by hand', strpos($html, esc_html('no team sitting out more than 0 nights in the season')) !== false
+    && strpos($html, 'set by hand takes its places') === false);
 
 // --- Withdrawing and declining move the queue -----------------------------------------------------------------
 list($to, $msg) = $front($c[4], array('do' => 'withdraw', 'team_id' => $app4->id));
@@ -374,14 +454,17 @@ $check('approving the last place: no numbers in the notice', RSL_Teams::get($app
     && strpos($n['message'], "C2 Team $suffix approved") === 0, $n['message']);
 $html = $admin_page();
 $over3 = 'Approving makes 3 teams for 2 places: about 0.7 nights each sat out this season, so some sit out 1.';
-$check('admin: an application whose approval goes over the places says what it costs, and its button says so', strpos($html, esc_html($over3)) !== false
-    && strpos($html, 'Approve over the cap') !== false && substr_count($html, 'On the waiting list') === 1
-    && strpos($html, esc_html('Ranked, 2097 Pre-season: 2 of 2 places taken, 1 application waiting (1 on the waiting list).')) !== false, substr($html, 0, 3000));
+$rows = $app_rows($html);
+$check('admin: an application whose approval goes over the places says what it costs, and its button says so', strpos($rows, esc_html($over3)) !== false
+    && substr_count($rows, 'Approve over the cap') === 1 && substr_count($rows, 'On the waiting list') === 1
+    && strpos($html, esc_html('Ranked, 2097 Pre-season: 2 of 2 places taken, 1 application waiting (1 on the waiting list).')) !== false, $rows);
+// The email "sent" (wp_mail answered true after the hold's false, so nothing leaves), so the success branch runs.
+$sent_ok = function () { return true; };
+add_filter('pre_wp_mail', $sent_ok, 1000);
 $n = $adm(array('do' => 'approve', 'team_id' => $app3->id));
-$check('approving over the cap takes no extra step, and the notice repeats the numbers', RSL_Teams::get($app3->id)->status === 'active'
-    && strpos($n['message'], "C3 Team $suffix approved") === 0
-    && substr($n['message'], -strlen(' Ranked, 2097 Pre-season now has 3 teams for 2 places: about 0.7 nights each sat out this season, so some sit out 1.'))
-        === ' Ranked, 2097 Pre-season now has 3 teams for 2 places: about 0.7 nights each sat out this season, so some sit out 1.', $n['message']);
+remove_filter('pre_wp_mail', $sent_ok, 1000);
+$check('approving over the cap takes no extra step, and the success notice repeats the numbers', RSL_Teams::get($app3->id)->status === 'active' && $n['type'] === 'success'
+    && $n['message'] === "C3 Team $suffix approved — the captain has been emailed their invite link. Ranked, 2097 Pre-season now has 3 teams for 2 places: about 0.7 nights each sat out this season, so some sit out 1.", $n['message']);
 
 // --- Other ways onto a division ------------------------------------------------------------------------------------
 $n = $adm(array('do' => 'create_team', 'name' => "Extra $suffix", 'division' => 'ranked'));
@@ -394,9 +477,11 @@ $check('a division change into a division over its places: the notice gives the 
     && $n['message'] === 'Team saved. Ranked, 2097 Pre-season now has 5 teams for 2 places: about 1.4 nights each sat out this season, so some sit out 2.', $n['message']);
 $n = $adm(array('do' => 'update_team', 'team_id' => $u1->id, 'name' => "U1 $suffix", 'division' => 'ranked', 'colour' => '#2e8540'));
 $check('saving without a division change: the usual notice', $n['message'] === 'Team saved.', $n['message']);
+$r5 = RSL_Teams::apply($A, $c[5], array('name' => "C5 Team $suffix", 'division' => 'unranked', 'level' => 'social'));
+$check('RSL_Teams::apply() with room returns the application with waiting_list false', is_object($r5) && $r5->waiting_list === false, is_wp_error($r5) ? $r5->get_error_message() : '');
 list($to, $msg) = $apply($c[5], "C5 Team $suffix", 'unranked', $A);
 $app5 = RSL_Teams::pending_application_for_user($c[5], $A);
-$check('an Unranked application with room is ordinary', $app5 && !RSL_Capacity::on_waiting_list($app5) && $msg === "Application sent for C5 Team $suffix. We'll email you when it's approved.", $msg);
+$check('an Unranked application with room is ordinary (sent again from the form: the usual flash)', $app5 && !RSL_Capacity::on_waiting_list($app5) && $msg === "Application sent for C5 Team $suffix. We'll email you when it's approved.", $msg);
 $n = $adm(array('do' => 'update_team', 'team_id' => $app5->id, 'name' => "C5 Team $suffix", 'division' => 'ranked', 'colour' => '#1d3d6e'));
 $check('an application moved into a full division is on the waiting list there, and the notice says so', RSL_Capacity::on_waiting_list(RSL_Teams::get($app5->id))
     && $n['message'] === 'Team saved. Its application is on the waiting list in Ranked.', $n['message']);
@@ -430,6 +515,22 @@ $html = $admin_page();
 $check('...the admin line keeps today\'s words', strpos($html, esc_html('Ranked, 2097 Mid-season 1: 0 teams, 1 application waiting. This season has no game nights yet, so court space isn\'t checked.')) !== false);
 $warn = RSL_Placement::blockers($B)['warnings'];
 $check('...and placement says court space isn\'t checked', in_array('This season has no game nights yet, so court space isn\'t checked.', $warn, true), implode(' | ', $warn));
+// A season other than the sign-up season names itself once: the aside, not the waiting-list words again.
+// Most teams per division at 1 for a moment gives B one Ranked place, which C6's application has.
+$set_rules(array('capacity_override' => array('ranked' => 1, 'unranked' => 0)));
+$c[7] = $mk('c7');
+RSL_Players::register($c[7], array('level' => 'social', 'years' => '1to3'));
+list($to, $msg) = $apply($c[7], "C7 Team $suffix", 'ranked', $B);
+$check('a waiting-list flash for a later season names it once', $msg === "Application sent for C7 Team $suffix (2097 Mid-season 1). Ranked is full, so your application is on the waiting list. "
+    . "If a place opens and the league approves it, you'll get the approval email with your team's invite link.", $msg);
+$c[8] = $mk('c8');
+list($to, $msg) = $front($c[8], array('do' => 'register', 'level' => 'social', 'years' => '1to3', 'route' => 'start',
+    'team_name' => "C8 Team $suffix", 'team_level' => 'social', 'team_division' => 'ranked', 'team_season' => $B));
+$check('...and so does the registration flash', $msg === "You're registered and your application for C8 Team $suffix (2097 Mid-season 1) is in. Ranked is full, so your application is on the waiting list. "
+    . "If a place opens and the league approves it, you'll get the approval email with your team's invite link.", $msg);
+$v = $view($c[7]);
+$check('...the card names the season (it has no aside)', strpos($v, esc_html('Ranked is full for 2097 Mid-season 1, so your application is on the waiting list.')) !== false);
+$set_rules(array('capacity_override' => array('ranked' => 0, 'unranked' => 0)));
 $capc = RSL_Capacity::season($C);
 $left = 0;
 foreach (RSL_Courts::nights($C) as $nc) {
@@ -458,7 +559,11 @@ $fa_post = function ($fields) use ($A, $admin) {
 $n = $fa_post(array_merge($fa_rules, array('sit_out_nights' => '12')));
 $check('the allowance setting clamps at ' . RSL_Capacity::MAX_ALLOWANCE . ' and the notice says so', RSL_Free_Agents::settings()['sit_out_nights'] === 10
     && strpos($n['message'], 'Most nights a team sits out in a season 10 (not 12)') !== false, $n['message']);
-$check('...at 10 (above the 3 nights) the sum never binds: 50 places', RSL_Capacity::season($A)['divisions']['ranked']['places'] === 50);
+$capa = RSL_Capacity::season($A);
+$ctx = RSL_Placement::context($A);
+$check('...at 10 (above the 3 nights) the sum never binds: 50 places, clamped, and placement doesn\'t name the allowance', $capa['divisions']['ranked']['places'] === 50
+    && $capa['divisions']['ranked']['clamped'] && $ctx[2]['capacity']['ranked'] === 50 && $ctx[2]['allowance']['ranked'] === null, json_encode($ctx[2]['allowance']));
+$check('...and the places line says it\'s the most a division takes', strpos(RSL_Capacity::places_line($capa['divisions']['ranked']), '(the most a division takes)') !== false, RSL_Capacity::places_line($capa['divisions']['ranked']));
 $n = $fa_post(array_merge(RSL_Free_Agents::settings(), array('sit_out_nights' => '1')));
 $capa = RSL_Capacity::season($A);
 $check('the allowance saves (1) and moves the places: Ranked 4, Unranked 3', $n['type'] === 'success' && RSL_Free_Agents::settings()['sit_out_nights'] === 1
@@ -473,15 +578,105 @@ $capa = RSL_Capacity::season($A);
 $ctx = RSL_Placement::context($A);
 $warn = implode(' | ', RSL_Placement::blockers($A)['warnings']);
 $check('no Unranked slot on any night: 0 places, no allowance named, and the warning says why', $capa['divisions']['unranked']['places'] === 0
+    && $capa['divisions']['unranked']['no_slots'] && !$capa['divisions']['ranked']['no_slots']
     && $ctx[2]['capacity']['unranked'] === 0 && $ctx[2]['allowance']['unranked'] === null && $ctx[2]['allowance']['ranked'] === 0
+    && $ctx[2]['no_slots'] === array('unranked' => true, 'ranked' => false)
     && strpos($warn, 'Unranked would have 2 teams for 0 places: Unranked has no game slots this season.') !== false
     && strpos($warn, '0 is the most it takes') === false, $warn);
+$check('...the places line gives the reason', strpos(RSL_Capacity::places_line($capa['divisions']['unranked']), '(no game slots this season)') !== false);
+$p = $mk('p');
+RSL_Players::register($p, array('level' => 'social', 'years' => '1to3'));
+$v = $view($p);
+$check('...and Start a team says Unranked has no game slots, not that it\'s full', strpos($v, esc_html('Ranked is full and Unranked has no game slots for 2097 Pre-season. A new team goes on the waiting list.')) !== false
+    && strpos($v, 'Unranked is full') === false, $v);
 $tab = new ReflectionMethod('RSL_Admin_Free_Agents', 'settings_tab');
 $tab->setAccessible(true);
 $tab_html = $tab->invoke(null, $A);
 $check('the Settings tab has both rows under Places in each division, and no Other section', strpos($tab_html, '<h3>Places in each division</h3>') !== false
     && strpos($tab_html, 'name="sit_out_nights"') !== false && strpos($tab_html, 'name="capacity_override[ranked]"') !== false && strpos($tab_html, '<h3>Other</h3>') === false
     && strpos($tab_html, 'Start a team') !== false);
+
+// --- Placement confirm, and changes that take a place an application was in line for -------------------------------------
+// D: one slot a night in each division (this test's two courts; every other court off on its nights), allowance 0, so
+// 2 places each. Teams of 4 to 6 here, so a handful of free agents makes a new team.
+$r = $set_rules(array('min_roster' => 4, 'target_roster' => 4, 'new_team_target' => 4, 'max_roster' => 6));
+$check('placement setup: teams of 4 to 6', !is_wp_error($r) && RSL_Free_Agents::settings()['min_roster'] === 4, is_wp_error($r) ? $r->get_error_message() : '');
+RSL_Courts::save_settings($D, array('start' => $day(150), 'end' => $day(170), 'weekday' => 0, 'minutes' => $minutes));
+RSL_Courts::generate_nights($D);
+foreach (RSL_Courts::nights($D) as $n) {
+    foreach (RSL_Courts::venues() as $vv) {
+        if (!in_array(intval($vv->id), $venue_ids, true)) {
+            foreach (RSL_Courts::courts($vv->id) as $cc) {
+                RSL_Courts::set_court_night($n->id, $cc->id, false);
+            }
+        }
+    }
+}
+$tu = RSL_Teams::create($D, array('name' => "DU $suffix", 'division' => 'unranked', 'level' => 'social', 'status' => 'active'));
+$tr = RSL_Teams::create($D, array('name' => "DR $suffix", 'division' => 'ranked', 'level' => 'social', 'status' => 'active'));
+foreach (array(1, 2, 3, 4) as $i) {
+    RSL_Teams::add_member($tu->id, $c[$i], $i === 1 ? 'captain' : 'player');
+    RSL_Teams::add_member($tr->id, $c[$i + 4], $i === 1 ? 'captain' : 'player');
+}
+$q = $mk('q');
+RSL_Players::register($q, array('level' => 'social', 'years' => '1to3'));
+$appq = RSL_Teams::apply($D, $q, array('name' => "Q Team $suffix", 'division' => 'ranked', 'level' => 'social'));
+$appp = RSL_Teams::apply($D, $p, array('name' => "P Team $suffix", 'division' => 'unranked', 'level' => 'social'));
+$capd = RSL_Capacity::season($D);
+$check('placement setup: 2 places a division, one team each with 4 players, an ordinary application each', is_object($appq) && is_object($appp)
+    && $capd['divisions']['ranked']['places'] === 2 && $capd['divisions']['unranked']['places'] === 2
+    && $capd['divisions']['ranked']['active'] === 1 && $capd['divisions']['unranked']['active'] === 1
+    && !$capd['divisions']['ranked']['waiting'] && !$capd['divisions']['unranked']['waiting'], json_encode(array($capd['divisions']['ranked'], $capd['divisions']['unranked'])));
+// An older application moved into a division puts a newer one there on the waiting list.
+$n = $adm(array('do' => 'update_team', 'season' => $D, 'team_id' => $appq->id, 'name' => "Q Team $suffix", 'division' => 'unranked', 'colour' => '#1d3d6e'));
+$check('an older application moved into a division with one place left: the newer one there goes on the waiting list, and the notice says so (no team named)',
+    $n['message'] === 'Team saved. 1 other application in Unranked, 2097 Post-season is now on the waiting list.' && RSL_Capacity::on_waiting_list(RSL_Teams::get($appp->id))
+    && !RSL_Capacity::on_waiting_list(RSL_Teams::get($appq->id)), $n['message']);
+$n = $adm(array('do' => 'update_team', 'season' => $D, 'team_id' => $appq->id, 'name' => "Q Team $suffix", 'division' => 'ranked', 'colour' => '#1d3d6e'));
+$check('...moved back, where it has room: the usual notice, and the other is ordinary again', $n['message'] === 'Team saved.' && !RSL_Capacity::on_waiting_list(RSL_Teams::get($appp->id)), $n['message']);
+$fa = array();
+foreach (array('unranked', 'ranked') as $d) {
+    for ($i = 1; $i <= 4; $i++) {
+        $u = $mk("fa$d$i");
+        RSL_Players::register($u, $d === 'ranked' ? array('level' => 'state', 'years' => 'gt3', 'positions' => array('outside')) : array('level' => 'social', 'years' => '1to3', 'positions' => array('outside')));
+        RSL_Free_Agents::join($u, $D, array('division_pref' => $d, 'captain_ok' => $i === 1 ? 1 : 0, 'browsable' => 1), true);
+        $fa[] = $u;
+    }
+}
+$sum = RSL_Placement::suggest($D);
+$drafts = RSL_Free_Agents::building($D)['new_teams'];
+$check('placement proposes one new team in each division (1 place left in each)', !is_wp_error($sum) && isset($drafts['U1'], $drafts['R1']) && !isset($drafts['U2']) && !isset($drafts['R2']),
+    is_wp_error($sum) ? $sum->get_error_message() : json_encode(array_keys((array) $drafts)));
+$warn = RSL_Placement::blockers($D)['warnings'];
+$bump_u = 'Confirming fills a place that 1 Unranked application waiting for approval is next in line for, so it goes on the waiting list.';
+$bump_r = 'Confirming fills a place that 1 Ranked application waiting for approval is next in line for, so it goes on the waiting list.';
+$check('placement warns that the new teams take places applications are in line for (no division over its places)', in_array($bump_u, $warn, true) && in_array($bump_r, $warn, true)
+    && !preg_grep('/would have \d+ teams for/', $warn), implode(' | ', $warn));
+// Add a team takes Ranked's last place, so Q's application goes on the waiting list.
+$n = $adm(array('do' => 'create_team', 'season' => $D, 'name' => "DX $suffix", 'division' => 'ranked'));
+$check('Add a team taking the place an application was in line for: the notice says it\'s now on the waiting list', $n['message'] === "Team \"DX $suffix\" created. 1 application in Ranked, 2097 Post-season is now on the waiting list."
+    && RSL_Capacity::on_waiting_list(RSL_Teams::get($appq->id)), $n['message']);
+$warn = RSL_Placement::blockers($D)['warnings'];
+$check('...now placement\'s new Ranked team goes over: the numbers and the allowance, and no Ranked bump (nobody ordinary left there)',
+    (bool) preg_grep('/^Ranked would have 3 teams for 2 places: about 1 night each sat out (this season|in the \d+ nights? left)\. 2 is the most it takes with no team sitting out more than 0 nights a season\.$/', $warn)
+    && in_array($bump_u, $warn, true) && !in_array($bump_r, $warn, true), implode(' | ', $warn));
+$ver = intval(RSL_Free_Agents::building($D)['draft_version']);
+$named = RSL_Placement::update_new($D, 'U1', array('name' => "DU New $suffix"), $ver);
+$ver = intval(RSL_Free_Agents::building($D)['draft_version']);
+$named = $named === true && RSL_Placement::update_new($D, 'R1', array('name' => "DR New $suffix"), $ver) === true;
+$check('the new teams are named', $named && !RSL_Placement::blockers($D)['blockers'], implode(' | ', RSL_Placement::blockers($D)['blockers']));
+wp_set_current_user($admin);
+delete_transient(RSL_Admin::NOTICE_PREFIX . $admin);
+RSL_Admin_Free_Agents::process(array('rsl_nonce' => wp_create_nonce(RSL_Admin_Free_Agents::ACTION), 'season' => $D, 'tab' => 'placement', 'do' => 'confirm',
+    'version' => intval(RSL_Free_Agents::building($D)['draft_version'])));
+$n = get_transient(RSL_Admin::NOTICE_PREFIX . $admin);
+delete_transient(RSL_Admin::NOTICE_PREFIX . $admin);
+$n = is_array($n) ? $n : array('type' => '', 'message' => '');
+$made = intval($wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . RSL_Database::table('teams') . " WHERE season = %s AND formed_by = 'placement' AND status = 'active'", $D)));
+$check('placement confirm over the places is allowed: two new teams, and the notice gives Ranked\'s numbers', $n['type'] === 'success' && $made === 2
+    && (bool) preg_match('/ Ranked, 2097 Post-season now has 3 teams for 2 places: about 1 night each sat out (this season|in the \d+ nights? left)\./', $n['message']), $n['message']);
+$check('...and says the Unranked application waiting for approval is now on the waiting list', strpos($n['message'], ' 1 application in Unranked, 2097 Post-season is now on the waiting list.') !== false
+    && RSL_Capacity::on_waiting_list(RSL_Teams::get($appp->id)) && strpos($n['message'], 'P Team') === false && strpos($n['message'], 'Q Team') === false, $n['message']);
 
 } catch (Throwable $t) {
     $fails++;
@@ -493,7 +688,16 @@ $_GET = array();
 if ($cands) {
     remove_filter('rsl_open_for_signup_candidates', $cands);
 }
-foreach (array($A, $B, $C) as $s_key) {
+if ($sent_ok) {
+    remove_filter('pre_wp_mail', $sent_ok, 1000);
+}
+$all_drafts = get_option(RSL_Free_Agents::BUILDING_OPTION, array());
+if (is_array($all_drafts) && isset($all_drafts[$D])) {
+    unset($all_drafts[$D]);
+    update_option(RSL_Free_Agents::BUILDING_OPTION, $all_drafts, false);
+}
+$wpdb->delete(RSL_Database::table('join_requests'), array('season' => $D));
+foreach (array($A, $B, $C, $D) as $s_key) {
     foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $s_key)) as $tid) {
         $wpdb->delete(RSL_Database::table('team_members'), array('team_id' => $tid));
         $wpdb->delete(RSL_Database::table('invites'), array('team_id' => $tid));
@@ -533,7 +737,7 @@ foreach ($saved as $opt => $was) {
 if (class_exists('RSL_Portal')) {
     RSL_Portal::flush_menu_state();
 }
-$wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('outbox') . " WHERE to_email LIKE %s", '%-' . $suffix . '@example.test'));
+$wpdb->query($wpdb->prepare("DELETE FROM " . RSL_Database::table('outbox') . " WHERE to_email LIKE %s OR dedupe LIKE %s", '%-' . $suffix . '@example.test', 'optout:' . $D . ':%'));
 rsl_dev_delete_users($users);
 rsl_dev_release_mail($hold);
 }

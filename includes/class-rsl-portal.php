@@ -426,9 +426,11 @@ class RSL_Portal {
                     self::flash('error', $team->get_error_message());
                     return self::apply_retry($team) ? $back . '#rsl-apply' : $back;
                 }
-                // A full division never refuses it (0.19.0): the captain hears it's on the waiting list instead.
-                $waiting = RSL_Capacity::waiting_note($team);
-                self::flash('success', 'Application sent for ' . $team->name . self::season_aside($team->season) . '. ' . ($waiting !== '' ? $waiting : 'We\'ll email you when it\'s approved.'));
+                // A full division never refuses it (0.19.0): the captain hears it's on the waiting list instead
+                // (apply_from_post() says whether it is; the words leave out a season the aside has just named).
+                $aside = self::season_aside($team->season);
+                $waiting = !empty($team->waiting_list) ? RSL_Capacity::waiting_note($team, $aside === '') : '';
+                self::flash('success', 'Application sent for ' . $team->name . $aside . '. ' . ($waiting !== '' ? $waiting : 'We\'ll email you when it\'s approved.'));
                 return $back;
 
             case 'withdraw':
@@ -592,8 +594,8 @@ class RSL_Portal {
         $v = array_merge(array('name' => '', 'division' => 'ranked', 'level' => '', 'colour' => '', 'season' => ''), is_array($v) ? $v : array());
         $req = $required ? ' required' : '';
         $full = array();
-        foreach (array_keys(is_array($choices) ? $choices : array()) as $key) {
-            $words = RSL_Capacity::full_words(RSL_Capacity::season($key));
+        foreach (RSL_Capacity::seasons(array_keys(is_array($choices) ? $choices : array())) as $info) {
+            $words = RSL_Capacity::full_words($info);
             if ($words !== '') {
                 $full[] = $words;
             }
@@ -663,7 +665,8 @@ class RSL_Portal {
     /**
      * The captain application from a form (0.17.0): the #rsl-apply card ($legacy true) or Start
      * a team at registration. The season through RSL_Seasons::pick_open(), then RSL_Teams::apply().
-     * Returns the pending team (always an object) or WP_Error. A second submit of the same
+     * Returns the pending team (always an object, with ->waiting_list from
+     * RSL_Teams::with_waiting_list(), which the flashes read) or WP_Error. A second submit of the same
      * application (a double click, a re-sent POST) returns the application the first one made.
      * On an error worth retrying what was typed is kept for the card (APPLY_DRAFT_PREFIX); on
      * success any old draft goes.

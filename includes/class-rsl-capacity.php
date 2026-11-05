@@ -18,24 +18,32 @@
  *
  * A night where the division has no slot isn't a sit-out (0.18.2 counts only
  * nights its division had games); bye and finals nights don't count. A
- * division with no slot on any regular night has 0 places; a season with no
- * regular nights yet isn't checked (null). Places never go above MAX_PLACES
- * (50, the most the Most teams per division setting takes): with an allowance
- * at or above the nights that have a slot the sum never binds, so it's 50
- * there. The override (Most teams per division above 0) wins.
+ * division with no slot on any regular night has 0 places (no_slots); a
+ * season with no regular nights yet isn't checked (null). Places stop at the
+ * ceiling: MAX_PLACES (50, the most the Most teams per division setting
+ * takes), or twice the fewest slots on a night when that's more, so allowance
+ * 0 always gives 2 × the fewest slots and a bigger allowance never gives
+ * fewer places. With an allowance at or above the nights that have a slot the
+ * sum never binds, so it's the ceiling there; a large result is cut to it too
+ * (12 slots on 3 nights at allowance 2 would be 72). clamped says the ceiling
+ * set the places, so no word blames the allowance. The override (Most teams
+ * per division above 0) wins.
  *
  * Taken places are the active teams in the season and division. The waiting
  * list is the pending applications there, oldest first (applied_at, id),
  * beyond the places left. Nothing is stored: it's worked out from the teams
  * table on each read, so approving, declining, withdrawing and a team leaving
- * move it on their own.
+ * move it on their own. An admin change that takes a place an ordinary
+ * application was in line for says so (bumped(), would_bump()).
  *
- * Pure core (no database, so tests call it directly): places(), sit_outs(),
- * sit_out_numbers(), sit_out_words(), over_words(), queue(), places_line(),
- * full_words(), waiting_words(). season() is the one wrapper, and every reader
- * goes through it: placement (RSL_Placement::capacity()), the Start a team
- * form (RSL_Portal::team_fields()), RSL_Teams::apply(), the captain's
- * application card and the admin screens. Nothing works out places another way.
+ * Pure core (no database, so tests call it directly): places(),
+ * places_detail(), ceiling(), sit_outs(), sit_out_numbers(), sit_out_words(),
+ * over_words(), over_line(), queue(), bumped(), bumped_words(), would_bump(),
+ * places_line(), full_words(), waiting_words(). season() / seasons() are the
+ * one wrapper, and every reader goes through it: placement
+ * (RSL_Placement::capacity() and check()), the Start a team form
+ * (RSL_Portal::team_fields()), RSL_Teams::apply(), the captain's application
+ * card and the admin screens. Nothing works out places another way.
  */
 
 if (!defined('ABSPATH')) {
@@ -60,25 +68,46 @@ class RSL_Capacity {
      * allowance. null with no nights (not checked); 0 when no night has a slot.
      */
     public static function places($slots, $allowance) {
+        $x = self::places_detail($slots, $allowance);
+        return $x['places'];
+    }
+
+    /**
+     * places() with clamped: true when the ceiling set the places, not the
+     * allowance (one more team would still keep every team within it). Returns
+     * array(places, clamped).
+     */
+    public static function places_detail($slots, $allowance) {
         $slots = array_values((array) $slots);
         if (!$slots) {
-            return null;
+            return array('places' => null, 'clamped' => false);
         }
         $on = self::nights_with_slots($slots);
         if (!$on) {
-            return 0;
+            return array('places' => 0, 'clamped' => false);
         }
         $allowance = max(0, intval($allowance));
-        // The nights sat out minus allowance × n is convex in n and 0 at n = 0, so the n that fit
-        // run from 0 up to the first that doesn't.
-        $best = 0;
-        for ($n = 1; $n <= self::MAX_PLACES; $n++) {
+        $top = self::ceiling($on);
+        // Up to twice the fewest slots nobody sits out. The nights sat out minus allowance × n is
+        // convex in n and 0 at n = 0, so the n that fit run from 0 up to the first that doesn't.
+        $best = 2 * min($on);
+        for ($n = $best + 1; $n <= $top; $n++) {
             if (self::sit_outs($n, $on) > $allowance * $n) {
                 break;
             }
             $best = $n;
         }
-        return $best;
+        return array('places' => $best, 'clamped' => $best === $top && self::sit_outs($top + 1, $on) <= $allowance * ($top + 1));
+    }
+
+    /**
+     * The most places a division's slots give, whatever the allowance:
+     * MAX_PLACES, or twice the fewest slots on a night with any when that's
+     * more (every team still plays every night there). 0 with no slot at all.
+     */
+    public static function ceiling($slots) {
+        $on = self::nights_with_slots($slots);
+        return $on ? max(self::MAX_PLACES, 2 * min($on)) : 0;
     }
 
     /** Nights sat out in all by $teams teams over the nights in $slots that have a slot: the sum of max(0, teams − 2 × slots). */
@@ -155,6 +184,19 @@ class RSL_Capacity {
     }
 
     /**
+     * After an admin made a team active in a division or moved one into it
+     * ($info: the division's, from season(), after the change): '' while it's
+     * within its places (or not checked), else "Ranked, 2027 Pre-season now
+     * has 31 teams for 30 places: about …".
+     */
+    public static function over_line($info) {
+        if (!is_array($info) || $info['places'] === null || $info['active'] <= $info['places']) {
+            return '';
+        }
+        return $info['label'] . ', ' . RSL_Seasons::short_label($info['season']) . ' now has ' . self::over_words($info, $info['active']) . '.';
+    }
+
+    /**
      * The applications in one season and division, oldest first by applied_at
      * then id (as RSL_Teams::pending_applications() lists them): the first
      * places − active are ordinary, the rest are on the waiting list. $pending:
@@ -176,9 +218,55 @@ class RSL_Capacity {
     }
 
     /**
+     * The applications an admin change put on the waiting list: the ids that
+     * were ordinary in $before and are waiting in $after (one division's info
+     * from season(), read before and after the change), leaving out $except,
+     * the team the change was about. A list of ids.
+     */
+    public static function bumped($before, $after, $except = 0) {
+        if (!is_array($before) || !is_array($after)) {
+            return array();
+        }
+        $ordinary = array_diff(array_map('intval', (array) $before['order']), array_map('intval', (array) $before['waiting']));
+        $out = array();
+        foreach ((array) $after['waiting'] as $id) {
+            if (intval($id) !== intval($except) && in_array(intval($id), $ordinary, true)) {
+                $out[] = intval($id);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * "2 applications in Ranked, 2027 Pre-season are now on the waiting list."
+     * $other: the change was about an application itself ("1 other application").
+     * Never names a team.
+     */
+    public static function bumped_words($info, $n, $other = false) {
+        $n = intval($n);
+        return $n . ($other ? ' other' : '') . ' application' . ($n === 1 ? '' : 's') . ' in ' . $info['label'] . ', ' . RSL_Seasons::short_label($info['season'])
+            . ' ' . ($n === 1 ? 'is' : 'are') . ' now on the waiting list.';
+    }
+
+    /**
+     * How many of a division's ordinary applications ($info from season())
+     * would go on the waiting list once it has $active_after active teams:
+     * those the places left then no longer reach. 0 when not checked.
+     */
+    public static function would_bump($info, $active_after) {
+        if (!is_array($info) || $info['places'] === null) {
+            return 0;
+        }
+        $ordinary = count((array) $info['order']) - count((array) $info['waiting']);
+        return max(0, $ordinary - max(0, intval($info['places']) - intval($active_after)));
+    }
+
+    /**
      * The admin's places line for one season and division (info from
      * season()): "Ranked, 2027 Mid-season 2: 28 of 30 places taken, 4
-     * applications waiting (2 on the waiting list)."
+     * applications waiting (2 on the waiting list)." A note in brackets says
+     * where the places came from when it wasn't the allowance: set by hand,
+     * no game slots this season, or the most a division takes (the ceiling).
      */
     public static function places_line($info) {
         $head = $info['label'] . ', ' . RSL_Seasons::short_label($info['season']) . ': ';
@@ -192,40 +280,68 @@ class RSL_Capacity {
         $taken = $active > $places
             ? $active . ' teams for ' . $places . ' place' . ($places === 1 ? '' : 's')
             : $active . ' of ' . $places . ' place' . ($places === 1 ? '' : 's') . ' taken';
-        return $head . $taken . (!empty($info['set_by_hand']) ? ' (set by hand)' : '') . ', ' . $apps . '.';
+        $note = '';
+        if (!empty($info['set_by_hand'])) {
+            $note = ' (set by hand)';
+        } elseif (!empty($info['no_slots'])) {
+            $note = ' (no game slots this season)';
+        } elseif (!empty($info['clamped'])) {
+            $note = ' (the most a division takes)';
+        }
+        return $head . $taken . $note . ', ' . $apps . '.';
     }
 
     /**
      * What Start a team says for one season ($season_info from season()), or
      * '' when neither division is full (its active teams and applications
      * reach its places): "Ranked is full for 2027 Pre-season. An Unranked team
-     * can still get a place; a new Ranked team goes on the waiting list."
+     * can still get a place; a new Ranked team goes on the waiting list." A
+     * division with no game slots all season says that instead of full.
      */
     public static function full_words($season_info) {
         $full = array();
+        $none = array();
         $room = array();
         foreach ($season_info['divisions'] as $d => $info) {
-            if (!empty($info['full'])) {
+            if (!empty($info['no_slots'])) {
+                $none[$d] = $info['label'];
+            } elseif (!empty($info['full'])) {
                 $full[$d] = $info['label'];
             } else {
                 $room[$d] = $info['label'];
             }
         }
-        if (!$full) {
+        if (!$full && !$none) {
             return '';
         }
-        $when = RSL_Seasons::short_label($season_info['season']);
-        if (!$room) {
-            return implode(' and ', $full) . ' are both full for ' . $when . '. A new team goes on the waiting list.';
+        $parts = array();
+        if ($full) {
+            $parts[] = count($full) > 1 ? implode(' and ', $full) . ' are both full' : reset($full) . ' is full';
         }
-        $f = reset($full);
+        if ($none) {
+            $parts[] = count($none) > 1 ? implode(' and ', $none) . ' have no game slots' : reset($none) . ' has no game slots';
+        }
+        $head = implode(' and ', $parts) . ' for ' . RSL_Seasons::short_label($season_info['season']) . '.';
+        if (!$room) {
+            return $head . ' A new team goes on the waiting list.';
+        }
+        $f = reset($full) !== false ? reset($full) : reset($none);
         $r = reset($room);
-        return $f . ' is full for ' . $when . '. ' . (preg_match('/^[AEIOU]/', $r) ? 'An ' : 'A ') . $r . ' team can still get a place; a new ' . $f . ' team goes on the waiting list.';
+        return $head . ' ' . (preg_match('/^[AEIOU]/', $r) ? 'An ' : 'A ') . $r . ' team can still get a place; a new ' . $f . ' team goes on the waiting list.';
     }
 
-    /** What the captain sees about an application on the waiting list ($info: its division's, from season()). */
-    public static function waiting_words($info) {
-        return $info['label'] . ' is full for ' . RSL_Seasons::short_label($info['season']) . ', so your application is on the waiting list. '
+    /**
+     * What the captain sees about an application on the waiting list ($info:
+     * its division's, from season()). $with_season false leaves the season out,
+     * for a message that has just named it.
+     */
+    public static function waiting_words($info, $with_season = true) {
+        $when = $with_season ? ' for ' . RSL_Seasons::short_label($info['season']) : '';
+        if (!empty($info['no_slots'])) {
+            return $info['label'] . ' has no game slots' . ($with_season ? $when : ' that season') . ', so your application is on the waiting list. '
+                . 'If the league adds ' . $info['label'] . ' courts and then approves your application, you\'ll get the approval email with your team\'s invite link.';
+        }
+        return $info['label'] . ' is full' . $when . ', so your application is on the waiting list. '
             . 'If a place opens and the league approves it, you\'ll get the approval email with your team\'s invite link.';
     }
 
@@ -258,82 +374,102 @@ class RSL_Capacity {
      * checked (it has regular nights), started (its first regular night is
      * today or earlier), divisions => division => array(division, label,
      * season, allowance, checked, started, places (null = not checked),
-     * set_by_hand (the override), active, pending (count), order (pending ids,
-     * oldest first), waiting (ids on the waiting list), left (places − active,
-     * at least 0; null), full (active + pending ≥ places), slots (each regular
-     * night's slots), slots_left (the regular nights after today))). A few
-     * queries; not memoised, so a read after a change sees it.
+     * set_by_hand (the override), clamped (the ceiling set the places, not
+     * the allowance), no_slots (no slot on any regular night, so 0 places),
+     * active, pending (count), order (pending ids, oldest first), waiting
+     * (ids on the waiting list), left (places − active, at least 0; null),
+     * full (active + pending ≥ places), slots (each regular night's slots),
+     * slots_left (the regular nights after today))). A few queries; not
+     * memoised, so a read after a change sees it.
      */
     public static function season($season) {
+        $all = self::seasons(array($season));
+        return $all[(string) $season];
+    }
+
+    /**
+     * season() for several seasons at once (season => the same array), for a
+     * form or screen that shows more than one: the venues and courts, the
+     * night exceptions and the teams are each read once for all of them.
+     */
+    public static function seasons($keys) {
         global $wpdb;
+        $keys = array_values(array_unique(array_map('strval', (array) $keys)));
+        $out = array();
+        if (!$keys) {
+            return $out;
+        }
         $allowance = self::allowance();
         $fa = RSL_Free_Agents::settings();
         $override = isset($fa['capacity_override']) && is_array($fa['capacity_override']) ? $fa['capacity_override'] : array();
         $today = current_time('Y-m-d');
-        $regular = array();
-        $started = false;
-        foreach (RSL_Courts::season_slot_counts($season) as $row) {
-            if ($row['night']->type !== 'regular') {
-                continue;
-            }
-            $regular[] = $row;
-            $started = $started || (string) $row['night']->night_date <= $today;
-        }
-        $active = array_fill_keys(array_keys(RSL_Teams::DIVISIONS), 0);
-        $pending = array_fill_keys(array_keys(RSL_Teams::DIVISIONS), array());
+        $counts = RSL_Courts::seasons_slot_counts($keys);
+        $zero = array_fill_keys(array_keys(RSL_Teams::DIVISIONS), 0);
+        $none = array_fill_keys(array_keys(RSL_Teams::DIVISIONS), array());
+        $active = array_fill_keys($keys, $zero);
+        $pending = array_fill_keys($keys, $none);
+        $in = implode(', ', array_fill(0, count($keys), '%s'));
         foreach ((array) $wpdb->get_results($wpdb->prepare(
-            "SELECT id, division, status, applied_at FROM " . RSL_Database::table('teams') . " WHERE season = %s AND status IN ('active', 'pending') ORDER BY applied_at, id",
-            $season
+            "SELECT id, season, division, status, applied_at FROM " . RSL_Database::table('teams') . " WHERE season IN ($in) AND status IN ('active', 'pending') ORDER BY applied_at, id",
+            $keys
         )) as $t) {
-            if (!isset($active[$t->division])) {
+            if (!isset($active[$t->season][$t->division])) {
                 continue;
             }
             if ($t->status === 'active') {
-                $active[$t->division]++;
+                $active[$t->season][$t->division]++;
             } else {
-                $pending[$t->division][] = $t;
+                $pending[$t->season][$t->division][] = $t;
             }
         }
-        $out = array('season' => $season, 'allowance' => $allowance, 'checked' => (bool) $regular, 'started' => $started, 'divisions' => array());
-        foreach (RSL_Teams::DIVISIONS as $d => $label) {
-            $slots = array();
-            $left = array();
-            foreach ($regular as $row) {
-                $slots[] = intval($row['slots'][$d]);
-                if ((string) $row['night']->night_date > $today) {
-                    $left[] = intval($row['slots'][$d]);
+        foreach ($keys as $season) {
+            $regular = array();
+            $started = false;
+            foreach ($counts[$season] as $row) {
+                if ($row['night']->type !== 'regular') {
+                    continue;
                 }
+                $regular[] = $row;
+                $started = $started || (string) $row['night']->night_date <= $today;
             }
-            $set = isset($override[$d]) && is_numeric($override[$d]) ? intval($override[$d]) : 0;
-            $places = $set > 0 ? $set : self::places($slots, $allowance);
-            $q = self::queue($places, $active[$d], $pending[$d]);
-            $out['divisions'][$d] = array(
-                'division' => $d,
-                'label' => $label,
-                'season' => $season,
-                'allowance' => $allowance,
-                'checked' => (bool) $regular,
-                'started' => $started,
-                'places' => $places,
-                'set_by_hand' => $set > 0,
-                'active' => $active[$d],
-                'pending' => count($pending[$d]),
-                'order' => $q['order'],
-                'waiting' => $q['waiting'],
-                'left' => $places === null ? null : max(0, $places - $active[$d]),
-                'full' => $places !== null && $active[$d] + count($pending[$d]) >= $places,
-                'slots' => $slots,
-                'slots_left' => $left,
-            );
-        }
-        return $out;
-    }
-
-    /** Each division's places for a season: division => int, or null (not checked). Placement's court space. */
-    public static function places_by_division($season) {
-        $out = array();
-        foreach (self::season($season)['divisions'] as $d => $info) {
-            $out[$d] = $info['places'];
+            $one = array('season' => $season, 'allowance' => $allowance, 'checked' => (bool) $regular, 'started' => $started, 'divisions' => array());
+            foreach (RSL_Teams::DIVISIONS as $d => $label) {
+                $slots = array();
+                $left = array();
+                foreach ($regular as $row) {
+                    $slots[] = intval($row['slots'][$d]);
+                    if ((string) $row['night']->night_date > $today) {
+                        $left[] = intval($row['slots'][$d]);
+                    }
+                }
+                $set = isset($override[$d]) && is_numeric($override[$d]) ? intval($override[$d]) : 0;
+                $rule = self::places_detail($slots, $allowance);
+                $places = $set > 0 ? $set : $rule['places'];
+                $act = $active[$season][$d];
+                $pend = $pending[$season][$d];
+                $q = self::queue($places, $act, $pend);
+                $one['divisions'][$d] = array(
+                    'division' => $d,
+                    'label' => $label,
+                    'season' => $season,
+                    'allowance' => $allowance,
+                    'checked' => (bool) $regular,
+                    'started' => $started,
+                    'places' => $places,
+                    'set_by_hand' => $set > 0,
+                    'clamped' => $set <= 0 && $rule['clamped'],
+                    'no_slots' => $set <= 0 && $rule['places'] === 0,
+                    'active' => $act,
+                    'pending' => count($pend),
+                    'order' => $q['order'],
+                    'waiting' => $q['waiting'],
+                    'left' => $places === null ? null : max(0, $places - $act),
+                    'full' => $places !== null && $act + count($pend) >= $places,
+                    'slots' => $slots,
+                    'slots_left' => $left,
+                );
+            }
+            $out[$season] = $one;
         }
         return $out;
     }
@@ -347,28 +483,26 @@ class RSL_Capacity {
      * The captain's words for their pending application while it's on the
      * waiting list (waiting_words()), else '': the flash after applying and
      * the application card on the league page. Only ever about their own.
+     * $with_season false leaves the season out, for a message that has just
+     * named it.
      */
-    public static function waiting_note($team) {
+    public static function waiting_note($team, $with_season = true) {
         if (!$team || !is_object($team) || !isset($team->status) || $team->status !== 'pending' || !isset(RSL_Teams::DIVISIONS[$team->division])) {
             return '';
         }
         $info = self::season($team->season)['divisions'][$team->division];
-        return in_array(intval($team->id), $info['waiting'], true) ? self::waiting_words($info) : '';
+        return in_array(intval($team->id), $info['waiting'], true) ? self::waiting_words($info, $with_season) : '';
     }
 
     /**
      * After an admin made a team active in a division or moved one into it:
-     * '' while it's within its places (or not checked), else "Ranked, 2027
-     * Pre-season now has 31 teams for 30 places: about …".
+     * over_line() for that division read now ('' while it's within its places
+     * or not checked).
      */
     public static function over_notice($season, $division) {
         if (!isset(RSL_Teams::DIVISIONS[$division])) {
             return '';
         }
-        $info = self::season($season)['divisions'][$division];
-        if ($info['places'] === null || $info['active'] <= $info['places']) {
-            return '';
-        }
-        return $info['label'] . ', ' . RSL_Seasons::short_label($season) . ' now has ' . self::over_words($info, $info['active']) . '.';
+        return self::over_line(self::season($season)['divisions'][$division]);
     }
 }

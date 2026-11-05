@@ -65,6 +65,8 @@ class RSL_Admin {
                 return $back;
 
             case 'create_team':
+                $posted = isset($post['division']) ? sanitize_key($post['division']) : 'ranked';
+                $before = self::division_info($season, $posted);
                 $team = RSL_Teams::create($season, array(
                     'name' => isset($post['name']) ? wp_unslash($post['name']) : '',
                     'division' => isset($post['division']) ? sanitize_key($post['division']) : 'ranked',
@@ -76,11 +78,13 @@ class RSL_Admin {
                     return $back;
                 }
                 // Over the division's places is allowed (0.19.0); the notice says what it costs.
-                self::notice('success', self::with_over('Team "' . $team->name . '" created.', $team));
+                self::notice('success', self::places_words('Team "' . $team->name . '" created.', $team, $before));
                 return add_query_arg('team', $team->id, $back);
 
             case 'update_team':
                 $was = RSL_Teams::get($team_id);
+                $to = isset($post['division']) ? sanitize_key($post['division']) : '';
+                $before = $was && $to !== $was->division ? self::division_info($was->season, $to) : null;
                 $team = RSL_Teams::update($team_id, array(
                     'name' => isset($post['name']) ? wp_unslash($post['name']) : '',
                     'division' => isset($post['division']) ? sanitize_key($post['division']) : '',
@@ -96,10 +100,9 @@ class RSL_Admin {
                 $saved = 'Team saved.';
                 if ($was && $was->division !== $team->division) {
                     // Moved into a division (0.19.0): over its places is allowed, and the notice says what it costs;
-                    // an application moved into a full one is on the waiting list there.
-                    $saved = $team->status === 'pending' && RSL_Capacity::on_waiting_list($team)
-                        ? $saved . ' Its application is on the waiting list in ' . RSL_Teams::DIVISIONS[$team->division] . '.'
-                        : self::with_over($saved, $team);
+                    // an application moved into a full one is on the waiting list there, and one that takes a place
+                    // another application was in line for says so.
+                    $saved = self::places_words($saved, $team, $before, $team->status === 'pending');
                 }
                 self::notice('success', $saved);
                 return $team_back;
@@ -121,6 +124,9 @@ class RSL_Admin {
             case 'decline':
                 $mail_flag = 'rsl_mail_failed_' . get_current_user_id();
                 delete_transient($mail_flag);
+                // Approving one ahead of older applications can put one of them on the waiting list (0.19.0).
+                $app = $do === 'approve' ? RSL_Teams::get($team_id) : null;
+                $before = $app && $app->status === 'pending' ? self::division_info($app->season, $app->division) : null;
                 $result = $do === 'approve' ? RSL_Teams::approve($team_id) : RSL_Teams::decline($team_id, isset($post['note']) ? wp_unslash($post['note']) : '');
                 $unsent = get_transient($mail_flag);
                 delete_transient($mail_flag);
@@ -128,11 +134,11 @@ class RSL_Admin {
                     self::notice('error', $result->get_error_message());
                 } elseif ($unsent !== false) {
                     $words = $result->name . ($do === 'approve' ? ' approved' : ' declined') . ', but the email to the captain couldn\'t be sent — ' . ($do === 'approve' ? 'send them the invite link yourself.' : 'let them know yourself.');
-                    self::notice('error', $do === 'approve' ? self::with_over($words, $result) : $words);
+                    self::notice('error', $do === 'approve' ? self::places_words($words, $result, $before, true) : $words);
                 } else {
                     $words = $result->name . ($do === 'approve' ? ' approved — the captain has been emailed their invite link.' : ' declined — the captain has been emailed.');
                     // Approving over the places takes no extra step (0.19.0); the notice repeats the numbers.
-                    self::notice('success', $do === 'approve' ? self::with_over($words, $result) : $words);
+                    self::notice('success', $do === 'approve' ? self::places_words($words, $result, $before, true) : $words);
                 }
                 return $back;
 
@@ -247,17 +253,41 @@ class RSL_Admin {
         set_transient(self::NOTICE_PREFIX . get_current_user_id(), array('type' => $type, 'message' => $message), 60);
     }
 
+    /** One division's places now (RSL_Capacity::season()), or null for a division that isn't one. */
+    private static function division_info($season, $division) {
+        if (!isset(RSL_Teams::DIVISIONS[$division])) {
+            return null;
+        }
+        $all = RSL_Capacity::season($season);
+        return $all['divisions'][$division];
+    }
+
     /**
-     * A notice's words, plus the sit-out numbers when this active team's division is now over
-     * its places (RSL_Capacity::over_notice(), 0.19.0): "… Ranked, 2027 Mid-season 2 now has 31
-     * teams for 30 places: about 2.3 nights each sat out this season, so some sit out 3."
+     * A notice's words after a change made $team active in its division or moved it there
+     * (0.19.0), from one read of the places: the sit-out numbers when an active team's division
+     * is now over (RSL_Capacity::over_line(): "… Ranked, 2027 Mid-season 2 now has 31 teams for
+     * 30 places: about 2.3 nights each sat out this season, so some sit out 3."); for an
+     * application moved there, whether it's on the waiting list; and, against $before (the
+     * division read before the change), how many applications it put on the waiting list
+     * (RSL_Capacity::bumped_words(); $other: the change was about an application itself).
+     * Never names another team.
      */
-    private static function with_over($words, $team) {
-        if (!$team || !is_object($team) || $team->status !== 'active') {
+    private static function places_words($words, $team, $before = null, $other = false) {
+        if (!$team || !is_object($team)) {
             return $words;
         }
-        $over = RSL_Capacity::over_notice($team->season, $team->division);
-        return $over !== '' ? $words . ' ' . $over : $words;
+        $info = self::division_info($team->season, $team->division);
+        if (!$info) {
+            return $words;
+        }
+        if ($team->status === 'active') {
+            $over = RSL_Capacity::over_line($info);
+            $words .= $over !== '' ? ' ' . $over : '';
+        } elseif ($team->status === 'pending' && $before && in_array(intval($team->id), $info['waiting'], true)) {
+            $words .= ' Its application is on the waiting list in ' . $info['label'] . '.';
+        }
+        $moved = $before ? count(RSL_Capacity::bumped($before, $info, $team->id)) : 0;
+        return $moved ? $words . ' ' . RSL_Capacity::bumped_words($info, $moved, $other) : $words;
     }
 
     private static function take_notice() {
@@ -328,16 +358,36 @@ class RSL_Admin {
         <?php $applications = RSL_Teams::pending_applications(); ?>
         <?php if ($applications): ?>
             <?php
-            // Places in each season and division with applications (RSL_Capacity, 0.19.0): one read a season.
-            $places = array();
+            // Places in each season and division with applications (RSL_Capacity, 0.19.0): one read for them all.
             $lines = array();
             foreach ($applications as $app) {
-                if (!isset($places[$app->season])) {
-                    $places[$app->season] = RSL_Capacity::season($app->season);
-                }
                 $lines[$app->season][$app->division] = true;
             }
+            $places = RSL_Capacity::seasons(array_keys($lines));
             uksort($lines, function ($a, $b) { return RSL_Seasons::ordinal($a) - RSL_Seasons::ordinal($b); });
+            // The words under the lines describe only what they show: places worked out from the nights, set by hand, or none checked.
+            $worked = false;
+            $by_hand = false;
+            foreach ($lines as $s_key => $divs_with) {
+                foreach (array_keys($divs_with) as $d) {
+                    $i = isset($places[$s_key]['divisions'][$d]) ? $places[$s_key]['divisions'][$d] : null;
+                    if ($i && $i['places'] !== null) {
+                        $by_hand = $by_hand || !empty($i['set_by_hand']);
+                        $worked = $worked || empty($i['set_by_hand']);
+                    }
+                }
+            }
+            $allowance = RSL_Capacity::allowance();
+            $about = '';
+            if ($worked) {
+                $about .= 'A division\'s places are the most teams its game slots fit with no team sitting out more than ' . $allowance . ' night' . ($allowance === 1 ? '' : 's') . ' in the season (set on Free Agents → Settings). ';
+            }
+            if ($by_hand) {
+                $about .= $worked ? 'A line marked set by hand takes its places from Most teams per division instead. ' : 'Places marked set by hand come from Most teams per division (Free Agents → Settings). ';
+            }
+            if ($worked || $by_hand) {
+                $about .= 'Applications past the places left are on the waiting list, oldest first. You can still approve one over the places: the row says how many nights teams would sit out.';
+            }
             ?>
             <h2>Team applications (<?php echo count($applications); ?>)</h2>
             <ul class="rsl-places">
@@ -347,7 +397,7 @@ class RSL_Admin {
                     <?php endforeach; ?>
                 <?php endforeach; ?>
             </ul>
-            <p class="description">A division's places are the most teams its game slots fit with no team sitting out more than <?php echo intval(RSL_Capacity::allowance()); ?> night<?php echo RSL_Capacity::allowance() === 1 ? '' : 's'; ?> in the season (set on Free Agents → Settings). Applications past the places left are on the waiting list, oldest first. You can still approve one over the places: the row says how many nights teams would sit out.</p>
+            <?php if ($about !== ''): ?><p class="description"><?php echo esc_html($about); ?></p><?php endif; ?>
             <table class="widefat striped" style="max-width: 1100px;">
                 <thead><tr><th style="width: 52px;"></th><th>Team</th><th>Season</th><th>Division</th><th>Level (their guess)</th><th>Captain</th><th>Applied</th><th>Decision</th></tr></thead>
                 <tbody>

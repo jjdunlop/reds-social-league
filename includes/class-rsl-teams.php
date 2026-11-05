@@ -186,7 +186,9 @@ class RSL_Teams {
     /**
      * The team with ->waiting_list set (0.19.0): true for a pending application
      * beyond its division's places left, worked out now (RSL_Capacity::
-     * on_waiting_list(); nothing is stored), else false.
+     * on_waiting_list(); nothing is stored), else false. The flashes after
+     * applying read it, so only an application on the waiting list reads the
+     * places again for its words.
      */
     public static function with_waiting_list($team) {
         if ($team && is_object($team)) {

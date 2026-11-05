@@ -495,20 +495,41 @@ class RSL_Courts {
      * RSL_Capacity), not a few for each night.
      */
     public static function season_slot_counts($season) {
-        $nights = self::nights($season);
-        $plans = self::plans_for($nights);
-        $out = array();
-        foreach ($nights as $n) {
-            $count = array_fill_keys(array_keys(RSL_Teams::DIVISIONS), 0);
-            foreach ($plans[intval($n->id)]['venues'] as $v) {
-                if (!isset($count[$v['division']])) {
-                    continue;
-                }
-                foreach ($v['courts'] as $c) {
-                    $count[$v['division']] += count($c['slots']);
-                }
+        $all = self::seasons_slot_counts(array($season));
+        return $all[(string) $season];
+    }
+
+    /**
+     * season_slot_counts() for several seasons (season => the same list), with
+     * the venues, courts and night exceptions read once for all of them: the
+     * Start a team form and the Teams screen show more than one season.
+     */
+    public static function seasons_slot_counts($seasons) {
+        $by = array();
+        $all = array();
+        foreach ((array) $seasons as $season) {
+            $season = (string) $season;
+            if (!isset($by[$season])) {
+                $by[$season] = self::nights($season);
+                $all = array_merge($all, $by[$season]);
             }
-            $out[] = array('night' => $n, 'slots' => $count);
+        }
+        $plans = self::plans_for($all);
+        $out = array();
+        foreach ($by as $season => $nights) {
+            $out[$season] = array();
+            foreach ($nights as $n) {
+                $count = array_fill_keys(array_keys(RSL_Teams::DIVISIONS), 0);
+                foreach ($plans[intval($n->id)]['venues'] as $v) {
+                    if (!isset($count[$v['division']])) {
+                        continue;
+                    }
+                    foreach ($v['courts'] as $c) {
+                        $count[$v['division']] += count($c['slots']);
+                    }
+                }
+                $out[$season][] = array('night' => $n, 'slots' => $count);
+            }
         }
         return $out;
     }

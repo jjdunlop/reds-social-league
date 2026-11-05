@@ -246,6 +246,8 @@ class RSL_Admin_Free_Agents {
                     self::notice('error', self::STALE);
                     return $back;
                 }
+                // The places before, so the notice can say which applications the new teams put on the waiting list.
+                $places_before = RSL_Capacity::season($season);
                 $r = RSL_Placement::confirm($season, $only === '' ? null : $only, $me);
                 if (is_wp_error($r)) {
                     self::notice('error', implode(' ', $r->get_error_messages()));
@@ -255,10 +257,10 @@ class RSL_Admin_Free_Agents {
                 // comes back in 'errors' — say so plainly, never a green "Confirmed".
                 $errors = is_array($r) && !empty($r['errors']) ? array_filter(array_map('strval', (array) $r['errors'])) : array();
                 if ($errors) {
-                    self::notice('error', 'Not everything was confirmed. ' . implode(' ', $errors) . ' Fix that and confirm again. ' . self::confirm_words($r, 'What was done') . self::over_words($season, $r));
+                    self::notice('error', 'Not everything was confirmed. ' . implode(' ', $errors) . ' Fix that and confirm again. ' . self::confirm_words($r, 'What was done') . self::places_words($season, $r, $places_before));
                     return $back;
                 }
-                self::notice('success', self::confirm_words($r) . self::over_words($season, $r));
+                self::notice('success', self::confirm_words($r) . self::places_words($season, $r, $places_before));
                 return $back;
 
             case 'save_settings':
@@ -480,17 +482,27 @@ class RSL_Admin_Free_Agents {
     }
 
     /**
-     * After a confirm that made new teams (0.19.0): for each division they went into that is now
-     * over its places, " Ranked, 2027 Mid-season 2 now has 31 teams for 30 places: …"
-     * (RSL_Capacity::over_notice()); else ''.
+     * After a confirm that made new teams (0.19.0), for each division they went into: when it's
+     * now over its places, " Ranked, 2027 Mid-season 2 now has 31 teams for 30 places: …"
+     * (RSL_Capacity::over_line()); when they took places applications waiting for approval were
+     * in line for, " 2 applications in Ranked, 2027 Mid-season 2 are now on the waiting list."
+     * (RSL_Capacity::bumped(), against $before, the places read before confirming). Else ''.
      */
-    private static function over_words($season, $r) {
+    private static function places_words($season, $r, $before) {
+        if (!is_array($r) || empty($r['new_in'])) {
+            return '';
+        }
+        $after = RSL_Capacity::season($season);
         $out = '';
         foreach (array_keys(RSL_Teams::DIVISIONS) as $d) {
-            if (is_array($r) && !empty($r['new_in'][$d])) {
-                $over = RSL_Capacity::over_notice($season, $d);
-                $out .= $over !== '' ? ' ' . $over : '';
+            if (empty($r['new_in'][$d])) {
+                continue;
             }
+            $info = $after['divisions'][$d];
+            $over = RSL_Capacity::over_line($info);
+            $out .= $over !== '' ? ' ' . $over : '';
+            $moved = is_array($before) ? count(RSL_Capacity::bumped($before['divisions'][$d], $info)) : 0;
+            $out .= $moved ? ' ' . RSL_Capacity::bumped_words($info, $moved) : '';
         }
         return $out;
     }

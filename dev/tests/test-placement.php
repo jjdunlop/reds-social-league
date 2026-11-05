@@ -274,6 +274,8 @@ $res = $run($cap, array($team(1, 'unranked', 10, 2.0)), array('capacity' => arra
 $check('no places left: the reason names the allowance they were worked out with (0.19.0)', $why($res, $cap[0]) === '8 Unranked players left — no place for another Unranked team without teams sitting out more than 2 nights a season; Unranked teams full', $why($res, $cap[0]));
 $res = $run($cap, array($team(1, 'unranked', 10, 2.0)), array('capacity' => array('unranked' => 1, 'ranked' => null), 'allowance' => array('unranked' => 1, 'ranked' => null)));
 $check('...one night', $why($res, $cap[0]) === '8 Unranked players left — no place for another Unranked team without teams sitting out more than 1 night a season; Unranked teams full', $why($res, $cap[0]));
+$res = $run($cap, array($team(1, 'unranked', 10, 2.0)), array('capacity' => array('unranked' => 0, 'ranked' => null), 'allowance' => array('unranked' => null, 'ranked' => null), 'no_slots' => array('unranked' => true)));
+$check('no game slot for the division on any night: the reason says no court space, as before 0.19.0', $why($res, $cap[0]) === '8 Unranked players left — no court space for another Unranked team; Unranked teams full', $why($res, $cap[0]));
 
 // --- Places -----------------------------------------------------------------------------------------------
 $res = $run($singles(30, 2.0), array(), array('capacity' => array('unranked' => 2, 'ranked' => null)));
