@@ -6,6 +6,101 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## Fair sit-outs when courts are short (0.18.2)
+
+- **Sitting out goes by nights.** When a division has more teams than the
+  night's games can hold (an odd number, or not enough courts), the teams
+  that sit out are the ones that have sat out the fewest nights so far. A
+  team that sits out has sat out no more nights before than any team in
+  its division that plays, so nobody sits out a second time while an
+  available team in the division has never sat out. A night with a double-header counts as
+  one night played. Before, the court trim dropped the dearest games by
+  the draw's cost and never looked at who had sat out, so the teams
+  hardest to match (the top and bottom of Ranked, teams with many
+  rematches) could sit out night after night.
+- **Ties go by cost.** Among the teams on the same count, the draw's own
+  cost decides: the cheapest games for the teams that play, link term
+  included. The link term now only breaks these ties. It never puts a team
+  out ahead of a team that has sat out fewer nights.
+- **Odd nights.** With a court to spare, the odd team plays a team that
+  opted into double-headers when one qualifies (the fill game, with the
+  same checks as before: never a third meeting, last week's opponent, or a
+  game more lopsided than about 83/17), and then nobody sits out. When the
+  team with the fewest nights sat out has no such game but another team
+  has, that other team is the odd team, so the rule never makes a team sit
+  out that could have played. Among tied teams a double-header team costs
+  8 more to be the odd one out (weight `odd_double`: the old +2 on its
+  count, at 4 a count), so it is the last picked unless that saves more
+  than 8 in the night's games.
+- **Double-headers stay an extra.** Spare courts still go to the teams that
+  opted in, fairest first, as before. They are never handed out to make up
+  for a sit-out, and having had them never makes a team more likely to sit
+  out.
+- **What counts as a night sat out** (`RSL_Pairing::context()`'s `byes`): a
+  night the team's division had games, the team was in the league, it had
+  no game in any division, and it hadn't asked for the week off, said it
+  couldn't make it, or been left out for owing money by the automatic draw
+  (recorded like a week off). Fixed: a team moved from Unranked to Ranked
+  had the nights it played in Unranked counted as sat out, because Ranked
+  was judged first and on its own games only.
+- **Known limit.** The draw can't tell afterwards why a team had no game.
+  A team taken out of a night by hand (its game removed, or a night's
+  fixtures made by hand without it) counts as having sat out that night.
+- **Admins can see the rule hold.** A sit-out's reason gives the team's
+  count against the teams playing: "Not enough courts (nights sat out
+  before: this team 1, the teams playing 1 or more)", or "Bye, odd number
+  of teams (...)". After *Make fixtures automatically* the notice lists who
+  isn't playing and why (week off and owing reasons unchanged). *Not
+  playing this night* gives each resting team's count and the fewest among
+  the teams playing in its division. *How automatic fixtures are made* has
+  a *Sitting out* item.
+- **Code.** `RSL_Pairing::pair_division()` takes the night's slots
+  (`$room`) and the double-header teams (`$opted`), and returns `bye`,
+  `fill` and `out` (team => `courts` or `odd`) beside `pairs`. `sit_out()`
+  is the rule (pure), `fill_for()` the fill game, `match_out()` the
+  matching with k sit-out places (exact up to `EXACT_LIMIT` teams and
+  places together, the local search above, both kept within the rule by
+  `NEVER`), `sit_out_words()` the admin reason. `trim()` is gone: the draw
+  never makes more games than slots. The `bye` weight is gone too;
+  `odd_double` is its one remaining use. An even division with a slot for
+  every game is drawn exactly as before (checked: `simulate-ratings.php`
+  and `simulate-pairing.php` print the same as 0.18.1).
+- **Simulated** (`wp eval-file dev/simulate-pairing.php courts runs=1000`:
+  a Ranked division of 12 to 14 teams over 10 nights, 5 game slots on 30%
+  of nights, 6 on 30%, room for everyone on the rest, a week off on 7% of
+  team-nights, three double-header teams, the fixtures rating and link
+  term; each season played under both rules from the same teams, slots and
+  weeks off; spread = most minus fewest nights sat out among the teams
+  available every night; closeness = the draw's cost of the games played,
+  0 for 50/50, 1 for 67/33):
+
+  | Rule | Sat out per team | Spread | Worst spread | Seasons with a 2+ gap | Most by one team | Closeness per game | Favourite over 0.80 |
+  |---|---|---|---|---|---|---|---|
+  | Before 0.18.2: dearest games sit out | 0.67 | 1.79 | 7 | 52.9% | 2.23 | 0.903 | 11.8% |
+  | 0.18.2: fewest nights sat out first | 0.62 | 0.78 | 1 | 0% | 1.11 | 0.971 | 12.9% |
+
+  Under the old rule more than half of seasons had a team sit out two or
+  more nights more than another team that was available every night, and
+  in one season the gap was 7. Under the new rule it is never more than 1.
+  The price is a little closeness: the games played cost 0.07 more on
+  average, and games with a favourite above a 0.80 set chance (by true
+  strength) go from 11.8% to 12.9%. Teams sit out a little less in all
+  (0.62 nights a season against 0.67), because the odd team now gets a
+  fill game more often (2.59 a season against 1.93). Neither rule gave a
+  third meeting.
+- **Public pages:** nothing public describes who sits out, so no public
+  words change.
+- **Tests** (`test-pairing.php`): rotation (ten teams on four courts: each
+  team sits out once before any team twice), ties by cost, a team that has
+  sat out before plays, the link term breaking ties but never outweighing
+  the count, room for every game changing nothing, the odd-night fill kept
+  when the lowest-count team has none, the double-header preference, the
+  rule against brute force on 400 random nights (every choice that keeps
+  it, every pairing), the local search above `EXACT_LIMIT`, `context()`
+  for a team moved from Unranked to Ranked and for a night left out for
+  owing, `plan()`'s court sit-out reason, and the admin *Not playing this
+  night* line.
+
 ## A results-only ladder, finals on games played, no protected tier, and finished sets count whole (0.18.1)
 
 - **The captain's level has no say in the ladder, at any point in the
@@ -96,10 +191,12 @@ finals (see `CLAUDE.md`).
   brings the term on after one night of results nor raises the bonus.
   Forfeits don't link, a team with no game yet is left out, and Unranked
   never gets the term. One group changes nothing. When a night has more
-  games than courts, the games that sit out are the dearest by the draw's
+  games than courts, the games that sat out were the dearest by the draw's
   own cost, the link bonus included (`RSL_Pairing::trim()`), so a game
-  that links groups is the last to go; the double-header checks judge
-  games without it. `pair_cost()` and
+  that linked groups was the last to go (replaced in 0.18.2: the teams
+  with the fewest nights sat out sit out, and the link term only breaks
+  ties among teams on the same count; `trim()` is gone. See 0.18.2). The
+  double-header checks judge games without it. `pair_cost()` and
   `pair_division()` take the link as a last argument; `pair_cost()` returns
   it as `link`. The admin Fixtures screen shows it in the *Why* column
   ("Links two groups that haven't met yet: -2.25") and explains it under
@@ -216,7 +313,8 @@ finals (see `CLAUDE.md`).
   freezes nothing; `fit()`'s new options and the 120 line; the link term
   (pure cases, a late start, rounds without results, a real season's
   groups, forfeits, Unranked, the admin *Why* column); a linking game
-  survives the court trim; the public draw sentence; the Stats cache key;
+  survives the court trim (since 0.18.2: the link term breaking ties among
+  teams on the same nights sat out); the public draw sentence; the Stats cache key;
   finals eligibility (a double-header is two games, a bye, a forfeit win,
   a forfeit loss, a game with no result, a finals-night game and an
   unpublished night are none, a 1–1 draw cut short by the clock counts,
@@ -808,7 +906,9 @@ of games wins (exact matching up to 18 teams, a strong search above):
   week's opponent never; two rounds ago +1.
 - **Unranked:** no ratings, so purely least-played, longest-ago.
 - **Odd numbers:** the spare team plays a double-header team, or sits out
-  (dearer each time for the same team).
+  (dearer each time for the same team; since 0.18.2 the team that sits
+  out, from an odd number or short courts, is one with the fewest nights
+  sat out. See 0.18.2).
 - **Slots:** the night fills from the first slot (no idle middle courts);
   "earlier"/"later" means first/last games of that night, missed
   preferences get priority next time, the last slot is shared around,
