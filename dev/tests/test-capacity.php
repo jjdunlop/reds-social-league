@@ -408,8 +408,9 @@ $check('both divisions full: the form says a new team goes on the waiting list',
 // --- Nothing public says a division is full -----------------------------------------------------------------------
 wp_set_current_user(0);
 $preview = RSL_Public::season_preview($A);
+$words = preg_replace('#<script\b.*?</script>#s', '', $preview); // the countdown script's getUTCFullYear isn't a word
 $check('the season preview counts teams only: nothing about places, full divisions or applications', $preview !== ''
-    && stripos($preview, 'full') === false && stripos($preview, 'waiting') === false && stripos($preview, 'places') === false, $preview);
+    && !preg_match('/\b(full|waiting|places?|applications?)\b/i', $words), $words);
 $v = $view(0);
 $check('a logged-out visitor sees no division words', strpos($v, 'is full for') === false && strpos($v, 'team_division') === false);
 
