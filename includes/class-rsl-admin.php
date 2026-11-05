@@ -75,10 +75,12 @@ class RSL_Admin {
                     self::notice('error', $team->get_error_message());
                     return $back;
                 }
-                self::notice('success', 'Team "' . $team->name . '" created.');
+                // Over the division's places is allowed (0.19.0); the notice says what it costs.
+                self::notice('success', self::with_over('Team "' . $team->name . '" created.', $team));
                 return add_query_arg('team', $team->id, $back);
 
             case 'update_team':
+                $was = RSL_Teams::get($team_id);
                 $team = RSL_Teams::update($team_id, array(
                     'name' => isset($post['name']) ? wp_unslash($post['name']) : '',
                     'division' => isset($post['division']) ? sanitize_key($post['division']) : '',
@@ -87,7 +89,19 @@ class RSL_Admin {
                 if (!is_wp_error($team) && !empty($post['level'])) {
                     RSL_Teams::set_level($team_id, sanitize_key($post['level']));
                 }
-                self::notice(is_wp_error($team) ? 'error' : 'success', is_wp_error($team) ? $team->get_error_message() : 'Team saved.');
+                if (is_wp_error($team)) {
+                    self::notice('error', $team->get_error_message());
+                    return $team_back;
+                }
+                $saved = 'Team saved.';
+                if ($was && $was->division !== $team->division) {
+                    // Moved into a division (0.19.0): over its places is allowed, and the notice says what it costs;
+                    // an application moved into a full one is on the waiting list there.
+                    $saved = $team->status === 'pending' && RSL_Capacity::on_waiting_list($team)
+                        ? $saved . ' Its application is on the waiting list in ' . RSL_Teams::DIVISIONS[$team->division] . '.'
+                        : self::with_over($saved, $team);
+                }
+                self::notice('success', $saved);
                 return $team_back;
 
             case 'add_member':
@@ -113,9 +127,12 @@ class RSL_Admin {
                 if (is_wp_error($result)) {
                     self::notice('error', $result->get_error_message());
                 } elseif ($unsent !== false) {
-                    self::notice('error', $result->name . ($do === 'approve' ? ' approved' : ' declined') . ', but the email to the captain couldn\'t be sent — ' . ($do === 'approve' ? 'send them the invite link yourself.' : 'let them know yourself.'));
+                    $words = $result->name . ($do === 'approve' ? ' approved' : ' declined') . ', but the email to the captain couldn\'t be sent — ' . ($do === 'approve' ? 'send them the invite link yourself.' : 'let them know yourself.');
+                    self::notice('error', $do === 'approve' ? self::with_over($words, $result) : $words);
                 } else {
-                    self::notice('success', $result->name . ($do === 'approve' ? ' approved — the captain has been emailed their invite link.' : ' declined — the captain has been emailed.'));
+                    $words = $result->name . ($do === 'approve' ? ' approved — the captain has been emailed their invite link.' : ' declined — the captain has been emailed.');
+                    // Approving over the places takes no extra step (0.19.0); the notice repeats the numbers.
+                    self::notice('success', $do === 'approve' ? self::with_over($words, $result) : $words);
                 }
                 return $back;
 
@@ -230,6 +247,19 @@ class RSL_Admin {
         set_transient(self::NOTICE_PREFIX . get_current_user_id(), array('type' => $type, 'message' => $message), 60);
     }
 
+    /**
+     * A notice's words, plus the sit-out numbers when this active team's division is now over
+     * its places (RSL_Capacity::over_notice(), 0.19.0): "… Ranked, 2027 Pre-season now has 31
+     * teams for 30 places: about 2.1 nights each sat out this season, so some sit out 3."
+     */
+    private static function with_over($words, $team) {
+        if (!$team || !is_object($team) || $team->status !== 'active') {
+            return $words;
+        }
+        $over = RSL_Capacity::over_notice($team->season, $team->division);
+        return $over !== '' ? $words . ' ' . $over : $words;
+    }
+
     private static function take_notice() {
         $key = self::NOTICE_PREFIX . get_current_user_id();
         $notice = get_transient($key);
@@ -297,23 +327,52 @@ class RSL_Admin {
 
         <?php $applications = RSL_Teams::pending_applications(); ?>
         <?php if ($applications): ?>
+            <?php
+            // Places in each season and division with applications (RSL_Capacity, 0.19.0): one read a season.
+            $places = array();
+            $lines = array();
+            foreach ($applications as $app) {
+                if (!isset($places[$app->season])) {
+                    $places[$app->season] = RSL_Capacity::season($app->season);
+                }
+                $lines[$app->season][$app->division] = true;
+            }
+            uksort($lines, function ($a, $b) { return RSL_Seasons::ordinal($a) - RSL_Seasons::ordinal($b); });
+            ?>
             <h2>Team applications (<?php echo count($applications); ?>)</h2>
+            <ul class="rsl-places">
+                <?php foreach ($lines as $s_key => $divs_with): ?>
+                    <?php foreach (array_keys(RSL_Teams::DIVISIONS) as $d): ?>
+                        <?php if (isset($divs_with[$d])): ?><li><?php echo esc_html(RSL_Capacity::places_line($places[$s_key]['divisions'][$d])); ?></li><?php endif; ?>
+                    <?php endforeach; ?>
+                <?php endforeach; ?>
+            </ul>
+            <p class="description">A division's places are the most teams its game slots fit with no team sitting out more than <?php echo intval(RSL_Capacity::allowance()); ?> night<?php echo RSL_Capacity::allowance() === 1 ? '' : 's'; ?> in the season (Free Agents → Rules). Applications past the places left are on the waiting list, oldest first. You can still approve one over the places: the row says how many nights teams would sit out.</p>
             <table class="widefat striped" style="max-width: 1100px;">
                 <thead><tr><th style="width: 52px;"></th><th>Team</th><th>Season</th><th>Division</th><th>Level (their guess)</th><th>Captain</th><th>Applied</th><th>Decision</th></tr></thead>
                 <tbody>
                     <?php foreach ($applications as $app): ?>
+                        <?php
+                        $info = isset($places[$app->season]['divisions'][$app->division]) ? $places[$app->season]['divisions'][$app->division] : null;
+                        $waiting = $info && in_array(intval($app->id), $info['waiting'], true);
+                        // Approving puts the division over its places once its active teams fill them.
+                        $over = $info && $info['places'] !== null && $info['active'] >= $info['places'];
+                        ?>
                         <tr>
                             <td><?php echo RSL_Public::badge($app); ?></td>
-                            <td><strong><?php echo esc_html($app->name); ?></strong></td>
+                            <td><strong><?php echo esc_html($app->name); ?></strong><?php if ($waiting): ?><br><span class="description">On the waiting list</span><?php endif; ?></td>
                             <td><?php echo esc_html(RSL_Seasons::label($app->season)); ?></td>
                             <td><?php echo esc_html(RSL_Teams::DIVISIONS[$app->division]); ?></td>
                             <td><?php echo esc_html(isset(RSL_Teams::levels()[$app->est_level]) ? RSL_Teams::levels()[$app->est_level] : '—'); ?></td>
                             <td><?php echo esc_html($app->captain_name); ?><br><span class="description"><?php echo esc_html($app->captain_email); ?></span></td>
                             <td><?php echo esc_html(date('j M Y', strtotime($app->applied_at))); ?></td>
                             <td>
+                                <?php if ($over): ?>
+                                    <p class="description" style="margin-top: 0;"><?php echo esc_html('Approving makes ' . RSL_Capacity::over_words($info, $info['active'] + 1) . '.'); ?></p>
+                                <?php endif; ?>
                                 <form method="post" action="<?php echo esc_url($post_url); ?>" style="display: inline;">
                                     <?php echo self::fields('approve', $app->season, $app->id); ?>
-                                    <button type="submit" class="button button-primary">Approve</button>
+                                    <button type="submit" class="button button-primary"><?php echo $over ? 'Approve over the cap' : 'Approve'; ?></button>
                                 </form>
                                 <form method="post" action="<?php echo esc_url($post_url); ?>" style="display: inline-flex; gap: 4px; margin-left: 6px;">
                                     <?php echo self::fields('decline', $app->season, $app->id); ?>

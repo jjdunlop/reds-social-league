@@ -255,10 +255,10 @@ class RSL_Admin_Free_Agents {
                 // comes back in 'errors' — say so plainly, never a green "Confirmed".
                 $errors = is_array($r) && !empty($r['errors']) ? array_filter(array_map('strval', (array) $r['errors'])) : array();
                 if ($errors) {
-                    self::notice('error', 'Not everything was confirmed. ' . implode(' ', $errors) . ' Fix that and confirm again. ' . self::confirm_words($r, 'What was done'));
+                    self::notice('error', 'Not everything was confirmed. ' . implode(' ', $errors) . ' Fix that and confirm again. ' . self::confirm_words($r, 'What was done') . self::over_words($season, $r));
                     return $back;
                 }
-                self::notice('success', self::confirm_words($r));
+                self::notice('success', self::confirm_words($r) . self::over_words($season, $r));
                 return $back;
 
             case 'save_settings':
@@ -477,6 +477,22 @@ class RSL_Admin_Free_Agents {
         }
         $parts[] = self::plural($n('emails'), 'email') . ' queued';
         return $lead . ': ' . implode(', ', $parts) . '. Emails go out in batches — the outbox is on the Overview tab.';
+    }
+
+    /**
+     * After a confirm that made new teams (0.19.0): for each division they went into that is now
+     * over its places, " Ranked, 2027 Pre-season now has 31 teams for 30 places: …"
+     * (RSL_Capacity::over_notice()); else ''.
+     */
+    private static function over_words($season, $r) {
+        $out = '';
+        foreach (array_keys(RSL_Teams::DIVISIONS) as $d) {
+            if (is_array($r) && !empty($r['new_in'][$d])) {
+                $over = RSL_Capacity::over_notice($season, $d);
+                $out .= $over !== '' ? ' ' . $over : '';
+            }
+        }
+        return $out;
     }
 
     private static function mail_words($sent, $failed) {
@@ -1272,7 +1288,13 @@ class RSL_Admin_Free_Agents {
             'Placement' => array(
                 'gap_fill' => array('Biggest level gap when filling open spots', 'bands', 'How far a free agent\'s level can be from a team\'s when topping up a team that isn\'t short.', 'decimal'),
                 'gap_short' => array('Biggest level gap when filling a short team', 'bands', 'A little more room, so short teams get their players.', 'decimal'),
-                'capacity_override' => array('Most teams per division', '0 = worked out from the courts on the first night', 'Caps how many teams placement plans for in each division.', 'number'),
+            ),
+            'Places in each division' => array(
+                'sit_out_nights' => array('Most nights a team sits out in a season', 'nights (0 to ' . RSL_Capacity::MAX_ALLOWANCE . ')',
+                    'A division\'s places are the most teams its game slots fit with no team sitting out more than this many of the season\'s regular nights. '
+                    . 'With 12 game slots a night, 2 gives 32 places over 8 nights and 29 over 11. '
+                    . 'Start a team tells captains when a division is full. Approving a team past the places shows the nights it costs first, and placement makes no new team past them.', 'number'),
+                'capacity_override' => array('Most teams per division', '0 = worked out from the nights above', 'A number here replaces the worked-out places for that division (up to ' . RSL_Capacity::MAX_PLACES . '). Start a team, team approvals and placement go by it.', 'number'),
             ),
             'Privacy' => array(
                 'under18_in_pool' => array('Under-18s in the list captains browse', 'Show them to captains', 'Off (recommended): under-18s never appear when captains browse. They\'re still placed by the admin run, and can ask teams themselves.', 'checkbox'),

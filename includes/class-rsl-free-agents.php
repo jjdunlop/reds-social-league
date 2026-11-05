@@ -94,7 +94,10 @@ class RSL_Free_Agents {
             'under18_in_pool' => 0,      // show under-18s to captains browsing the list
             'gap_fill' => 1.5,           // placement: widest level gap (bands) topping up open spots
             'gap_short' => 2.0,          // placement: widest level gap filling a short team
-            'capacity_override' => array('ranked' => 0, 'unranked' => 0), // most teams per division (0 = from the first night's courts)
+            // A division's places (RSL_Capacity, 0.19.0): the most teams its game slots fit with no team sitting out more
+            // than this many of the season's nights. Start a team, team approvals and placement go by them.
+            'sit_out_nights' => 2,
+            'capacity_override' => array('ranked' => 0, 'unranked' => 0), // most teams per division by hand (0 = the places worked out)
         );
     }
 
@@ -105,6 +108,7 @@ class RSL_Free_Agents {
             'min_roster' => array(4, 20), 'target_roster' => array(4, 20), 'new_team_target' => array(4, 20), 'max_roster' => array(6, 30),
             'max_requests' => array(1, 10), 'request_days' => array(1, 14), 'pool_invites_extra' => array(0, 10),
             'group_max' => array(1, 6), 'optout_days' => array(0, 14), 'under18_in_pool' => array(0, 1),
+            'sit_out_nights' => array(0, RSL_Capacity::MAX_ALLOWANCE),
         );
     }
 

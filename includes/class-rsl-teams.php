@@ -148,6 +148,9 @@ class RSL_Teams {
     /**
      * A registered player applies for a team; they become its captain. The
      * team stays pending (not public, no invites) until an admin approves.
+     * A division that's full (RSL_Capacity, 0.19.0) never refuses one: the
+     * application returned has ->waiting_list true when it's beyond the
+     * places left (with_waiting_list()), and the captain is told.
      */
     public static function apply($season, $user_id, $args) {
         if (!RSL_Players::is_registered($user_id)) {
@@ -177,7 +180,19 @@ class RSL_Teams {
             return new WP_Error('rsl_save', 'That team couldn\'t be saved — please try again.');
         }
         self::add_member($team->id, $user_id, 'captain', true, array('how' => 'apply'));
-        return self::get($team->id);
+        return self::with_waiting_list(self::get($team->id));
+    }
+
+    /**
+     * The team with ->waiting_list set (0.19.0): true for a pending application
+     * beyond its division's places left, worked out now (RSL_Capacity::
+     * on_waiting_list(); nothing is stored), else false.
+     */
+    public static function with_waiting_list($team) {
+        if ($team && is_object($team)) {
+            $team->waiting_list = RSL_Capacity::on_waiting_list($team);
+        }
+        return $team;
     }
 
     /** Applying and withdrawing over and over would hold names; a few tries a season is plenty. */
@@ -188,7 +203,11 @@ class RSL_Teams {
         return (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM " . RSL_Database::table('teams') . " WHERE applied_by = %d AND season = %s AND status = 'withdrawn'", $user_id, $season));
     }
 
-    /** Admin approves: the team goes live and the captain can invite players. */
+    /**
+     * Admin approves: the team goes live and the captain can invite players.
+     * Over its division's places is allowed (0.19.0); the Teams screen shows
+     * what that costs first (RSL_Capacity::over_words()) and says it again after.
+     */
     public static function approve($team_id) {
         global $wpdb;
         $team = self::get($team_id);

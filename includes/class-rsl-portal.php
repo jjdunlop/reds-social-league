@@ -426,7 +426,9 @@ class RSL_Portal {
                     self::flash('error', $team->get_error_message());
                     return self::apply_retry($team) ? $back . '#rsl-apply' : $back;
                 }
-                self::flash('success', 'Application sent for ' . $team->name . self::season_aside($team->season) . '. We\'ll email you when it\'s approved.');
+                // A full division never refuses it (0.19.0): the captain hears it's on the waiting list instead.
+                $waiting = RSL_Capacity::waiting_note($team);
+                self::flash('success', 'Application sent for ' . $team->name . self::season_aside($team->season) . '. ' . ($waiting !== '' ? $waiting : 'We\'ll email you when it\'s approved.'));
                 return $back;
 
             case 'withdraw':
@@ -582,10 +584,20 @@ class RSL_Portal {
      * division, level, colour, season). $required: the card's browser checks; never in the
      * registration panel, which CSS hides while another route is chosen (a hidden required field
      * would block the form). The server checks either way (RSL_Teams::apply(), pick_open()).
+     * Under the division, a line for each season offered where a division is full (0.19.0,
+     * RSL_Capacity::full_words()): applying still works and goes on the waiting list. Only
+     * logged-in players reach this form, so a page cache never shows it to anyone else.
      */
     public static function team_fields($v, $choices, $required) {
         $v = array_merge(array('name' => '', 'division' => 'ranked', 'level' => '', 'colour' => '', 'season' => ''), is_array($v) ? $v : array());
         $req = $required ? ' required' : '';
+        $full = array();
+        foreach (array_keys(is_array($choices) ? $choices : array()) as $key) {
+            $words = RSL_Capacity::full_words(RSL_Capacity::season($key));
+            if ($words !== '') {
+                $full[] = $words;
+            }
+        }
         ob_start();
         ?>
         <?php echo self::season_field('team_season', $choices, (string) $v['season']); ?>
@@ -593,6 +605,9 @@ class RSL_Portal {
         <label class="rsl-field">Division
             <select name="team_division"><?php foreach (RSL_Teams::DIVISIONS as $key => $label): ?><option value="<?php echo esc_attr($key); ?>"<?php selected($v['division'], $key); ?>><?php echo esc_html($label); ?></option><?php endforeach; ?></select>
         </label>
+        <?php foreach ($full as $words): ?>
+            <p class="rsl-hint rsl-division-full"><?php echo esc_html($words); ?></p>
+        <?php endforeach; ?>
         <label class="rsl-field">Roughly what level does your team play at?
             <select name="team_level"<?php echo $req; ?>>
                 <option value="">Choose…</option>
@@ -672,7 +687,7 @@ class RSL_Portal {
             && in_array($team->get_error_code(), array('rsl_pending', 'rsl_duplicate', 'rsl_save'), true)) {
             $mine = RSL_Teams::pending_application_for_user($user_id, $season);
             if ($mine && $mine->name === $v['name']) {
-                $team = $mine;
+                $team = RSL_Teams::with_waiting_list($mine);
             }
         }
         if (!is_wp_error($team)) {
@@ -1089,12 +1104,17 @@ class RSL_Portal {
         return $out;
     }
 
-    /** Their team application waiting for approval, with a way to withdraw it. */
+    /**
+     * Their team application waiting for approval, with a way to withdraw it. While it's on the
+     * waiting list (0.19.0) the card says so and what happens next; never anything about another
+     * team or application.
+     */
     private static function pending_card($pending) {
+        $waiting = RSL_Capacity::waiting_note($pending);
         ob_start();
         ?>
         <div class="rsl-card">
-            <p><strong>Your application for <?php echo esc_html($pending->name); ?> is waiting for approval.</strong> We'll email you when it's approved — then you can invite your players.</p>
+            <p><strong>Your application for <?php echo esc_html($pending->name); ?> is waiting for approval.</strong> <?php echo $waiting !== '' ? esc_html($waiting) : 'We\'ll email you when it\'s approved — then you can invite your players.'; ?></p>
             <form method="post" onsubmit="return confirm('Withdraw your application for <?php echo esc_js($pending->name); ?>?');"><?php echo self::fields('withdraw', array('team_id' => $pending->id)); ?><button type="submit" class="rsl-btn rsl-btn-secondary">Withdraw application</button></form>
         </div>
         <?php

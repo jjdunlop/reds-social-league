@@ -20,7 +20,7 @@
  *     teams when they'll be scarce in the division they'd play in.
  *  2. New teams, per division, from whoever's left: "either" players go
  *     where their level fits (or across, when that division can't make a
- *     team or has no court space), everyone's sorted by level and cut into
+ *     team or has no places left), everyone's sorted by level and cut into
  *     teams of near-equal size (friend groups kept whole), then each team
  *     gets a volunteer captain (and a setter) swapped in where one can be —
  *     trading whole units when a team is all friend groups.
@@ -81,7 +81,7 @@ class RSL_Placement {
     }
 
     private static function setting_defaults() {
-        return array('min_roster' => 7, 'target_roster' => 8, 'new_team_target' => 8, 'max_roster' => 10, 'capacity' => array(), 'used_refs' => array());
+        return array('min_roster' => 7, 'target_roster' => 8, 'new_team_target' => 8, 'max_roster' => 10, 'capacity' => array(), 'allowance' => array(), 'used_refs' => array());
     }
 
     /** A draft new team's name until the admin names it: "Unranked New 1". */
@@ -128,9 +128,11 @@ class RSL_Placement {
      * $teams: list of arrays — id, name, division, n (members now), band,
      *   pref_time, lacks (positions), spots_open.
      * $settings: min_roster, target_roster, new_team_target, max_roster,
-     *   gap_fill, gap_short, capacity (division => teams the courts can
-     *   take, null = unknown), weights, used_refs (new-team refs already
-     *   made into teams — never reused).
+     *   gap_fill, gap_short, capacity (division => the division's places,
+     *   RSL_Capacity; null = unknown), allowance (division => the most nights
+     *   a team sits out that its places were worked out with, or null: only
+     *   for the unplaced reason's words), weights, used_refs (new-team refs
+     *   already made into teams — never reused).
      *
      * Returns array(
      *   units => ref => array(dest 't:<id>'|'n:<ref>'|'none', reason, flags, gap, how),
@@ -280,6 +282,12 @@ class RSL_Placement {
             $cap[$d] = $v === null || $v === '' ? null : max(0, intval($v));
         }
         $s['capacity'] = $cap;
+        $allow = array();
+        foreach (array('unranked', 'ranked') as $d) {
+            $v = is_array($s['allowance']) && isset($s['allowance'][$d]) ? $s['allowance'][$d] : null;
+            $allow[$d] = $v === null || $v === '' || !is_numeric($v) ? null : max(0, intval($v));
+        }
+        $s['allowance'] = $allow;
         $s['used_refs'] = (array) $s['used_refs'];
 
         $U = array();
@@ -663,7 +671,7 @@ class RSL_Placement {
     private static function form_new_teams($U, &$T, &$assign, $order, $pos, $s, &$taken) {
         // (a) Single-division units stay put; "either" units go by level, and
         // move across if their division can't make a team on its own or has
-        // no court space for another (and the other division does).
+        // no places left for another (and the other division does).
         $home = array();
         $count = array('unranked' => 0, 'ranked' => 0);
         foreach ($order as $ref) {
@@ -673,7 +681,7 @@ class RSL_Placement {
             $home[$ref] = self::home($U[$ref]);
             $count[$home[$ref]] += $U[$ref]['size'];
         }
-        $room = array(); // new teams each division's courts can still take (null = not checked)
+        $room = array(); // new teams each division's places can still take (null = not checked)
         foreach (array('unranked', 'ranked') as $d) {
             $room[$d] = null;
             if ($s['capacity'][$d] !== null) {
@@ -704,7 +712,7 @@ class RSL_Placement {
                     $refs[] = $ref;
                 }
             }
-            // (b) How many teams: as near new_team_target as the minimum and maximum allow, within court space.
+            // (b) How many teams: as near new_team_target as the minimum and maximum allow, within the places left.
             $k = self::team_count($count[$d], $s);
             if ($room[$d] !== null) {
                 $k = min($k, $room[$d]);
@@ -1233,7 +1241,11 @@ class RSL_Placement {
         $n = $left[$home];
         $players = $n . ' ' . $label . ' player' . ($n === 1 ? '' : 's') . ' left';
         if ($full[$home]) {
-            return array($players . ' — no court space for another ' . $label . ' team; ' . $label . ' teams full', array('capacity'));
+            // The division's places are taken (RSL_Capacity, 0.19.0). Players may see this reason.
+            $allow = $s['allowance'][$home];
+            return array($players . ' — no place for another ' . $label . ' team'
+                . ($allow !== null ? ' without teams sitting out more than ' . $allow . ' night' . ($allow === 1 ? '' : 's') . ' a season' : '')
+                . '; ' . $label . ' teams full', array('capacity'));
         }
         if ($n < $s['min_roster']) {
             return array($players . ' — ' . ($s['min_roster'] - $n) . ' short of a new team; ' . $label . ' teams full', array('short'));
@@ -1427,7 +1439,7 @@ class RSL_Placement {
      * the maximum, new teams min–max (except ones an admin started), a
      * volunteer captain on every new team when another new team in the
      * division could have spared one without splitting a group or breaking
-     * min–max (could_share_captain()), court space respected, locked units
+     * min–max (could_share_captain()), the places respected, locked units
      * where the admin put them. Returns a list of problems (empty = fine).
      */
     public static function violations($units, $teams, $settings, $result) {
@@ -1531,7 +1543,7 @@ class RSL_Placement {
             }
             $room = max(0, $s['capacity'][$div] - $have);
             if ($c > $room) {
-                $bad[] = "$c new $div teams but court space for $room";
+                $bad[] = "$c new $div teams but places for $room";
             }
         }
         return $bad;
@@ -1762,10 +1774,12 @@ class RSL_Placement {
         }
 
         $used = array_map('strval', array_keys($made));
+        list($capacity, $allowance) = self::capacity($season);
         $settings = array_merge($fa, array(
             'gap_fill' => isset($fa['gap_fill']) ? (float) $fa['gap_fill'] : (float) $w['gap_fill'],
             'gap_short' => isset($fa['gap_short']) ? (float) $fa['gap_short'] : (float) $w['gap_short'],
-            'capacity' => self::capacity($season, $fa),
+            'capacity' => $capacity,
+            'allowance' => $allowance,
             'weights' => $w,
             'used_refs' => $used,
         ));
@@ -1773,34 +1787,23 @@ class RSL_Placement {
     }
 
     /**
-     * Teams each division's courts can take: an override, else the game
-     * slots of the season's first regular night × 2. null = no nights yet
-     * (not checked).
+     * Teams each division can take: its places (RSL_Capacity, 0.19.0: as many
+     * as its game slots fit with no team sitting out more than the allowance
+     * of the season's regular nights; the Most teams per division setting
+     * wins). null = no regular nights yet (not checked). Before 0.19.0 this
+     * was 2 × the first regular night's slots, so no sit-outs at all.
+     * Returns array(capacity, allowance): allowance is division => the
+     * nights it was worked out with, or null where the setting or nothing
+     * decided it (the unplaced reason names it only when it's a number).
      */
-    private static function capacity($season, $fa) {
-        $override = isset($fa['capacity_override']) && is_array($fa['capacity_override']) ? $fa['capacity_override'] : array();
-        $slots = null;
-        foreach (RSL_Courts::nights($season) as $n) {
-            if ($n->type !== 'regular') {
-                continue;
-            }
-            $slots = array('unranked' => 0, 'ranked' => 0);
-            foreach (RSL_Courts::slots_for_night($n->id) as $slot) {
-                if (isset($slots[$slot['division']])) {
-                    $slots[$slot['division']]++;
-                }
-            }
-            break;
+    private static function capacity($season) {
+        $out = array('unranked' => null, 'ranked' => null);
+        $allow = array('unranked' => null, 'ranked' => null);
+        foreach (RSL_Capacity::season($season)['divisions'] as $d => $info) {
+            $out[$d] = $info['places'];
+            $allow[$d] = $info['places'] !== null && empty($info['set_by_hand']) ? intval($info['allowance']) : null;
         }
-        $out = array();
-        foreach (array('unranked', 'ranked') as $d) {
-            if (!empty($override[$d])) {
-                $out[$d] = intval($override[$d]);
-            } else {
-                $out[$d] = $slots === null ? null : 2 * $slots[$d];
-            }
-        }
-        return $out;
+        return array($out, $allow);
     }
 
     // ------------------------------------------------------------------
@@ -2523,7 +2526,8 @@ class RSL_Placement {
             }
         }
 
-        // Court space.
+        // The places in each division (RSL_Capacity, 0.19.0): going over is allowed, with the nights it costs.
+        $places = null;
         foreach (array_keys($divs) as $div) {
             $cap = isset($s['capacity'][$div]) ? $s['capacity'][$div] : null;
             if ($cap === null) {
@@ -2537,7 +2541,13 @@ class RSL_Placement {
                 $count += self::division_of_ref($ref) === $div ? 1 : 0;
             }
             if ($count > $cap) {
-                $add('warning', '', $divs[$div] . ' would have ' . $count . ' teams but the first night has game slots for ' . $cap . '.');
+                $places = $places ? $places : RSL_Capacity::season($st['season']);
+                $info = $places['divisions'][$div];
+                $info['places'] = $cap;
+                $allow = intval($info['allowance']);
+                $add('warning', '', $divs[$div] . ' would have ' . RSL_Capacity::over_words($info, $count) . '. '
+                    . (!empty($info['set_by_hand']) ? $cap . ' is the Most teams per division setting.'
+                        : $cap . ' is the most it takes with no team sitting out more than ' . $allow . ' night' . ($allow === 1 ? '' : 's') . ' a season.'));
             }
         }
         if ($s['capacity']['unranked'] === null && $s['capacity']['ranked'] === null) {
@@ -2571,7 +2581,8 @@ class RSL_Placement {
      * they weren't placed aren't counted or told again, and emails have
      * dedupe keys. When nobody is left waiting, the season's placements are
      * marked confirmed. Returns array(placed, new_teams, unplaced, skipped,
-     * emails) — plus errors when a team couldn't be made — or WP_Error.
+     * emails) — plus errors when a team couldn't be made, and new_in
+     * (division => new teams made) when some were — or WP_Error.
      */
     public static function confirm($season, $only = null, $admin_id = 0) {
         $only = $only === null || $only === '' ? null : (string) $only;
@@ -2648,6 +2659,9 @@ class RSL_Placement {
         }
         if (!$out['errors']) {
             unset($out['errors']);
+        }
+        if (empty($out['new_in'])) {
+            unset($out['new_in']);
         }
         return $out;
     }
@@ -2743,6 +2757,9 @@ class RSL_Placement {
                 $team = $made;
                 $wpdb->update(RSL_Database::table('teams'), array('formed_by' => 'placement'), array('id' => $team->id));
                 $out['new_teams']++;
+                // The divisions that got a new team: the admin notice says when one is over its places (0.19.0).
+                $div = self::division_of_ref($ref);
+                $out['new_in'][$div] = (isset($out['new_in'][$div]) ? $out['new_in'][$div] : 0) + 1;
             }
             $b['new_teams'][$ref]['team_id'] = (int) $team->id;
             RSL_Free_Agents::save_building($season, $b);

@@ -421,43 +421,96 @@ class RSL_Courts {
      * slots, whether that's an exception).
      */
     public static function night_plan($night_id) {
-        global $wpdb;
         $night = self::get_night($night_id);
         if (!$night) {
             return null;
         }
-        $settings = self::settings($night->season);
+        $plans = self::plans_for(array($night));
+        return $plans[(int) $night->id];
+    }
+
+    /**
+     * night_plan() for several nights at once (night id => plan): the venues
+     * and courts read once, and each kind of exception in one query for all
+     * the nights. The one builder of a night's plan, so a season read this way
+     * (season_slot_counts()) gets exactly the slots slots_for_night() gives.
+     */
+    private static function plans_for($nights) {
+        global $wpdb;
+        $out = array();
+        if (!$nights) {
+            return $out;
+        }
+        $in = implode(',', array_map(function ($n) { return intval($n->id); }, $nights));
         $court_ex = array();
-        foreach ($wpdb->get_results($wpdb->prepare("SELECT * FROM " . RSL_Database::table('night_courts') . " WHERE night_id = %d", $night->id)) as $row) {
-            $court_ex[$row->court_id] = $row;
+        foreach ($wpdb->get_results("SELECT * FROM " . RSL_Database::table('night_courts') . " WHERE night_id IN ($in)") as $row) {
+            $court_ex[intval($row->night_id)][$row->court_id] = $row;
         }
         $venue_ex = array();
-        foreach ($wpdb->get_results($wpdb->prepare("SELECT * FROM " . RSL_Database::table('night_venues') . " WHERE night_id = %d", $night->id)) as $row) {
-            $venue_ex[$row->venue_id] = $row->division;
+        foreach ($wpdb->get_results("SELECT * FROM " . RSL_Database::table('night_venues') . " WHERE night_id IN ($in)") as $row) {
+            $venue_ex[intval($row->night_id)][$row->venue_id] = $row->division;
+        }
+        $sites = array();
+        foreach (self::venues() as $venue) {
+            $sites[] = array($venue, self::courts($venue->id));
         }
 
-        $venues = array();
-        foreach (self::venues() as $venue) {
-            $division = isset($venue_ex[$venue->id]) ? $venue_ex[$venue->id] : $venue->division;
-            $minutes = $settings['minutes'][$division];
-            $courts = array();
-            foreach (self::courts($venue->id) as $court) {
-                $ex = isset($court_ex[$court->id]) ? $court_ex[$court->id] : null;
-                $available = $night->type !== 'bye' && (!$ex || (int) $ex->available === 1);
-                $start = $ex && $ex->start_time ? self::hm($ex->start_time) : self::hm($court->default_start);
-                $end = $ex && $ex->end_time ? self::hm($ex->end_time) : self::hm($court->default_end);
-                $courts[] = array(
-                    'court' => $court,
-                    'available' => $available,
-                    'start' => $start,
-                    'end' => $end,
-                    'changed' => (bool) $ex,
-                    'slots' => $available ? self::slot_times($start, $end, $minutes) : array(),
-                );
+        foreach ($nights as $night) {
+            $id = intval($night->id);
+            $settings = self::settings($night->season);
+            $cex = isset($court_ex[$id]) ? $court_ex[$id] : array();
+            $vex = isset($venue_ex[$id]) ? $venue_ex[$id] : array();
+            $venues = array();
+            foreach ($sites as $site) {
+                list($venue, $list) = $site;
+                $division = isset($vex[$venue->id]) ? $vex[$venue->id] : $venue->division;
+                $minutes = $settings['minutes'][$division];
+                $courts = array();
+                foreach ($list as $court) {
+                    $ex = isset($cex[$court->id]) ? $cex[$court->id] : null;
+                    $available = $night->type !== 'bye' && (!$ex || (int) $ex->available === 1);
+                    $start = $ex && $ex->start_time ? self::hm($ex->start_time) : self::hm($court->default_start);
+                    $end = $ex && $ex->end_time ? self::hm($ex->end_time) : self::hm($court->default_end);
+                    $courts[] = array(
+                        'court' => $court,
+                        'available' => $available,
+                        'start' => $start,
+                        'end' => $end,
+                        'changed' => (bool) $ex,
+                        'slots' => $available ? self::slot_times($start, $end, $minutes) : array(),
+                    );
+                }
+                $venues[] = array('venue' => $venue, 'division' => $division, 'division_changed' => isset($vex[$venue->id]), 'minutes' => $minutes, 'courts' => $courts);
             }
-            $venues[] = array('venue' => $venue, 'division' => $division, 'division_changed' => isset($venue_ex[$venue->id]), 'minutes' => $minutes, 'courts' => $courts);
+            $out[$id] = array('night' => $night, 'venues' => $venues);
         }
-        return array('night' => $night, 'venues' => $venues);
+        return $out;
+    }
+
+    /**
+     * Every night of a season in date order, each with its game slots per
+     * division, counted as slots_for_night() lists them (per-night exceptions
+     * included; a bye has none): list of array(night => row, slots =>
+     * division => count). A few queries for the whole season (0.19.0, for
+     * RSL_Capacity), not a few for each night.
+     */
+    public static function season_slot_counts($season) {
+        $nights = self::nights($season);
+        $plans = self::plans_for($nights);
+        $out = array();
+        foreach ($nights as $n) {
+            $count = array_fill_keys(array_keys(RSL_Teams::DIVISIONS), 0);
+            foreach ($plans[intval($n->id)]['venues'] as $v) {
+                if (!isset($count[$v['division']])) {
+                    continue;
+                }
+                foreach ($v['courts'] as $c) {
+                    $count[$v['division']] += count($c['slots']);
+                }
+            }
+            $out[] = array('night' => $n, 'slots' => $count);
+        }
+        return $out;
     }
 
     /** Flat list of the night's game slots: venue, court, start, end, division. */

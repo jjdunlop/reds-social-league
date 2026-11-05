@@ -5,7 +5,7 @@
  * the maximum, new teams within min–max with a volunteer captain when there
  * is one, a team that said no is never used), short teams filled first, an
  * asked-for team preferred, the captain swap, leftover reasons in plain
- * words, the same answer every time (and in any input order), court space,
+ * words, the same answer every time (and in any input order), the places,
  * locked units.
  *
  *   wp eval-file dev/tests/test-placement.php
@@ -269,16 +269,20 @@ $res = $run($one, array($team(1, 'unranked', 10, 2.0)));
 $check('one player: singular wording', $why($res, $one[0]) === '1 Unranked player left — 6 short of a new team; Unranked teams full', $why($res, $one[0]));
 $cap = $singles(8, 2.0);
 $res = $run($cap, array($team(1, 'unranked', 10, 2.0)), array('capacity' => array('unranked' => 1, 'ranked' => null)));
-$check('no court space', !$res['new_teams'] && $why($res, $cap[0]) === '8 Unranked players left — no court space for another Unranked team; Unranked teams full' && in_array('capacity', $res['units'][$cap[0]['ref']]['flags'], true), $why($res, $cap[0]));
+$check('no places left (set by hand: the allowance isn\'t named)', !$res['new_teams'] && $why($res, $cap[0]) === '8 Unranked players left — no place for another Unranked team; Unranked teams full' && in_array('capacity', $res['units'][$cap[0]['ref']]['flags'], true), $why($res, $cap[0]));
+$res = $run($cap, array($team(1, 'unranked', 10, 2.0)), array('capacity' => array('unranked' => 1, 'ranked' => null), 'allowance' => array('unranked' => 2, 'ranked' => 2)));
+$check('no places left: the reason names the allowance they were worked out with (0.19.0)', $why($res, $cap[0]) === '8 Unranked players left — no place for another Unranked team without teams sitting out more than 2 nights a season; Unranked teams full', $why($res, $cap[0]));
+$res = $run($cap, array($team(1, 'unranked', 10, 2.0)), array('capacity' => array('unranked' => 1, 'ranked' => null), 'allowance' => array('unranked' => 1, 'ranked' => null)));
+$check('...one night', $why($res, $cap[0]) === '8 Unranked players left — no place for another Unranked team without teams sitting out more than 1 night a season; Unranked teams full', $why($res, $cap[0]));
 
-// --- Court space --------------------------------------------------------------------------------------------
+// --- Places -----------------------------------------------------------------------------------------------
 $res = $run($singles(30, 2.0), array(), array('capacity' => array('unranked' => 2, 'ranked' => null)));
-$check('court space caps new teams (30 players, room for 2 teams)', count($res['new_teams']) === 2 && $res['summary']['placed'] === 20 && $res['summary']['unplaced'] === 10);
+$check('the places cap new teams (30 players, 2 places)', count($res['new_teams']) === 2 && $res['summary']['placed'] === 20 && $res['summary']['unplaced'] === 10);
 $res = $run($singles(30, 2.0), array($team(1, 'unranked', 8, 2.0)), array('capacity' => array('unranked' => 2, 'ranked' => null)));
-$check('existing teams count against court space', count($res['new_teams']) === 1, (string) count($res['new_teams']));
+$check('existing teams take places', count($res['new_teams']) === 1, (string) count($res['new_teams']));
 $rk = $singles(10, 4.0, array('divisions' => array('ranked')));
 $res = $run($rk, array(), array('capacity' => array('unranked' => null, 'ranked' => 0)));
-$check('no Ranked court space: no Ranked team', !$res['new_teams'] && $res['summary']['unplaced'] === 10);
+$check('no Ranked places: no Ranked team', !$res['new_teams'] && $res['summary']['unplaced'] === 10);
 $ei = $singles(10, 4.0, array('divisions' => array('unranked', 'ranked')));
 $res = $run($ei, array(), array('capacity' => array('unranked' => null, 'ranked' => 0)));
 $check('Either players go to Unranked when Ranked is full', count($res['new_teams']) === 1 && isset($res['new_teams']['U1']), json_encode(array_keys($res['new_teams'])));
@@ -467,7 +471,7 @@ foreach (array(20, 40, 60, 80, 120) as $n) {
         $counts['new'] += $sum['new_teams'];
     }
 }
-$check('the rules hold over ' . $counts['runs'] . ' random pools (groups whole, divisions, no\'s, maximum, new teams 7–10, volunteers, court space, locks)', !$broken, implode(' | ', array_slice($broken, 0, 8)));
+$check('the rules hold over ' . $counts['runs'] . ' random pools (groups whole, divisions, no\'s, maximum, new teams 7–10, volunteers, places, locks)', !$broken, implode(' | ', array_slice($broken, 0, 8)));
 $check('and most people are placed (' . round(100 * $counts['placed'] / max(1, $counts['players'])) . '%)', $counts['placed'] > 0.6 * $counts['players']);
 
 // --- Capacity of the engine ------------------------------------------------------------------------------------------

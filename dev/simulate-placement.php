@@ -57,7 +57,7 @@ foreach ($cli as $a) {
 $settings = array(
     'min_roster' => 7, 'target_roster' => 8, 'new_team_target' => 8, 'max_roster' => 10,
     'gap_fill' => 1.5, 'gap_short' => 2.0,
-    'capacity' => array('unranked' => 12, 'ranked' => 12), // 6 game slots a division on the first night × 2
+    'capacity' => array('unranked' => 12, 'ranked' => 12), // places: 6 game slots a night with no team sitting out (RSL_Capacity, allowance 0)
 );
 
 /** A weighted choice: key => integer weight. */
@@ -471,7 +471,7 @@ foreach ($scenarios as $sc) {
         return isset($tot[$k . '_n']) && $tot[$k . '_n'] ? $tot[$k] / $tot[$k . '_n'] : 0;
     };
     echo "\n{$sc['label']}, " . count($first[1]) . ' existing teams, ' . ($opt['only'] ? "seed {$opt['only']}" : "{$opt['seeds']} seeds")
-        . ($sc['tight'] ? '' : " — courts for {$settings['capacity']['unranked']} Unranked / {$settings['capacity']['ranked']} Ranked teams") . "\n";
+        . ($sc['tight'] ? '' : " — places for {$settings['capacity']['unranked']} Unranked / {$settings['capacity']['ranked']} Ranked teams") . "\n";
     echo " seed  units groups vols u18 | placed exist  new teams none |  gap  max | asked | nocap noset | short     | viol same |    ms\n";
     echo str_repeat('-', 118) . "\n";
     foreach ($lines as $l) {

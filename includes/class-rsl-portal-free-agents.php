@@ -239,7 +239,10 @@ class RSL_Portal_FA {
                     $retry = RSL_Portal::apply_retry($team); // the card will be there to send it again
                     return array('type' => 'error', 'message' => 'You\'re registered, but your team application didn\'t go through: ' . $team->get_error_message() . ($retry ? ' Check the details below and send it again.' : ''), 'open_apply' => $retry);
                 }
-                return self::result('success', 'You\'re registered and your application for ' . $team->name . RSL_Portal::season_aside($team->season) . ' is in. Once the league approves it you\'ll get an invite link for your players.');
+                // A full division never refuses it (0.19.0): the captain hears it's on the waiting list instead.
+                $waiting = RSL_Capacity::waiting_note($team);
+                return self::result('success', 'You\'re registered and your application for ' . $team->name . RSL_Portal::season_aside($team->season) . ' is in. '
+                    . ($waiting !== '' ? $waiting : 'Once the league approves it you\'ll get an invite link for your players.'));
             case 'later':
                 // With nothing open for sign-up (0.18.0) an invite code is the only way onto a team.
                 return self::result('success', 'Thanks — you\'re registered for the Reds Social League. Whenever you\'re ready, '
