@@ -120,8 +120,9 @@ finals (see `CLAUDE.md`).
   prefers them to play: a late joiner sits out a little less per night
   than the teams there every night (0.034 against 0.055 in the standard
   run below, 0.041 with nights sat out only; 0.162 against 0.176 in the
-  tight run). A double-header team's extra rematches make it a little
-  more likely to lose a tie.
+  tight run), and a team with weeks off a little less too (0.051 in the
+  standard run, with either count). A double-header team's extra
+  rematches make it a little more likely to lose a tie.
 - **Admins can see the rule hold.** A sit-out's reason gives the team's
   count against the teams playing, to one decimal place when it has a
   share: "Not enough courts (nights sat out before: this team 1.3, the
