@@ -103,7 +103,7 @@ $check('a close rematch beats two lopsided first meetings', $has_pair($p['pairs'
 $p = RSL_Pairing::pair_division(array(1, 2, 3, 4), $ratings, array('1-2' => array('count' => 2, 'last' => 4), '3-4' => array('count' => 2, 'last' => 4)), array(), $w);
 $check('but never a third meeting when there\'s another option', !$has_pair($p['pairs'], 1, 2) && !$has_pair($p['pairs'], 3, 4));
 $p = RSL_Pairing::pair_division(array(1, 2, 3, 4, 5), $r(array(1 => 1500, 2 => 1500, 3 => 1500, 4 => 1500, 5 => 1500)), array(), array(1 => 1, 2 => 1, 3 => 1, 4 => 1), $w);
-$check('odd numbers: the team that hasn\'t sat out sits out', $p['bye'] === 5);
+$check('odd numbers: the team that hasn\'t sat out sits out', $p['bye'] === 5 && $p['out'] === array(5 => 'odd') && $p['fill'] === null && count($p['pairs']) === 2);
 $meet = array('1-2' => array('count' => 1, 'last' => 3), '3-4' => array('count' => 1, 'last' => 3), '1-3' => array('count' => 1, 'last' => 2), '2-4' => array('count' => 1, 'last' => 2));
 $p = RSL_Pairing::pair_division(array(1, 2, 3, 4), null, $meet, array(), $w);
 $check('Unranked: the pairs that haven\'t met play', $has_pair($p['pairs'], 1, 4) && $has_pair($p['pairs'], 2, 3));
@@ -165,26 +165,189 @@ $check('round 3 with only round 1\'s results in (round 2\'s not entered yet): on
 $check('a round whose only game involves a team outside the division doesn\'t count either',
     RSL_Pairing::link($ids8, array(1 => $within[1], 2 => array(array(1, 99)), 3 => $within[2]), 4, $w)['bonus'] === 2.25);
 
-// More games than slots: the most expensive pairings sit out by the draw's own cost, link bonus
-// included, so a game that links groups is the last to go. Ten teams, two groups (1-6 strong, 7-10
-// weaker) that have only met inside them in rounds 1 and 2.
+// --- Sitting out (0.18.2): by nights sat out, then by cost ------------------------------------------
+// More teams than the night's games can hold: the teams with the fewest nights sat out sit out, and
+// among teams tied on that count the draw's own cost decides (link term included), so the link only
+// breaks ties. Ten teams, two groups (1-6 strong, 7-10 weaker) that have only met inside them in rounds
+// 1 and 2; three courts, so four teams sit out.
 $by10 = array(1 => array(array(1, 2), array(3, 4), array(5, 6), array(7, 8), array(9, 10)), 2 => array(array(1, 3), array(2, 5), array(4, 6), array(7, 9), array(8, 10)));
 $r10 = array_map(function ($x) { return array('rating' => $x['rating'], 'sd' => 80); },
     $r(array(1 => 1660, 2 => 1640, 3 => 1620, 4 => 1600, 5 => 1590, 6 => 1580, 7 => 1420, 8 => 1400, 9 => 1380, 10 => 1360)));
 $l10 = RSL_Pairing::link(range(1, 10), $by10, 3, $w);
-$p10 = RSL_Pairing::pair_division(range(1, 10), $r10, $meet8($by10, 3), array(), $w, 's3', $l10);
 $cross10 = function ($pairs) { $n = 0; foreach ($pairs as $p) { $n += (($p[0] <= 6) !== ($p[1] <= 6)) ? 1 : 0; } return $n; };
-$t3 = RSL_Pairing::trim($p10['pairs'], 3);
-$kept_max = max(array_map(function ($p) { return $p[2]['cost']; }, $t3['kept']));
-$dropped_min = min(array_map(function ($p) { return $p[2]['cost']; }, $t3['dropped']));
-$by_closeness = $p10['pairs']; // the trim before this fix: cost without the link bonus
-usort($by_closeness, function ($x, $y) { return ($x[2]['cost'] - $x[2]['link']) <=> ($y[2]['cost'] - $y[2]['link']); });
-$check('three courts for five games: a game linking the groups is kept (judged without the bonus, both would have sat out)',
-    $l10['bonus'] === 2.25 && $cross10($p10['pairs']) === 2 && count($t3['kept']) === 3 && count($t3['dropped']) === 2
-    && $cross10($t3['kept']) >= 1 && $kept_max <= $dropped_min && $cross10(array_slice($by_closeness, 0, 3)) === 0,
-    $cross10($p10['pairs']) . ' cross, ' . $cross10($t3['kept']) . ' kept');
-$check('...room for every game: nothing sits out', count(RSL_Pairing::trim($p10['pairs'], 5)['kept']) === 5 && RSL_Pairing::trim($p10['pairs'], 6)['dropped'] === array()
-    && RSL_Pairing::trim(array(), 3) === array('kept' => array(), 'dropped' => array()));
+$p10 = RSL_Pairing::pair_division(range(1, 10), $r10, $meet8($by10, 3), array(), $w, 's3', $l10, 3);
+$n10 = RSL_Pairing::pair_division(range(1, 10), $r10, $meet8($by10, 3), array(), $w, 's3', null, 3);
+$check('three courts for ten teams, none sat out yet: three games, four teams out for courts, and the link term keeps a game between the groups that the cost alone leaves out',
+    $l10['bonus'] === 2.25 && count($p10['pairs']) === 3 && count($p10['out']) === 4 && array_values(array_unique($p10['out'])) === array('courts')
+    && $p10['bye'] === null && $p10['fill'] === null && $cross10($p10['pairs']) >= 1 && $cross10($n10['pairs']) === 0,
+    $cross10($p10['pairs']) . ' / ' . $cross10($n10['pairs']) . ' cross');
+$sat10 = array(1 => 1, 2 => 1, 3 => 1, 4 => 1, 5 => 1, 6 => 1);
+$q10 = RSL_Pairing::pair_division(range(1, 10), $r10, $meet8($by10, 3), $sat10, $w, 's3', $l10, 3);
+$check('...but the link term never outweighs the count: with 1-6 on one night sat out and 7-10 on none, 7-10 sit out and 1-6 play among themselves',
+    array_keys($q10['out']) == array(7, 8, 9, 10) && $cross10($q10['pairs']) === 0, wp_json_encode(array_keys($q10['out'])));
+$check('...room for every game: nothing sits out, and the draw is the one with no limit',
+    RSL_Pairing::pair_division(range(1, 10), $r10, $meet8($by10, 3), array(), $w, 's3', $l10, 5) === RSL_Pairing::pair_division(range(1, 10), $r10, $meet8($by10, 3), array(), $w, 's3', $l10)
+    && RSL_Pairing::pair_division(range(1, 10), $r10, $meet8($by10, 3), array(), $w, 's3', $l10, 6)['out'] === array()
+    && count(RSL_Pairing::pair_division(range(1, 10), $r10, $meet8($by10, 3), array(), $w, 's3', $l10, 5)['pairs']) === 5);
+
+// Ties go by cost: six teams, none sat out, two courts: the two far from the rest sit out. When one of
+// them has sat out before, it plays (the closest game it has) and someone on 0 sits out instead.
+$r6 = $r(array(1 => 1500, 2 => 1510, 3 => 1490, 4 => 1505, 5 => 1900, 6 => 1100));
+$p6 = RSL_Pairing::pair_division(range(1, 6), $r6, array(), array(), $w, 't', null, 2);
+$check('ties go by cost: the two teams far from the rest sit out (none sat out yet)', array_keys($p6['out']) == array(5, 6) || array_keys($p6['out']) == array(6, 5));
+$p6 = RSL_Pairing::pair_division(range(1, 6), $r6, array(), array(5 => 1), $w, 't', null, 2);
+$check('...a team that has sat out before plays, though its game is the dearest: 5 plays 2, 6 and one more sit out',
+    !isset($p6['out'][5]) && isset($p6['out'][6]) && count($p6['out']) === 2 && $has_pair($p6['pairs'], 5, 2));
+
+// Rotation: ten teams on four courts, so two sit out every night. Every team sits out once before any
+// team sits out twice, and two teams' counts never differ by more than one, whatever the ratings.
+mt_srand(7);
+$rot = array();
+foreach (range(1, 10) as $t) { $rot[$t] = array('rating' => 1500 + mt_rand(-250, 250), 'sd' => 60); }
+$sat = array();
+$met = array();
+$ok = true;
+$after5 = null;
+for ($night = 1; $night <= 8; $night++) {
+    $m = array();
+    foreach ($met as $k => $x) { $m[$k] = array('count' => $x['count'], 'last' => $night - $x['round']); }
+    $p = RSL_Pairing::pair_division(range(1, 10), $rot, $m, $sat, $w, "rot$night", null, 4);
+    foreach ($p['pairs'] as $g) {
+        $k = RSL_Pairing::meeting_key($g[0], $g[1]);
+        $met[$k] = array('count' => (isset($met[$k]) ? $met[$k]['count'] : 0) + 1, 'round' => $night);
+    }
+    foreach (array_keys($p['out']) as $t) { $sat[$t] = (isset($sat[$t]) ? $sat[$t] : 0) + 1; }
+    $now = array_map(function ($t) use ($sat) { return isset($sat[$t]) ? $sat[$t] : 0; }, range(1, 10));
+    $ok = $ok && count($p['pairs']) === 4 && count($p['out']) === 2 && max($now) - min($now) <= 1;
+    if ($night === 5) { $after5 = $now; }
+}
+$check('rotation: ten teams, four courts, eight nights: two sit out each night, each team once before any team twice (all on 1 after five nights)',
+    $ok && $after5 === array_fill(0, 10, 1), wp_json_encode($sat));
+
+// Odd night with a spare court: the odd team plays a double-header team when one qualifies, and
+// fairness never costs that game. 5 has sat out fewest but met the double-header team 6 last week;
+// 4 and the others can play 6, so one of them is the odd team, plays 6, and nobody sits out.
+$r7 = $r(array_fill_keys(range(1, 7), 1500));
+$m7 = array('5-6' => array('count' => 1, 'last' => 1));
+$s7 = array(1 => 1, 2 => 1, 3 => 1, 4 => 1, 6 => 1, 7 => 1);
+$p7 = RSL_Pairing::pair_division(range(1, 7), $r7, $m7, $s7, $w, 'odd', null, 4, array(6));
+$check('odd night, spare court: the team on fewest nights sat out can\'t play the double-header team, another can, so that one plays it and nobody sits out',
+    $p7['out'] === array() && $p7['fill'] !== null && $p7['fill'][0] === 6 && $p7['bye'] !== 5 && $p7['bye'] !== 6 && count($p7['pairs']) === 3
+    && in_array(5, array_merge(array_column($p7['pairs'], 0), array_column($p7['pairs'], 1)), true), wp_json_encode(array($p7['bye'], $p7['out'])));
+$p7 = RSL_Pairing::pair_division(range(1, 7), $r7, $m7, $s7, $w, 'odd', null, 4);
+$check('...with no double-header team, 5 (fewest nights sat out) sits out', $p7['out'] === array(5 => 'odd') && $p7['fill'] === null);
+$p7 = RSL_Pairing::pair_division(range(1, 7), $r7, $m7, $s7, $w, 'odd', null, 3, array(6));
+$check('...and with no spare court (seven teams, three courts) it is a court sit-out for 5, with no fill game', $p7['out'] === array(5 => 'courts') && $p7['fill'] === null && $p7['bye'] === null);
+// A double-header team is the last of the tied teams to be the odd one out (odd_double, 8): 1 is about
+// 306 points above four even teams, so its game costs 4.5, over the fill limit (4) but under 8.
+$r5 = $r(array(1 => 1500 + 400 * log10((1 + sqrt(0.5)) / (1 - sqrt(0.5))), 2 => 1500, 3 => 1500, 4 => 1500, 5 => 1500));
+$p5 = RSL_Pairing::pair_division(range(1, 5), $r5, array(), array(), $w, 'dh', null, 3, array(1));
+$q5 = RSL_Pairing::pair_division(range(1, 5), $r5, array(), array(), array('odd_double' => 0.0) + $w, 'dh', null, 3, array(1));
+$check('a double-header team is the last of the tied teams to be the odd one out: 1 plays its 4.5 game rather than sit out (with odd_double 0 it would sit out)',
+    $p5['fill'] === null && count($p5['out']) === 1 && !isset($p5['out'][1]) && $q5['out'] === array(1 => 'odd'),
+    wp_json_encode(array($p5['out'], $q5['out'])));
+
+// The rule against brute force: 400 small random nights (3 to 9 teams, 1 to 5 courts or no limit, 0 to 2
+// nights sat out each, random ratings, meetings and double-header teams). Every choice of who sits out
+// that keeps the rule is tried with every pairing of the rest: a team out has sat out no more nights
+// than any team that plays; on an odd night with a spare court, when some team could play a fill game
+// the odd team is one of those (fewest nights sat out first) and nobody sits out. The draw keeps the rule
+// and its games (plus fill games and the double-header term) cost no more than the best choice.
+$subsets = function ($list, $k) use (&$subsets) {
+    if ($k === 0) { return array(array()); }
+    if (count($list) < $k) { return array(); }
+    $first = array_shift($list);
+    $with = array_map(function ($s) use ($first) { array_unshift($s, $first); return $s; }, $subsets($list, $k - 1));
+    return array_merge($with, $subsets($list, $k));
+};
+mt_srand(2026);
+$bad = array();
+for ($trial = 0; $trial < 400 && count($bad) < 3; $trial++) {
+    $n = mt_rand(3, 9);
+    $ids = range(1, $n);
+    $room = mt_rand(0, 5) ?: null;
+    $sat = $rt = $mt = $opt = array();
+    foreach ($ids as $t) {
+        $sat[$t] = mt_rand(0, 2);
+        $rt[$t] = array('rating' => 1500 + mt_rand(-300, 300), 'sd' => mt_rand(0, 150));
+        if (mt_rand(0, 3) === 0) { $opt[] = $t; }
+        foreach ($ids as $u) { if ($t < $u && mt_rand(0, 4) === 0) { $mt["$t-$u"] = array('count' => mt_rand(1, 2), 'last' => mt_rand(1, 4)); } }
+    }
+    $salt = "bf$trial";
+    $p = RSL_Pairing::pair_division($ids, $rt, $mt, $sat, $w, $salt, null, $room, $opt);
+    $game = function ($a, $b) use ($rt, $mt, $w, $salt) { return RSL_Pairing::pair_cost($a, $b, $rt, $mt, $w, $salt)['cost']; };
+    $short = $room !== null && $n > 2 * $room;
+    $k = $short ? $n - 2 * $room : $n % 2;
+    $odd = $k === 1 && !$short;
+    $fills = array();
+    if ($odd) {
+        foreach ($ids as $t) { $f = RSL_Pairing::fill_for($t, $opt, $rt, $mt, $w, $salt); if ($f) { $fills[$t] = $f; } }
+    }
+    $extra = function ($t) use ($odd, $opt, $fills, $w) { return $odd ? (in_array($t, $opt, true) ? $w['odd_double'] : 0) + ($fills ? $fills[$t][1]['cost'] : 0) : 0; };
+    // The draw's choice, and the rule.
+    $left = $p['bye'] !== null ? array($p['bye']) : array_keys($p['out']); // the teams the matching left out
+    $paired = array();
+    $mine = 0.0;
+    foreach ($p['pairs'] as $g) { $paired[$g[0]] = $paired[$g[1]] = true; $mine += $g[2]['cost']; }
+    foreach ($left as $t) { $mine += $extra($t); }
+    $plays = $paired + ($p['fill'] ? array($p['bye'] => true) : array());
+    $sat_of = function ($list) use ($sat) { return array_map(function ($t) use ($sat) { return $sat[$t]; }, $list); };
+    $holds = count($p['pairs']) === ($n - $k) / 2 && count($left) === $k && count($paired) + $k === $n && !array_intersect($left, array_keys($paired))
+        && (!$p['out'] || !$plays || max($sat_of(array_keys($p['out']))) <= min($sat_of(array_keys($plays))))
+        && ($odd ? ($fills ? $p['out'] === array() && $p['fill'] && isset($fills[$p['bye']]) && $p['fill'][0] === $fills[$p['bye']][0] : $p['fill'] === null && $p['out'] === array($p['bye'] => 'odd'))
+                 : $p['fill'] === null && $p['bye'] === null && (!$p['out'] || array_values(array_unique($p['out'])) === array('courts')));
+    // Every choice that keeps the rule, at its best pairing.
+    $best = INF;
+    foreach ($subsets($ids, $k) as $s) {
+        $rest = array_values(array_diff($ids, $s));
+        if ($odd && $fills) {
+            $low = min($sat_of(array_keys($fills)));
+            if (!isset($fills[$s[0]]) || $sat[$s[0]] !== $low) { continue; }
+        } elseif ($s && $rest && max($sat_of($s)) > min($sat_of($rest))) {
+            continue;
+        }
+        $v = $brute($rest, $game);
+        foreach ($s as $t) { $v += $extra($t); }
+        $best = min($best, $v);
+    }
+    if (!$holds || $mine > $best + 0.01 * $k + 1e-9 || $mine < $best - 1e-9) {
+        $bad[] = "trial $trial: n $n room " . var_export($room, true) . ($holds ? '' : ' rule broken') . " draw $mine best $best";
+    }
+}
+$check('the rule against brute force (400 random nights): the draw keeps the rule and is the cheapest choice that does', !$bad, implode('; ', $bad));
+
+// Above EXACT_LIMIT (teams plus sit-out places), the local search keeps the rule and comes close to exact.
+$exact = new ReflectionMethod('RSL_Pairing', 'match_exact');
+$exact->setAccessible(true);
+$ok = true;
+$worst = 0.0;
+for ($trial = 0; $trial < 4; $trial++) {
+    $big = array();
+    foreach (range(1, 16) as $t) { $big[$t] = array('rating' => 1500 + mt_rand(-300, 300), 'sd' => 80); }
+    $bsat = array();
+    foreach (range(1, 16) as $t) { $bsat[$t] = mt_rand(0, 1); }
+    $p = RSL_Pairing::pair_division(range(1, 16), $big, array(), $bsat, $w, "big$trial", null, 5); // 16 teams + 6 places: the search
+    $out = array_keys($p['out']);
+    $in = array_values(array_diff(range(1, 16), $out));
+    $ok = $ok && count($p['pairs']) === 5 && count($out) === 6 && max(array_map(function ($t) use ($bsat) { return $bsat[$t]; }, $out)) <= min(array_map(function ($t) use ($bsat) { return $bsat[$t]; }, $in));
+    // The exact answer for the same rule (match_out()'s matrix through the exact solver).
+    $rule = RSL_Pairing::sit_out(range(1, 16), $bsat, 5, array(), array(), $w, "big$trial");
+    $play = array_values(array_diff(range(1, 16), $rule['must']));
+    $kk = $rule['k'] - count($rule['must']);
+    $real = count($play);
+    $cm = array();
+    for ($i = 0; $i < $real + $kk; $i++) {
+        for ($j = $i + 1; $j < $real + $kk; $j++) {
+            $cm[$i][$j] = $cm[$j][$i] = $j < $real ? RSL_Pairing::pair_cost($play[$i], $play[$j], $big, array(), $w, "big$trial")['cost']
+                : ($i < $real ? (isset($rule['may'][$play[$i]]) ? $rule['may'][$play[$i]] : RSL_Pairing::NEVER) : RSL_Pairing::NEVER);
+        }
+    }
+    $e = 0.0;
+    foreach ($exact->invoke(null, $cm, $real + $kk, $real) as $pr) { $e += $cm[$pr[0]][$pr[1]]; }
+    $worst = max($worst, $p['total'] - $e);
+    $ok = $ok && $p['total'] <= $e * 1.05 + 0.05;
+}
+$check('above EXACT_LIMIT the search keeps the rule and comes within 5% of exact', $ok, 'worst gap ' . round($worst, 3));
 
 // --- Slots ---------------------------------------------------------------------------------
 $slots = array(
@@ -305,9 +468,38 @@ $wpdb->insert(RSL_Database::table('requests'), array('team_id' => $extra['Cant']
 $ctx = RSL_Pairing::context($nights[1]);
 $check('a team in the league but left out of a night has sat out once', isset($ctx['byes'][intval($extra['Bye']->id)]) && $ctx['byes'][intval($extra['Bye']->id)] === 1);
 $check('...but not one approved after that night, or one that said it couldn\'t make it', !isset($ctx['byes'][intval($extra['Late']->id)]) && !isset($ctx['byes'][intval($extra['Cant']->id)]));
+// A game in any division counts (0.18.2). A team moved from Unranked to Ranked after week one played
+// that night: before, Ranked was judged first and on its own games only, so the move counted week one
+// as a sit-out. And a double-header night is one night played, not a sit-out.
+$moved = intval($u[1]->id);
+$wpdb->update(RSL_Database::table('teams'), array('division' => 'ranked'), array('id' => $moved));
+$ctx_moved = RSL_Pairing::context($nights[1]);
+$wpdb->update(RSL_Database::table('teams'), array('division' => 'unranked'), array('id' => $moved));
+$check('context(): a team moved from Unranked to Ranked has not sat out the night it played in Unranked; the double-header team has one double and no sit-out',
+    !isset($ctx_moved['byes'][$moved]) && !isset($ctx_moved['byes'][intval($u[0]->id)]) && isset($ctx_moved['doubles'][intval($u[0]->id)]) && $ctx_moved['doubles'][intval($u[0]->id)] === 1
+    && isset($ctx_moved['byes'][intval($extra['Bye']->id)]), wp_json_encode($ctx_moved['byes']));
 foreach ($extra as $t) {
     $wpdb->delete(RSL_Database::table('requests'), array('team_id' => $t->id));
     $wpdb->delete(RSL_Database::table('teams'), array('id' => $t->id));
+}
+// plan() with too few courts (0.18.2): five more Unranked teams for three Unranked slots. The five new
+// teams were in the league for week one with no game (one night sat out each); the three that played
+// week one are on none (the double-header team owes for its two games, so it's out for that), so the
+// court sit-outs are teams that played week one, and each reason gives the counts.
+$ux = array();
+foreach (array(1, 2, 3, 4, 5) as $i) {
+    $ux[] = intval(RSL_Teams::create($season, array('name' => "Pair UX$i $suffix", 'division' => 'unranked', 'level' => 'new'))->id);
+}
+$plan2 = RSL_Pairing::plan($nights[1]->id);
+$uout = isset($plan2['divisions']['unranked']) ? $plan2['divisions']['unranked']['out'] : array();
+$ugames = isset($plan2['divisions']['unranked']) ? $plan2['divisions']['unranked']['games'] : array();
+$courts_out = array_filter($uout, function ($why) { return strpos($why, 'Not enough courts') === 0; });
+$u_week1 = array_map(function ($t) { return intval($t->id); }, $u);
+$check('plan(): eight or more Unranked teams on three slots: three games; the court sit-outs are teams that played week one, never one that sat it out, with both counts in the reason',
+    count($ugames) === 3 && $courts_out && !array_diff(array_keys($courts_out), $u_week1)
+    && array_values(array_unique($courts_out)) === array('Not enough courts (nights sat out before: this team 0, the teams playing 0 or more)'), wp_json_encode($uout));
+foreach ($ux as $tid) {
+    $wpdb->delete(RSL_Database::table('teams'), array('id' => $tid));
 }
 
 RSL_Ratings::flush();
@@ -354,6 +546,10 @@ $check('context(): week two played and still split, round 3 links {a b c d} and 
     && $g3[$pa[0]] === $g3[$pc[1]] && $g3[$pe[0]] === $g3[$pe[1]] && $g3[$pa[0]] !== $g3[$pe[0]]
     && $ctx3['link']['bonus'] === 2.25 && $ctx3['link']['nights'] === 1 && !array_intersect($u_ids, array_keys($g3)),
     wp_json_encode($ctx3['link']));
+// Week two's automatic draw left the Unranked double-header team out for owing (its two week-one games);
+// that is recorded like a week off, so it isn't a night sat out.
+$check('context(): a night the automatic draw left a team out for owing money is not a night sat out (recorded like a week off)',
+    isset(RSL_Requests::for_night($nights[1]->id, 'unpaid', array('handled'))[$u_ids[0]]) && !isset($ctx3['byes'][$u_ids[0]]), wp_json_encode($ctx3['byes']));
 $ef_games = array($week1_ranked[2], $w2[2]);
 foreach ($ef_games as $ef) {
     RSL_Fixtures::record_forfeit($ef->id, $ef->home_team_id);
@@ -436,9 +632,15 @@ $_GET = array('page' => 'rsl-fixtures', 'season' => $season, 'night' => $nights[
 ob_start(); (new RSL_Admin_Fixtures())->render(); $html = ob_get_clean();
 $check('admin page offers automatic fixtures on an empty night', strpos($html, 'Make fixtures automatically') !== false && strpos($html, 'How automatic fixtures are made') !== false);
 $_GET = array('page' => 'rsl-fixtures', 'season' => $season, 'night' => $nights[1]->id);
+// A team with no game that night (in the league for week one too, with no game then either).
+$rest = RSL_Teams::create($season, array('name' => "Pair Rest $suffix", 'division' => 'unranked', 'level' => 'new'));
 ob_start(); (new RSL_Admin_Fixtures())->render(); $html = ob_get_clean();
+$wpdb->delete(RSL_Database::table('teams'), array('id' => $rest->id));
 $check('admin page shows set chances (not expected scores) and meetings', strpos($html, 'meeting') !== false && preg_match('/\d+% · \d+%/u', $html) === 1
     && strpos($html, 'Set chance') !== false && strpos($html, 'expected one-sided') === false);
+$check('admin page: Not playing this night gives a resting team\'s nights sat out before, against the teams playing in its division',
+    strpos($html, esc_html("Pair Rest $suffix (bye — odd numbers or not enough courts; nights sat out before: 1, the teams playing 0 or more)")) !== false
+    && strpos($html, 'Sitting out:') !== false);
 $_GET = array('page' => 'rsl-fixtures', 'season' => $season, 'night' => $n3->id);
 ob_start(); (new RSL_Admin_Fixtures())->render(); $html = ob_get_clean();
 $check('admin page shows the link term on a game it brought about, and explains it', strpos($html, 'Links two groups that haven') !== false

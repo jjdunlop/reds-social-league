@@ -64,7 +64,16 @@ class RSL_Admin_Fixtures {
                 if (is_wp_error($r)) {
                     self::notice('error', $r->get_error_message());
                 } else {
+                    $names = array();
+                    foreach (RSL_Teams::list_for_season($night->season) as $t) {
+                        $names[intval($t->id)] = $t->name;
+                    }
+                    $out = array();
+                    foreach ($r['out'] as $team_id => $reason) {
+                        $out[] = (isset($names[$team_id]) ? $names[$team_id] : '#' . $team_id) . ': ' . $reason;
+                    }
                     self::notice('success', 'Made ' . $r['created'] . ' game' . ($r['created'] === 1 ? '' : 's') . ' automatically. Check them, then publish.'
+                        . ($out ? ' Not playing: ' . implode('; ', $out) . '.' : '')
                         . ($r['notes'] ? ' Note: ' . implode(' ', $r['notes']) : ''));
                 }
                 return $back;
@@ -386,8 +395,13 @@ class RSL_Admin_Fixtures {
             <?php endif; ?>
             <?php if (!empty($why['_resting'])): ?>
                 <?php $unpaid = RSL_Requests::for_night($night->id, 'unpaid', array('handled')); ?>
-                <p><strong>Not playing this night:</strong> <?php echo esc_html(implode(', ', array_map(function ($id) use ($teams, $off, $unpaid) {
-                    return $teams[$id]->name . (isset($off[$id]) ? ' (week off)' : (isset($unpaid[$id]) ? ' (owes money — not fixtured)' : ' (bye — odd numbers or no court)'));
+                <p><strong>Not playing this night:</strong> <?php echo esc_html(implode(', ', array_map(function ($id) use ($teams, $off, $unpaid, $why) {
+                    if (isset($off[$id]) || isset($unpaid[$id])) {
+                        return $teams[$id]->name . (isset($off[$id]) ? ' (week off)' : ' (owes money — not fixtured)');
+                    }
+                    $fewest = isset($why['_fewest'][$teams[$id]->division]) ? $why['_fewest'][$teams[$id]->division] : null;
+                    return $teams[$id]->name . ' (bye — odd numbers or not enough courts; nights sat out before: ' . intval($why['_sat_out'][$id])
+                        . ($fewest === null ? '' : ', the teams playing ' . intval($fewest) . ' or more') . ')';
                 }, $why['_resting']))); ?></p>
             <?php endif; ?>
         <?php endif; ?>
@@ -402,9 +416,10 @@ class RSL_Admin_Fixtures {
             <ul>
                 <li><strong>Close games (Ranked):</strong> from the two ratings, each team's chance of winning a set — shown in the <em>Set chance</em> column. It doesn't depend on how many sets fit in the hour. 50/50 costs nothing, 67/33 costs 1, 75/25 costs 2.25, 80/20 costs 3.2, 90/10 costs 5.8 — slightly uneven is cheap, lopsided is expensive. New teams' ratings are uncertain, so their chances are pulled towards 50/50.</li>
                 <li><strong>Variety:</strong> a second meeting costs the same as a 67/33 game, so a rematch happens only when it's clearly the closest option. A third meeting costs far more than any lopsided game, so teams meet at most twice a season unless there's no alternative. Last week's opponent is never repeated; two weeks ago costs a little extra.</li>
-                <li><strong>Linking groups (Ranked, from its third night):</strong> the ladder only has results to go on, so it can't compare teams that no chain of games connects (say the top five have only played each other). While the results are split like that, a game between two groups costs 2.25 less (the cost of a 75/25 game), and 2.25 more off for each further night they stay split. Only nights with Ranked results count: one with no Ranked games, or whose results aren't in yet, neither starts nor raises it. Teams that haven't played yet are left out. When there are more games than courts, a game that links groups is the last to sit out. The <em>Why</em> column shows it.</li>
+                <li><strong>Linking groups (Ranked, from its third night):</strong> the ladder only has results to go on, so it can't compare teams that no chain of games connects (say the top five have only played each other). While the results are split like that, a game between two groups costs 2.25 less (the cost of a 75/25 game), and 2.25 more off for each further night they stay split. Only nights with Ranked results count: one with no Ranked games, or whose results aren't in yet, neither starts nor raises it. Teams that haven't played yet are left out. When courts are short it only decides between teams that have sat out the same number of nights. The <em>Why</em> column shows it.</li>
                 <li><strong>Unranked:</strong> no ratings, so it's purely who's played whom least and longest ago.</li>
-                <li><strong>Odd numbers:</strong> the spare team gets a game against a team happy to double-header, or sits out (sharing that around).</li>
+                <li><strong>Sitting out:</strong> when a division has more teams than the night's courts can take, or an odd number, the teams that sit out are the ones that have sat out the fewest nights so far. Nobody sits out a second time while a team that's available has never sat out. A night with a double-header counts as one night played. Among teams on the same count, the closest games for the teams that play decide. A week off, a night the team said it couldn't make, or a night it was left out for owing money doesn't count; a team taken out of a night by hand does. <em>Not playing this night</em> shows each team's count against the teams playing.</li>
+                <li><strong>Odd numbers:</strong> with a court to spare, the odd team plays a team happy to double-header when one fits (never a third meeting, last week's opponent or a very lopsided game), and then nobody sits out. Double-header teams are the last of the tied teams to be the odd one out.</li>
                 <li><strong>Slots:</strong> earlier/later preferences are honoured where possible (teams that missed out get priority next time), the last slot is shared around, and spare slots become double-headers for teams that opted in — back-to-back or with a break, as they asked.</li>
             </ul>
             <p><strong>Ratings</strong> come from the points in every set (each rally is a small contest between the teams) plus a small bonus for winning sets — so a timed game that ends 1–1, a third set to 15, or a set cut off by the hour all count fairly. Forfeits never count.</p>
