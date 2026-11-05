@@ -95,9 +95,10 @@ finals (see `CLAUDE.md`).
   setting."). Before, it set the count against the first night's slots
   alone. A free agent not placed for want of a place is told:
   "8 Ranked players left — no place for another Ranked team without teams
-  sitting out more than 2 nights a season; Ranked teams full" (no
-  allowance named when the override set the places). Placement counts
-  active teams only, as before, not applications waiting.
+  sitting out more than 2 nights a season; Ranked teams full". Neither
+  names the allowance when the override set the places or the division
+  has no slot on any night. Placement counts active teams only, as before,
+  not applications waiting.
 - **Before 0.19.0** only placement looked at courts, as 2 × the game slots
   of the season's first regular night, so no sit-outs at all and blind to
   a later night with fewer courts. Applying and approving checked nothing.
@@ -129,7 +130,8 @@ finals (see `CLAUDE.md`).
   application moved into a full division, placement's capacity and
   warning, a season with no nights, a season that has started, the
   override, the allowance setting (saves, clamps at 0 and 10, moves the
-  places). `test-placement.php` checks the free agent's new reason.
+  places), a division with no slot on any night (0 places, no allowance
+  named). `test-placement.php` checks the free agent's new reason.
 
 ## Fair sit-outs when courts are short (0.18.2)
 

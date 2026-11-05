@@ -1793,15 +1793,17 @@ class RSL_Placement {
      * wins). null = no regular nights yet (not checked). Before 0.19.0 this
      * was 2 × the first regular night's slots, so no sit-outs at all.
      * Returns array(capacity, allowance): allowance is division => the
-     * nights it was worked out with, or null where the setting or nothing
-     * decided it (the unplaced reason names it only when it's a number).
+     * nights it was worked out with, or null where the setting decided it,
+     * or the division has no slot on any night, or there are no nights (the
+     * unplaced reason names it only when it's a number).
      */
     private static function capacity($season) {
         $out = array('unranked' => null, 'ranked' => null);
         $allow = array('unranked' => null, 'ranked' => null);
         foreach (RSL_Capacity::season($season)['divisions'] as $d => $info) {
             $out[$d] = $info['places'];
-            $allow[$d] = $info['places'] !== null && empty($info['set_by_hand']) ? intval($info['allowance']) : null;
+            // Named only when the nights decided it: not the override, nor a division with no slot at all.
+            $allow[$d] = $info['places'] !== null && empty($info['set_by_hand']) && array_sum($info['slots']) > 0 ? intval($info['allowance']) : null;
         }
         return array($out, $allow);
     }
@@ -2545,9 +2547,13 @@ class RSL_Placement {
                 $info = $places['divisions'][$div];
                 $info['places'] = $cap;
                 $allow = intval($info['allowance']);
-                $add('warning', '', $divs[$div] . ' would have ' . RSL_Capacity::over_words($info, $count) . '. '
-                    . (!empty($info['set_by_hand']) ? $cap . ' is the Most teams per division setting.'
-                        : $cap . ' is the most it takes with no team sitting out more than ' . $allow . ' night' . ($allow === 1 ? '' : 's') . ' a season.'));
+                $why = '';
+                if (!empty($info['set_by_hand'])) {
+                    $why = ' ' . $cap . ' is the Most teams per division setting.';
+                } elseif (array_sum($info['slots']) > 0) {
+                    $why = ' ' . $cap . ' is the most it takes with no team sitting out more than ' . $allow . ' night' . ($allow === 1 ? '' : 's') . ' a season.';
+                }
+                $add('warning', '', $divs[$div] . ' would have ' . RSL_Capacity::over_words($info, $count) . '.' . $why);
             }
         }
         if ($s['capacity']['unranked'] === null && $s['capacity']['ranked'] === null) {

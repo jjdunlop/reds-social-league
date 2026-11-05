@@ -465,6 +465,17 @@ $check('the allowance saves (1) and moves the places: Ranked 4, Unranked 3', $n[
     && $capa['divisions']['ranked']['places'] === 4 && $capa['divisions']['unranked']['places'] === 3, $n['message'] . ' ' . json_encode(array($capa['divisions']['ranked']['places'], $capa['divisions']['unranked']['places'])));
 $n = $fa_post(array_merge(RSL_Free_Agents::settings(), array('sit_out_nights' => '-3')));
 $check('...and never goes below 0', RSL_Free_Agents::settings()['sit_out_nights'] === 0, $n['message']);
+// A division with no slot on any night: 0 places, and placement doesn't blame the allowance.
+foreach ($nights as $nn) {
+    RSL_Courts::set_court_night($nn->id, $cu->id, false);
+}
+$capa = RSL_Capacity::season($A);
+$ctx = RSL_Placement::context($A);
+$warn = implode(' | ', RSL_Placement::blockers($A)['warnings']);
+$check('no Unranked slot on any night: 0 places, no allowance named, and the warning says why', $capa['divisions']['unranked']['places'] === 0
+    && $ctx[2]['capacity']['unranked'] === 0 && $ctx[2]['allowance']['unranked'] === null && $ctx[2]['allowance']['ranked'] === 0
+    && strpos($warn, 'Unranked would have 2 teams for 0 places: Unranked has no game slots this season.') !== false
+    && strpos($warn, '0 is the most it takes') === false, $warn);
 $tab = new ReflectionMethod('RSL_Admin_Free_Agents', 'settings_tab');
 $tab->setAccessible(true);
 $tab_html = $tab->invoke(null, $A);
