@@ -113,7 +113,7 @@ class RSL_Capacity {
     }
 
     /**
-     * The numbers in words: "about 2.1 nights each sat out this season, so some
+     * The numbers in words: "about 2.3 nights each sat out this season, so some
      * sit out 3" ("in the 6 nights left" once the season has started; no "so
      * some" when the average is whole). "About", because teams away and odd
      * numbers move it.
@@ -132,7 +132,7 @@ class RSL_Capacity {
     }
 
     /**
-     * "31 teams for 30 places: about 2.1 nights each sat out this season, so
+     * "31 teams for 30 places: about 2.3 nights each sat out this season, so
      * some sit out 3", from a division's info (season()'s, or one made up in
      * a test: label, places, slots_left, started, checked) and the team count.
      */
@@ -177,7 +177,7 @@ class RSL_Capacity {
 
     /**
      * The admin's places line for one season and division (info from
-     * season()): "Ranked, 2027 Pre-season: 28 of 30 places taken, 4
+     * season()): "Ranked, 2027 Mid-season 2: 28 of 30 places taken, 4
      * applications waiting (2 on the waiting list)."
      */
     public static function places_line($info) {

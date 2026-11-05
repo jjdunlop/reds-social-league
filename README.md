@@ -6,6 +6,131 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## Places in each division and a waiting list (0.19.0)
+
+- **The rule** (the club's, 5 Nov 2026). A division takes at most as many
+  teams as lets every team sit out at most 2 nights a season, with every
+  team there every night. With n teams and S game slots on a night, n − 2S
+  teams sit out that night when that's above 0, and 0.18.2 shares those
+  sit-outs out. So a division's places are the largest n where the sum,
+  over the season's regular nights where the division has a slot, of
+  max(0, n − 2S) is at most 2 × n. The allowance is the same for every
+  season length. A team that comes in mid-season accepts it might not
+  make finals.
+- **The slots are each night's own** (`RSL_Courts::season_slot_counts()`,
+  built by the same code as `slots_for_night()`), so a court off or a venue
+  given to the other division on one night counts. Bye and finals nights
+  don't count. A night where the division has no slot isn't a sit-out,
+  as 0.18.2 counts only nights its division had games.
+- **Places for 12 game slots a night** (every 2027 season has 12 slots a
+  division on every regular night):
+
+  | Regular nights | Allowance 0 | Allowance 1 | Allowance 2 |
+  |---|---|---|---|
+  | 8 (2027 Pre-season) | 24 | 27 | 32 |
+  | 9 (Mid-season 1) | 24 | 27 | 30 |
+  | 10 (Mid-season 2) | 24 | 26 | 30 |
+  | 11 (Post-season) | 24 | 26 | 29 |
+
+  Allowance 0 is twice the fewest slots on a night, so no team sits out.
+  That is what placement used before, from the first night alone.
+- **The setting.** Free Agents → Settings → *Places in each division*:
+  *Most nights a team sits out in a season* (`sit_out_nights`, default 2,
+  0 to 10). *Most teams per division* (`capacity_override`) moved there
+  from *Placement*; above 0 it still wins over the worked-out places.
+- **Edges.** A division with no slot on any regular night has 0 places. A
+  season with no regular nights yet isn't checked, and the admin words
+  stay as before: "This season has no game nights yet, so court space
+  isn't checked." Places never go above 50, the most the override takes.
+  An allowance at or above the number of nights with a slot never binds,
+  so it gives 50. A large result is cut to 50 too: 12 slots on 3 nights
+  at allowance 2 would be 72.
+- **Taken places and the waiting list.** Active teams take places. The
+  pending applications in a season and division are lined up oldest first
+  (applied time, then id). The first ones up to the places left are
+  ordinary applications; the rest are on the waiting list. With 28 active
+  teams for 30 places and 4 applications, the two oldest are ordinary and
+  the two newest wait. Nothing is stored (no schema change): the list is
+  worked out on every read, so approving, declining, withdrawing and a
+  team leaving move it.
+- **Where it applies.** Placement (no new team past the places left, as
+  before with the old number), Start a team (at registration and on the
+  league page's application card), applying, the captain's application
+  card, and the Teams screen: approving, *Add a team* and a division
+  change. Placement confirm says when the new teams it made put a division
+  over.
+- **What a captain sees.** Only a logged-in player at the form. For each
+  season offered where a division's teams and applications fill its
+  places, beside the division: "Ranked is full for 2027 Pre-season. An
+  Unranked team can still get a place; a new Ranked team goes on the
+  waiting list." With both full: "Ranked and Unranked are both full for
+  2027 Pre-season. A new team goes on the waiting list." Applying still
+  works. After applying, and on their application card while it's on the
+  waiting list: "Ranked is full for 2027 Pre-season, so your application
+  is on the waiting list. If a place opens and the league approves it,
+  you'll get the approval email with your team's invite link." The card
+  never names another team and gives no place in the queue: a place
+  would tell the captain how many other applications there are, which no
+  page shows anyone else, and the league doesn't have to approve in that
+  order.
+- **What an admin sees.** Above *Team applications*, a line for each season
+  and division with applications: "Ranked, 2027 Mid-season 2: 28 of 30
+  places taken, 4 applications waiting (2 on the waiting list)." Those two
+  are labelled *On the waiting list*. On each application whose approval
+  would go over the places, from the nights still to come: "Approving makes
+  31 teams for 30 places: about 2.3 nights each sat out this season, so
+  some sit out 3." Its button reads *Approve over the cap*, and approving
+  needs no extra step. The notice after it gives the numbers again. Once
+  the season has started the words say "in the 6 nights left". The average
+  is to one decimal and the most is the average rounded up, since 0.18.2
+  keeps teams there every night within one sit-out of each other. "About",
+  because teams away and odd numbers move it. *Add a team*, a division
+  change and placement confirm are allowed over the places too, with the
+  same numbers in the notice. An application moved into a full division
+  says "Its application is on the waiting list in Ranked."
+- **Placement's words.** The warning before confirming: "Ranked would have
+  31 teams for 30 places: about 2.3 nights each sat out this season, so
+  some sit out 3. 30 is the most it takes with no team sitting out more
+  than 2 nights a season." (or "30 is the Most teams per division
+  setting."). Before, it set the count against the first night's slots
+  alone. A free agent not placed for want of a place is told:
+  "8 Ranked players left — no place for another Ranked team without teams
+  sitting out more than 2 nights a season; Ranked teams full" (no
+  allowance named when the override set the places). Placement counts
+  active teams only, as before, not applications waiting.
+- **Before 0.19.0** only placement looked at courts, as 2 × the game slots
+  of the season's first regular night, so no sit-outs at all and blind to
+  a later night with fewer courts. Applying and approving checked nothing.
+- **Public pages:** none change. The season preview still counts active
+  teams only, and a logged-out visitor or a cached page never sees whether
+  a division is full. No admin email goes out about a new application, so
+  there's none to change.
+- **Code.** `RSL_Capacity` (new). Pure: `places()`, `sit_outs()`,
+  `sit_out_numbers()`, `sit_out_words()` (the one writer of the numbers),
+  `over_words()`, `queue()`, `places_line()`, `full_words()`,
+  `waiting_words()`. The one wrapper is `season()`, with `places_by_division()`,
+  `on_waiting_list()`, `waiting_note()`, `over_notice()` and `allowance()`
+  over it; nothing works out places another way. `RSL_Courts::season_slot_counts()`
+  and the shared `plans_for()` behind `night_plan()`. `RSL_Teams::apply()`
+  returns the application with `waiting_list` (`with_waiting_list()`).
+  `RSL_Placement::capacity()` reads `season()` and passes `allowance` to
+  `propose()` for the reason's words; `confirm()` returns `new_in` (division
+  => new teams made).
+- **Tests** (`test-capacity.php`): `places()` against brute force on 15,000
+  random seasons (nights with 0 slots, allowances 0 to 4, the clamp), the
+  table above, the numbers and their words, the queue (a tie on applied
+  time goes by id), the admin line and the captain's words;
+  `season_slot_counts()` against `slots_for_night()`; applying into a full
+  division (the flash, the card, at registration too), the form's words for
+  one division full and both full, nothing on the season preview or for a
+  logged-out visitor, the admin line and labels, a withdrawal and a decline
+  moving the queue, approving over the cap (the row's words, the button,
+  the notice), *Add a team* and a division change over the cap, an
+  application moved into a full division, placement's capacity and
+  warning, a season with no nights, a season that has started, the
+  override, the allowance setting (saves, clamps at 0 and 10, moves the
+  places). `test-placement.php` checks the free agent's new reason.
+
 ## Fair sit-outs when courts are short (0.18.2)
 
 - **Sitting out goes by a count of nights.** When a division has more
@@ -957,7 +1082,9 @@ finals (see `CLAUDE.md`).
   the deadline it fills short teams first (under 7), tops up teams that
   asked (to 8), then forms new teams of about 8 from the rest — grouped by
   level and game time, friend groups never split, a volunteer captain in
-  each, Unranked-only players never in Ranked, nobody over 10. The admin
+  each, Unranked-only players never in Ranked, nobody over 10. New teams
+  stay within the division's places (since 0.19.0 the places of
+  `RSL_Capacity`; before, 2 × the first night's game slots). The admin
   reviews it on **Social League → Free Agents → Placement**, moves anyone
   (whole groups move together; a stale tab is refused), names new teams,
   and confirms (safe to run twice). Anyone not placed is told why, charged

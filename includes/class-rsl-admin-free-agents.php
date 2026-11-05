@@ -481,7 +481,7 @@ class RSL_Admin_Free_Agents {
 
     /**
      * After a confirm that made new teams (0.19.0): for each division they went into that is now
-     * over its places, " Ranked, 2027 Pre-season now has 31 teams for 30 places: …"
+     * over its places, " Ranked, 2027 Mid-season 2 now has 31 teams for 30 places: …"
      * (RSL_Capacity::over_notice()); else ''.
      */
     private static function over_words($season, $r) {

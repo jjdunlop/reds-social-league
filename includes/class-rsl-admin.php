@@ -249,8 +249,8 @@ class RSL_Admin {
 
     /**
      * A notice's words, plus the sit-out numbers when this active team's division is now over
-     * its places (RSL_Capacity::over_notice(), 0.19.0): "… Ranked, 2027 Pre-season now has 31
-     * teams for 30 places: about 2.1 nights each sat out this season, so some sit out 3."
+     * its places (RSL_Capacity::over_notice(), 0.19.0): "… Ranked, 2027 Mid-season 2 now has 31
+     * teams for 30 places: about 2.3 nights each sat out this season, so some sit out 3."
      */
     private static function with_over($words, $team) {
         if (!$team || !is_object($team) || $team->status !== 'active') {
@@ -347,7 +347,7 @@ class RSL_Admin {
                     <?php endforeach; ?>
                 <?php endforeach; ?>
             </ul>
-            <p class="description">A division's places are the most teams its game slots fit with no team sitting out more than <?php echo intval(RSL_Capacity::allowance()); ?> night<?php echo RSL_Capacity::allowance() === 1 ? '' : 's'; ?> in the season (Free Agents → Rules). Applications past the places left are on the waiting list, oldest first. You can still approve one over the places: the row says how many nights teams would sit out.</p>
+            <p class="description">A division's places are the most teams its game slots fit with no team sitting out more than <?php echo intval(RSL_Capacity::allowance()); ?> night<?php echo RSL_Capacity::allowance() === 1 ? '' : 's'; ?> in the season (set on Free Agents → Settings). Applications past the places left are on the waiting list, oldest first. You can still approve one over the places: the row says how many nights teams would sit out.</p>
             <table class="widefat striped" style="max-width: 1100px;">
                 <thead><tr><th style="width: 52px;"></th><th>Team</th><th>Season</th><th>Division</th><th>Level (their guess)</th><th>Captain</th><th>Applied</th><th>Decision</th></tr></thead>
                 <tbody>
