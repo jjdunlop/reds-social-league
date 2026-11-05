@@ -166,7 +166,7 @@ $check('round 3 with only round 1\'s results in (round 2\'s not entered yet): on
 $check('a round whose only game involves a team outside the division doesn\'t count either',
     RSL_Pairing::link($ids8, array(1 => $within[1], 2 => array(array(1, 99)), 3 => $within[2]), 4, $w)['bonus'] === 2.25);
 
-// --- Sitting out (0.18.2): by nights sat out, then by cost ------------------------------------------
+// --- Sitting out (0.18.2): by the sit-out count, then by cost ---------------------------------------
 // More teams than the night's games can hold: the teams with the fewest nights sat out sit out, and
 // among teams tied on that count the draw's own cost decides (link term included), so the link only
 // breaks ties. Ten teams, two groups (1-6 strong, 7-10 weaker) that have only met inside them in rounds
@@ -284,8 +284,17 @@ $check('can_play_twice(): not with every slot at 19:00, nor with overlapping tim
 // then, so it did not sit out, though it's Ranked now. Night 3 had Unranked games only and 10 had none:
 // a sit-out, judged by its division then. Team 11 (Ranked, no game yet) sat out nights 1, 2 and 4, not
 // 3 (no Ranked games). Team 12 had a double-header on night 1 (one night, not a sit-out) and a week off
-// on night 2. Team 13 joined after night 2. Team 21's first game is on night 3, so night 2 is judged
-// as Unranked: no sit-out. Teams 20, 30 and 31 played every night their division had games.
+// on night 2: away, so it gets night 2's Ranked share (1 of the 3 available sat out). Team 13 joined
+// after night 2: nights 1 and 2's Ranked shares (1 of 4, 1 of 3), then a sit-out on night 4. Team 21
+// joined after night 1, an Unranked night with no sit-outs: nothing. Teams 20, 30 and 31 played every
+// night their division had games.
+$near = function ($got, $want) {
+    if (!is_array($got) || count($got) !== count($want)) { return false; }
+    foreach ($want as $k => $v) {
+        if (!isset($got[$k]) || abs($got[$k] - $v) > 1e-6) { return false; }
+    }
+    return true;
+};
 $sc = RSL_Pairing::sat_out_counts(array(
     array('date' => '2030-01-01', 'off' => array(), 'games' => array(array('unranked', 10, 20), array('ranked', 12, 30), array('ranked', 12, 31))),
     array('date' => '2030-01-08', 'off' => array(12 => true), 'games' => array(array('ranked', 30, 31))),
@@ -295,18 +304,40 @@ $sc = RSL_Pairing::sat_out_counts(array(
     12 => array('division' => 'ranked', 'joined' => ''), 13 => array('division' => 'ranked', 'joined' => '2030-01-10'),
     20 => array('division' => 'unranked', 'joined' => ''), 21 => array('division' => 'unranked', 'joined' => '2030-01-02'),
     30 => array('division' => 'ranked', 'joined' => ''), 31 => array('division' => 'ranked', 'joined' => '')));
-$sc_byes = $sc['byes'];
-ksort($sc_byes);
-$check('sat_out_counts(): a moved team is judged by its division at the time (10: night 3 only); 11 on its division\'s nights; a double-header is one night; a week off and nights before joining don\'t count',
-    $sc_byes === array(10 => 1, 11 => 3, 13 => 1) && $sc['doubles'] === array(12 => 1), wp_json_encode($sc));
+$check('sat_out_counts(): a moved team is judged by its division at the time (10: night 3 only); 11 on its division\'s nights; a double-header is one night; a week off and nights before joining count the night\'s share',
+    $near($sc['byes'], array(10 => 1, 11 => 3, 12 => 1 / 3, 13 => 0.25 + 1 / 3 + 1)) && $sc['sat'] === array(11 => 3, 10 => 1, 13 => 1)
+    && $sc['last'] === array(11 => true, 13 => true) && $sc['doubles'] === array(12 => 1), wp_json_encode($sc));
 
-// The rule against brute force: 400 small random nights (3 to 9 teams, 1 to 5 courts or no limit, 0 to 2
-// nights sat out each, random ratings, meetings, double-header teams and their double-header nights).
-// Every choice of who sits out that keeps the rule is tried with every pairing of the rest: a team out
-// has sat out no more nights than any team that plays. On an odd night with a spare court, when some team
-// could play a fill game, the odd team is either one of those on their fewest nights sat out (it plays
-// its fill game; its rank counts) or a team without one on the division's fewest (it sits out, at
-// odd_sit). The draw keeps the rule and costs no more than the best choice.
+// The credited count: every kind of night away gets that night's share of sit-outs in the team's division
+// (sit-outs ÷ teams available), and a night with no sit-outs gives 0. Ranked 1-6 and 12; 7 a week off on
+// night 1, 8 can't make night 1, 9 left out for owing on night 3 (all three recorded as off), 10 joins
+// after night 2, 11 is away on night 1 and then plays Unranked on night 2 and Ranked on night 3 (a moved
+// team: night 1 is judged by its first game after it, Unranked). Unranked 20-22, 22 away on night 3.
+// Night 1: Ranked 2 of 8 sat out (1/4), Unranked 1 of 3 (1/3). Night 2: nobody sat out anywhere.
+// Night 3: Ranked 3 of 11 sat out (3/11), Unranked none.
+$cc = RSL_Pairing::sat_out_counts(array(
+    array('date' => '2030-02-01', 'off' => array(7 => true, 8 => true, 11 => true),
+        'games' => array(array('ranked', 1, 2), array('ranked', 3, 4), array('ranked', 5, 6), array('unranked', 20, 21))),
+    array('date' => '2030-02-08', 'off' => array(),
+        'games' => array(array('ranked', 1, 3), array('ranked', 2, 4), array('ranked', 5, 9), array('ranked', 6, 12), array('ranked', 7, 8),
+            array('unranked', 11, 22), array('unranked', 20, 21))),
+    array('date' => '2030-02-15', 'off' => array(9 => true, 22 => true),
+        'games' => array(array('ranked', 1, 10), array('ranked', 2, 11), array('ranked', 3, 4), array('ranked', 5, 6), array('unranked', 20, 21))),
+), array_fill_keys(array(1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12), array('division' => 'ranked', 'joined' => ''))
+    + array(10 => array('division' => 'ranked', 'joined' => '2030-02-10'))
+    + array_fill_keys(array(20, 21, 22), array('division' => 'unranked', 'joined' => '')));
+$check('credited count: a week off, a can\'t-make-it and an owing night add the night\'s share (7, 8: 1/4 then a sit-out; 9: a sit-out, then 3/11); a late joiner the shares before it joined (10: 1/4, then 0 for a night with no sit-outs); a moved team its old division\'s share (11: Unranked 1/3, not Ranked 1/4)',
+    $near($cc['byes'], array(7 => 1.25, 8 => 1.25, 9 => 1 + 3 / 11, 10 => 0.25, 11 => 1 / 3, 12 => 2, 22 => 1))
+    && $cc['sat'] === array(9 => 1, 12 => 2, 22 => 1, 7 => 1, 8 => 1) && $cc['last'] === array(7 => true, 8 => true, 12 => true),
+    wp_json_encode($cc));
+$check('...a team available every night has a whole count (the nights it sat out), and one that never sat out none',
+    !isset($cc['byes'][1]) && !isset($cc['byes'][20]) && $cc['byes'][12] === 2.0);
+$check('count_words(): whole counts as they are, fractions to one decimal place',
+    RSL_Pairing::count_words(2.0) === '2' && RSL_Pairing::count_words(0) === '0' && RSL_Pairing::count_words(1.25) === '1.3'
+    && RSL_Pairing::count_words(1 / 7) === '0.1' && RSL_Pairing::count_words(1.96) === '2'
+    && RSL_Pairing::sit_out_words('courts', 1.25, 1.0) === 'Not enough courts (nights sat out before: this team 1.3, the teams playing 1 or more)'
+    && RSL_Pairing::sit_out_words('odd', 0.5, 1.0, true) === 'Bye, odd number of teams (nights sat out before: this team 0.5, the teams playing 1 or more; it has never sat out, so it goes before a team that sat out its last night)');
+
 $subsets = function ($list, $k) use (&$subsets) {
     if ($k === 0) { return array(array()); }
     if (count($list) < $k) { return array(); }
@@ -314,21 +345,99 @@ $subsets = function ($list, $k) use (&$subsets) {
     $with = array_map(function ($s) use ($first) { array_unshift($s, $first); return $s; }, $subsets($list, $k - 1));
     return array_merge($with, $subsets($list, $k));
 };
+
+// The rule on fractional counts: a team sits out only when its count is at most sit_level (0.5) above
+// every team that plays. Six teams on two courts (two sit out): 1 on 0, 2 on 0.3, 3 on 0.6, 4-6 on 1.
+// 1 and 2 may sit out, or 1 and 3 (0.6 is within 0.5 of 2's 0.3); never 2 and 3 (1 would play on 0,
+// more than 0.5 below 3), nor any of 4-6 while 1 plays. With sit_level 0, 1 and 2 only.
+$frac = array(1 => 0, 2 => 0.3, 3 => 0.6, 4 => 1, 5 => 1, 6 => 1);
+$family = function ($rule) use (&$subsets) {
+    $sets = array();
+    foreach ($rule['options'] as $o) {
+        foreach ($subsets(array_keys($o['may']), $rule['k'] - count($o['must'])) as $s) {
+            $s = array_merge($o['must'], $s);
+            sort($s);
+            $sets[implode(',', $s)] = true;
+        }
+    }
+    ksort($sets);
+    return array_keys($sets);
+};
+$check('fractional counts: 1 and 2, or 1 and 3 may sit out (counts within 0.5 are level); with sit_level 0, 1 and 2 only',
+    $family(RSL_Pairing::sit_out(range(1, 6), $frac, 2, array(), array(), $w, 'fr')) === array('1,2', '1,3')
+    && $family(RSL_Pairing::sit_out(range(1, 6), $frac, 2, array(), array(), array('sit_level' => 0.0) + $w, 'fr')) === array('1,2'));
+// Whole counts are never level: with 1 on 0 and 2-6 on 1, 1 always sits out.
+$check('...whole counts are never level with each other: 1 (on 0) always sits out first, whatever sit_level allows',
+    $family(RSL_Pairing::sit_out(range(1, 6), array(1 => 0, 2 => 1, 3 => 1, 4 => 1, 5 => 1, 6 => 1), 2, array(), array(), array('sit_level' => 9) + $w, 'fr'))
+    === array('1,2', '1,3', '1,4', '1,5', '1,6'));
+// And the draw takes the cheaper of them: 2 is far from everyone and 3 is not, so 1 and 2 sit out.
+$rf = $r(array(1 => 1500, 2 => 1950, 3 => 1505, 4 => 1500, 5 => 1495, 6 => 1510));
+$pf = RSL_Pairing::pair_division(range(1, 6), $rf, array(), $frac, $w, 'fr', null, 2);
+$rf2 = $r(array(1 => 1500, 2 => 1505, 3 => 1950, 4 => 1500, 5 => 1495, 6 => 1510));
+$pf2 = RSL_Pairing::pair_division(range(1, 6), $rf2, array(), $frac, $w, 'fr', null, 2);
+$keys = function ($out) { $k = array_keys($out); sort($k); return $k; };
+$check('...and among them the draw\'s cost decides: the far team sits out (2 in one draw, 3 in the other), with 1',
+    $keys($pf['out']) === array(1, 2) && $keys($pf2['out']) === array(1, 3),
+    wp_json_encode(array($pf['out'], $pf2['out'])));
+
+// The guard: a team that sat out its last night doesn't sit out again while a team that has never sat out
+// plays. Seven teams, three courts (one sits out). 7 sat out last night (count 1); 6 has never sat out but
+// was away a lot (credited 0.9, level with 7); 1-5 on 1 as well. 7 is far from everyone, so the cost alone
+// would put it out again; the guard keeps it in and another team on the line sits out.
+$g7 = array(1 => 1, 2 => 1, 3 => 1, 4 => 1, 5 => 1, 6 => 0.9, 7 => 1);
+$sat7 = array(1 => 1, 2 => 1, 3 => 1, 4 => 1, 5 => 1, 7 => 1);
+$r7g = $r(array(1 => 1500, 2 => 1505, 3 => 1495, 4 => 1510, 5 => 1490, 6 => 1500, 7 => 1950));
+$free = RSL_Pairing::pair_division(range(1, 7), $r7g, array(), $g7, $w, 'gd', null, 3);
+$kept = RSL_Pairing::pair_division(range(1, 7), $r7g, array(), $g7, $w, 'gd', null, 3, array(), array(), array('sat' => $sat7, 'last' => array(7 => true)));
+$check('twice in a row: without the guard the far team 7 (sat out last night) would sit out again while 6 (never sat out) plays; with it 7 plays and another team level on the count sits out',
+    array_keys($free['out']) === array(7) && count($kept['out']) === 1 && !isset($kept['out'][7]) && $kept['first'] === array(),
+    wp_json_encode(array($free['out'], $kept['out'])));
+// When the count alone would put 7 out (its 1 is the lowest by more than 0.5) and 6, never sat out, is on
+// 1.6: 6 goes first (first), 7 plays, and the reason says why.
+$g7b = array(1 => 2, 2 => 2, 3 => 2, 4 => 2, 5 => 2, 6 => 1.6, 7 => 1);
+$sat7b = array(1 => 2, 2 => 2, 3 => 2, 4 => 2, 5 => 2, 7 => 1);
+$first = RSL_Pairing::pair_division(range(1, 7), $r7g, array(), $g7b, $w, 'gd', null, 3, array(), array(), array('sat' => $sat7b, 'last' => array(7 => true)));
+$check('...and when the count would put 7 out again, the team that has never sat out goes first instead (6 out, marked first; 7 plays)',
+    array_keys($first['out']) === array(6) && $first['first'] === array(6 => true)
+    && array_keys(RSL_Pairing::pair_division(range(1, 7), $r7g, array(), $g7b, $w, 'gd', null, 3)['out']) === array(7), wp_json_encode($first));
+// An odd night: five teams, room for all, 5 sat out last night, 4 has never sat out (credited 0.8).
+$odd5 = RSL_Pairing::pair_division(range(1, 5), $r(array(1 => 1500, 2 => 1500, 3 => 1500, 4 => 1500, 5 => 1900)), array(), array(1 => 1, 2 => 1, 3 => 1, 4 => 0.8, 5 => 1), $w, 'g5',
+    null, null, array(), array(), array('sat' => array(1 => 1, 2 => 1, 3 => 1, 5 => 1), 'last' => array(5 => true)));
+$check('...on an odd night too: the team that sat out last night is never the bye while one that has never sat out plays', $odd5['bye'] !== 5 && count($odd5['out']) === 1, wp_json_encode($odd5['out']));
+
+// The rule against brute force: 400 small random nights (3 to 9 teams, 1 to 5 courts or no limit, counts
+// whole or with a share of nights away, random ratings, meetings, double-header teams and their
+// double-header nights, and which teams have never sat out or sat out their last night; a quarter with no
+// guard). Every choice of who sits out is tried with every pairing of the rest. A choice keeps the rule
+// when each team out has a count at most sit_level above every team that plays and, with the guard, no
+// team that sat out its last night is out while one that has never sat out plays; when no choice keeps
+// both, the teams that have never sat out are taken as just below the lowest of those that sat out their
+// last night (and marked first). On an odd night with a spare court, when some team could play a fill
+// game, the odd team is one of those within sit_level of the lowest among them (it plays its fill game;
+// its rank counts) or a team without one within sit_level of the division's lowest (it sits out, at
+// odd_sit). Each team out adds its tie-break. The draw keeps the rule and costs exactly the best choice.
+$level = min(0.5, $w['sit_level']);
+$jit = function ($salt, $t) { return (crc32($salt . '|bye|' . $t) % 1000) / 100000; };
+$of = function ($c, $list) { return array_map(function ($x) use ($c) { return $c[$x]; }, $list); };
 mt_srand(2026);
 $bad = array();
+$used_first = 0;
 for ($trial = 0; $trial < 400 && count($bad) < 3; $trial++) {
     $n = mt_rand(3, 9);
     $ids = range(1, $n);
     $room = mt_rand(0, 5) ?: null;
-    $sat = $rt = $mt = $opt = $dbl = array();
+    $cnt = $raw = $last = $rt = $mt = $opt = $dbl = array();
     foreach ($ids as $t) {
-        $sat[$t] = mt_rand(0, 2);
+        $raw[$t] = mt_rand(0, 2);
+        $cnt[$t] = $raw[$t] + (mt_rand(0, 2) === 0 ? mt_rand(1, 20) / 10 : 0); // a share of nights away, now and then a lot
+        if ($raw[$t] > 0 && mt_rand(0, 1) === 0) { $last[$t] = true; }
         $rt[$t] = array('rating' => 1500 + mt_rand(-300, 300), 'sd' => mt_rand(0, 150));
         if (mt_rand(0, 3) === 0) { $opt[] = $t; $dbl[$t] = mt_rand(0, 3); }
         foreach ($ids as $u) { if ($t < $u && mt_rand(0, 4) === 0) { $mt["$t-$u"] = array('count' => mt_rand(1, 2), 'last' => mt_rand(1, 4)); } }
     }
     $salt = "bf$trial";
-    $p = RSL_Pairing::pair_division($ids, $rt, $mt, $sat, $w, $salt, null, $room, $opt, $dbl);
+    $guard = mt_rand(0, 3) === 0 ? array() : array('sat' => $raw, 'last' => $last);
+    $p = RSL_Pairing::pair_division($ids, $rt, $mt, $cnt, $w, $salt, null, $room, $opt, $dbl, $guard);
     $game = function ($a, $b) use ($rt, $mt, $w, $salt) { return RSL_Pairing::pair_cost($a, $b, $rt, $mt, $w, $salt)['cost']; };
     $short = $room !== null && $n > 2 * $room;
     $k = $short ? $n - 2 * $room : $n % 2;
@@ -337,43 +446,155 @@ for ($trial = 0; $trial < 400 && count($bad) < 3; $trial++) {
     if ($odd) {
         foreach ($ids as $t) { $f = RSL_Pairing::fill_for($t, $opt, $rt, $mt, $w, $salt, $dbl); if ($f) { $fills[$t] = $f; } }
     }
-    $low = min($sat);
-    $fill_low = $fills ? min(array_map(function ($t) use ($sat) { return $sat[$t]; }, array_keys($fills))) : null;
-    $extra = function ($t) use ($odd, $opt, $fills, $w) {
-        if (!$odd) { return 0; }
-        return (in_array($t, $opt, true) ? $w['odd_double'] : 0) + (isset($fills[$t]) ? $fills[$t][2] : ($fills ? $w['odd_sit'] : 0));
+    $never = $guard ? array_values(array_filter($ids, function ($t) use ($raw) { return $raw[$t] === 0; })) : array();
+    $lastly = $guard ? array_keys($last) : array();
+    // Whether choice $s (who is out, or the odd team) keeps the rule on counts $c, with or without the guard.
+    $keeps = function ($s, $c, $with_guard) use ($ids, $level, $odd, $fills, $never, $lastly, $of) {
+        $rest = array_values(array_diff($ids, $s));
+        if ($odd && $fills) {
+            $t = $s[0];
+            $low = isset($fills[$t]) ? min($of($c, array_keys($fills))) : min($c);
+            if ($c[$t] > $low + $level + 1e-9) { return false; }
+            return isset($fills[$t]) || !$with_guard || !$never || !in_array($t, $lastly, true);
+        }
+        if ($s && $rest && max($of($c, $s)) > min($of($c, $rest)) + $level + 1e-9) {
+            return false;
+        }
+        return !$with_guard || !$never || !array_intersect($s, $lastly) || !array_diff($never, $s);
     };
-    // The draw's choice, and the rule.
-    $left = $p['bye'] !== null ? array($p['bye']) : array_keys($p['out']); // the teams the matching left out
+    $choices = $subsets($ids, $k);
+    $allowed = array_filter($choices, function ($s) use ($keeps, $cnt) { return $keeps($s, $cnt, true); });
+    $c2 = $cnt;
+    $want_first = array();
+    if (!$allowed) {
+        $floor = min($of($cnt, $lastly)) - $level - 0.01;
+        foreach ($never as $t) { if ($c2[$t] > $floor) { $c2[$t] = $floor; $want_first[$t] = true; } }
+        $allowed = array_filter($choices, function ($s) use ($keeps, $c2) { return $keeps($s, $c2, false); });
+        $used_first++;
+    }
+    $extra = function ($t) use ($odd, $opt, $fills, $w, $jit, $salt) {
+        if (!$odd) { return $jit($salt, $t); }
+        return (in_array($t, $opt, true) ? $w['odd_double'] : 0) + (isset($fills[$t]) ? $fills[$t][2] : ($fills ? $w['odd_sit'] : 0)) + $jit($salt, $t);
+    };
+    $best = INF;
+    foreach ($allowed as $s) {
+        $v = $brute(array_values(array_diff($ids, $s)), $game);
+        foreach ($s as $t) { $v += $extra($t); }
+        $best = min($best, $v);
+    }
+    // The draw's choice.
+    $left = $p['bye'] !== null ? array($p['bye']) : array_keys($p['out']);
     $paired = array();
     $mine = 0.0;
     foreach ($p['pairs'] as $g) { $paired[$g[0]] = $paired[$g[1]] = true; $mine += $g[2]['cost']; }
     foreach ($left as $t) { $mine += $extra($t); }
-    $plays = $paired + ($p['fill'] ? array($p['bye'] => true) : array());
-    $sat_of = function ($list) use ($sat) { return array_map(function ($t) use ($sat) { return $sat[$t]; }, $list); };
+    sort($left);
     $holds = count($p['pairs']) === ($n - $k) / 2 && count($left) === $k && count($paired) + $k === $n && !array_intersect($left, array_keys($paired))
-        && (!$p['out'] || !$plays || max($sat_of(array_keys($p['out']))) <= min($sat_of(array_keys($plays))))
-        && ($odd ? (isset($fills[$p['bye']]) ? $p['out'] === array() && $p['fill'] && $p['fill'][0] === $fills[$p['bye']][0] && $sat[$p['bye']] === $fill_low
-                                             : $p['fill'] === null && $p['out'] === array($p['bye'] => 'odd') && $sat[$p['bye']] === $low)
+        && in_array($left, array_map(function ($s) { sort($s); return $s; }, array_values($allowed)), true)
+        && array_intersect_key($want_first, $p['out']) == $p['first']
+        && ($odd ? (isset($fills[$p['bye']]) ? $p['out'] === array() && $p['fill'] && $p['fill'][0] === $fills[$p['bye']][0]
+                                             : $p['fill'] === null && $p['out'] === array($p['bye'] => 'odd'))
                  : $p['fill'] === null && $p['bye'] === null && (!$p['out'] || array_values(array_unique($p['out'])) === array('courts')));
-    // Every choice that keeps the rule, at its best pairing.
-    $best = INF;
-    foreach ($subsets($ids, $k) as $s) {
-        $rest = array_values(array_diff($ids, $s));
-        if ($odd) {
-            if (isset($fills[$s[0]]) ? $sat[$s[0]] !== $fill_low : $sat[$s[0]] !== $low) { continue; }
-        } elseif ($s && $rest && max($sat_of($s)) > min($sat_of($rest))) {
-            continue;
-        }
-        $v = $brute($rest, $game);
-        foreach ($s as $t) { $v += $extra($t); }
-        $best = min($best, $v);
-    }
-    if (!$holds || $mine > $best + 0.01 * $k + 1e-9 || $mine < $best - 1e-9) {
-        $bad[] = "trial $trial: n $n room " . var_export($room, true) . ($holds ? '' : ' rule broken') . " draw $mine best $best";
+    if (!$holds || abs($mine - $best) > 1e-6 || abs($p['total'] - $mine) > 1e-6) {
+        $bad[] = "trial $trial: n $n room " . var_export($room, true) . ($holds ? '' : ' rule broken') . " draw $mine (total {$p['total']}) best $best";
     }
 }
-$check('the rule against brute force (400 random nights): the draw keeps the rule and is the cheapest choice that does', !$bad, implode('; ', $bad));
+$check("the rule against brute force (400 random nights with fractional counts and the guard; $used_first needed the guard's fallback): the draw keeps the rule and is the cheapest choice that does",
+    !$bad && $used_first > 0, implode('; ', $bad));
+
+// The spread among teams available every night, against brute force: 60 small random seasons (4 to 7
+// teams, 4 or 5 nights, one or two courts or none, weeks off on 20% of nights, a late joiner in half of them).
+// On every night every choice the rule allows is followed (sit_out()'s options on sat_out_counts() of the
+// nights so far, with the guard), so every season the draw could make is walked. Each night the rule's
+// choices are exactly those that keep it (each team out within sit_level of every team that plays, and
+// the guard, or its fallback). At the end of every season the teams available every night are at most
+// one sit-out apart, and no team sat out twice in a row (its nights available) while a team that had
+// never sat out played.
+mt_srand(77);
+$bad = array();
+$walked = 0;
+for ($trial = 0; $trial < 60 && count($bad) < 3; $trial++) {
+    $n = mt_rand(4, 7);
+    $rounds = mt_rand(4, 5);
+    $rooms = $offs = array();
+    for ($i = 1; $i <= $rounds; $i++) {
+        $rooms[$i] = mt_rand(0, 2) ?: null;
+        foreach (range(1, $n) as $t) { if (mt_rand(1, 100) <= 20) { $offs[$i][$t] = true; } }
+    }
+    $join = array_fill_keys(range(1, $n), 1);
+    if (mt_rand(0, 1)) { $join[$n] = mt_rand(2, $rounds); }
+    $info = array();
+    foreach (range(1, $n) as $t) { $info[$t] = array('division' => 'ranked', 'joined' => $join[$t] > 1 ? sprintf('2030-03-%02d', 7 * $join[$t] - 1) : ''); }
+    $every = array_values(array_filter(range(1, $n), function ($t) use ($join, $offs) {
+        if ($join[$t] > 1) { return false; }
+        foreach ($offs as $o) { if (isset($o[$t])) { return false; } }
+        return true;
+    }));
+    $walk = function ($i, $history, $seq) use (&$walk, &$bad, &$walked, $rounds, $rooms, $offs, $join, $info, $every, $n, $w, $subsets, $level, $of) {
+        if (count($bad) >= 3) { return; }
+        if ($i > $rounds) {
+            $walked++;
+            $sat = array_map(function ($t) use ($seq) { return isset($seq[$t]) ? substr_count(implode('', $seq[$t]), 'O') : 0; }, $every);
+            if (count($sat) > 1 && max($sat) - min($sat) > 1) { $bad[] = 'spread ' . wp_json_encode($seq); }
+            return;
+        }
+        $ids = array();
+        foreach (range(1, $n) as $t) { if ($join[$t] <= $i && !isset($offs[$i][$t])) { $ids[] = $t; } }
+        $counts = RSL_Pairing::sat_out_counts($history, $info);
+        $rule = RSL_Pairing::sit_out($ids, $counts['byes'], $rooms[$i], array(), array(), $w, "s$i", array('sat' => $counts['sat'], 'last' => $counts['last']));
+        $ruled = array('' => array());
+        if ($rule['k'] > 0) {
+            $ruled = array();
+            foreach ($rule['options'] as $o) {
+                foreach ($subsets(array_keys($o['may']), $rule['k'] - count($o['must'])) as $s) {
+                    $s = array_merge($o['must'], $s);
+                    sort($s);
+                    $ruled[implode(',', $s)] = $s;
+                }
+            }
+        }
+        // The same choices from the definition, with who has never sat out and who sat out its last night read from the walk itself.
+        $c = array();
+        $never = $lastly = array();
+        foreach ($ids as $t) {
+            $c[$t] = isset($counts['byes'][$t]) ? $counts['byes'][$t] : 0.0;
+            $mine = isset($seq[$t]) ? $seq[$t] : array();
+            if (!in_array('O', $mine, true)) { $never[] = $t; } elseif (end($mine) === 'O') { $lastly[] = $t; }
+        }
+        $keeps = function ($s, $c, $with_guard) use ($ids, $level, $never, $lastly, $of) {
+            $rest = array_values(array_diff($ids, $s));
+            if ($s && $rest && max($of($c, $s)) > min($of($c, $rest)) + $level + 1e-9) {
+                return false;
+            }
+            return !$with_guard || !$never || !array_intersect($s, $lastly) || !array_diff($never, $s);
+        };
+        $defined = array_values(array_filter($subsets($ids, $rule['k']), function ($s) use ($keeps, $c) { return $keeps($s, $c, true); }));
+        if (!$defined) {
+            $floor = min($of($c, $lastly)) - $level - 0.01;
+            foreach ($never as $t) { $c[$t] = min($c[$t], $floor); }
+            $defined = array_values(array_filter($subsets($ids, $rule['k']), function ($s) use ($keeps, $c) { return $keeps($s, $c, false); }));
+        }
+        $want = array_map(function ($s) { sort($s); return implode(',', $s); }, $defined);
+        sort($want);
+        $got = array_map('strval', array_keys($ruled)); // a single team's key is an int
+        sort($got);
+        if ($got !== $want) { $bad[] = "night $i choices " . implode(';', $got) . ' want ' . implode(';', $want); return; }
+        foreach ($ruled as $s) {
+            $play = array_values(array_diff($ids, $s));
+            if (array_intersect($s, $lastly) && array_intersect($play, $never)) { $bad[] = 'twice in a row ' . wp_json_encode($seq); return; }
+            $games = array();
+            for ($x = 0; $x + 1 < count($play); $x += 2) { $games[] = array('ranked', $play[$x], $play[$x + 1]); }
+            $next = $seq;
+            if ($games) { // a night with no games doesn't count
+                foreach ($ids as $t) { $next[$t][] = in_array($t, $s, true) ? 'O' : 'P'; }
+            }
+            $walk($i + 1, array_merge($history, array(array('date' => sprintf('2030-03-%02d', 7 * $i), 'off' => isset($offs[$i]) ? $offs[$i] : array(), 'games' => $games))), $next);
+        }
+    };
+    $walk(1, array(), array());
+}
+$check("the spread against brute force ($walked seasons walked, every choice the rule allows each night): the rule's choices are exactly those that keep it, teams available every night end at most one sit-out apart, and nobody sits out twice in a row while a team that has never sat out plays",
+    !$bad && $walked > 1000, implode('; ', $bad));
 
 // Above EXACT_LIMIT (teams plus sit-out places), the local search keeps the rule and comes close to exact.
 $exact = new ReflectionMethod('RSL_Pairing', 'match_exact');
@@ -401,7 +622,7 @@ for ($trial = 0; $trial < 4; $trial++) {
                 : ($i < $real ? (isset($rule['may'][$play[$i]]) ? $rule['may'][$play[$i]] : RSL_Pairing::NEVER) : RSL_Pairing::NEVER);
         }
     }
-    $e = 0.0;
+    $e = $rule['options'][0]['base']; // the tie-breaks of the teams that must sit out
     foreach ($exact->invoke(null, $cm, $real + $kk, $real) as $pr) { $e += $cm[$pr[0]][$pr[1]]; }
     $worst = max($worst, $p['total'] - $e);
     $ok = $ok && $p['total'] <= $e * 1.05 + 0.05;
@@ -514,19 +735,30 @@ $check('context(): round 3 with only week one\'s results has no link term (one n
     RSL_Pairing::context($nights[2])['link'] === $no_link && RSL_Pairing::context($nights[1])['link'] === $no_link && $ctx_unpub['link'] === $no_link,
     wp_json_encode(RSL_Pairing::context($nights[2])['link']));
 
-// Byes: a team only sat out for the fixtures' sake if it was in the league by then (approved,
-// not just applied) and hadn't said it couldn't make that night. Three teams that weren't in week one.
+// Byes: a team only sat out for the fixtures' sake if it was in the league by then (approved, not
+// just applied) and wasn't away: a week off, left out for owing, or said it couldn't make that night.
+// A night away counts its share of sit-outs instead (0.18.2). Five teams that weren't in week one.
 $extra = array();
-foreach (array('Bye', 'Late', 'Cant') as $tag) {
+foreach (array('Bye', 'Late', 'Cant', 'Off', 'Owes') as $tag) {
     $extra[$tag] = RSL_Teams::create($season, array('name' => "Pair $tag $suffix", 'division' => 'ranked', 'level' => 'solid'));
     $wpdb->update(RSL_Database::table('teams'), array('created_at' => date('Y-m-d H:i:s', strtotime($nights[0]->night_date . ' -3 days'))), array('id' => $extra[$tag]->id));
 }
 $wpdb->update(RSL_Database::table('teams'), array('decided_at' => date('Y-m-d 10:00:00', strtotime($nights[0]->night_date . ' +1 day'))), array('id' => $extra['Late']->id));
-$wpdb->insert(RSL_Database::table('requests'), array('team_id' => $extra['Cant']->id, 'night_id' => $nights[0]->id, 'type' => 'cant_make', 'status' => 'handled',
-    'requested_by' => 0, 'requested_at' => current_time('mysql')));
+foreach (array('Cant' => array('cant_make', 'handled'), 'Off' => array('off', 'active'), 'Owes' => array('unpaid', 'handled')) as $tag => $req) {
+    $wpdb->insert(RSL_Database::table('requests'), array('team_id' => $extra[$tag]->id, 'night_id' => $nights[0]->id, 'type' => $req[0], 'status' => $req[1],
+        'requested_by' => 0, 'requested_at' => current_time('mysql')));
+}
 $ctx = RSL_Pairing::context($nights[1]);
-$check('a team in the league but left out of a night has sat out once', isset($ctx['byes'][intval($extra['Bye']->id)]) && $ctx['byes'][intval($extra['Bye']->id)] === 1);
-$check('...but not one approved after that night, or one that said it couldn\'t make it', !isset($ctx['byes'][intval($extra['Late']->id)]) && !isset($ctx['byes'][intval($extra['Cant']->id)]));
+$bye_id = intval($extra['Bye']->id);
+$check('a team in the league but left out of a night has sat out once (and sat out its last night)', isset($ctx['byes'][$bye_id]) && abs($ctx['byes'][$bye_id] - 1) < 1e-9
+    && $ctx['sat'][$bye_id] === 1 && !empty($ctx['last'][$bye_id]), wp_json_encode($ctx['byes']));
+$away_ok = true;
+foreach (array('Late', 'Cant', 'Off', 'Owes') as $tag) {
+    $id = intval($extra[$tag]->id);
+    $away_ok = $away_ok && isset($ctx['byes'][$id]) && abs($ctx['byes'][$id] - 1 / 7) < 1e-6 && !isset($ctx['sat'][$id]) && empty($ctx['last'][$id]);
+}
+$check('...one away that night (approved after it, can\'t make it, a week off, left out for owing) gets the night\'s share instead: 1/7, as one of the seven Ranked teams available sat out',
+    $away_ok, wp_json_encode($ctx['byes']));
 // A game in any division counts (0.18.2). A team moved from Unranked to Ranked after week one played
 // that night: before, Ranked was judged first and on its own games only, so the move counted week one
 // as a sit-out. And a double-header night is one night played, not a sit-out.
@@ -565,7 +797,7 @@ $cx = count($pn) === 5 ? RSL_Pairing::context($pn[4]) : array('byes' => null, 'm
 $cx_byes = (array) $cx['byes'];
 ksort($cx_byes);
 $check('context(): a called-off night\'s draft (never published, now past) adds no sit-outs and no meeting; a draft for a night to come counts (2 and 4 sat out, 1 met 3)',
-    $called && !is_wp_error($called) && $ahead && !is_wp_error($ahead) && $cx_byes === array($pt[2] => 1, $pt[4] => 1)
+    $called && !is_wp_error($called) && $ahead && !is_wp_error($ahead) && $cx_byes === array($pt[2] => 1.0, $pt[4] => 1.0)
     && !isset($cx['meetings'][RSL_Pairing::meeting_key($pt[1], $pt[2])]) && isset($cx['meetings'][RSL_Pairing::meeting_key($pt[1], $pt[3])]),
     wp_json_encode(array(count($pn), $cx['byes'], $cx['meetings'])));
 if (count($pn) === 5) {
@@ -575,7 +807,7 @@ if (count($pn) === 5) {
 $cx_byes = (array) $cx['byes'];
 ksort($cx_byes);
 $check('...published, the same past night counts: 3 and 4 sat out it too, and 1 met 2',
-    $cx_byes === array($pt[2] => 1, $pt[3] => 1, $pt[4] => 2) && isset($cx['meetings'][RSL_Pairing::meeting_key($pt[1], $pt[2])]), wp_json_encode($cx['byes']));
+    $cx_byes === array($pt[2] => 1.0, $pt[3] => 1.0, $pt[4] => 2.0) && isset($cx['meetings'][RSL_Pairing::meeting_key($pt[1], $pt[2])]), wp_json_encode($cx['byes']));
 // plan() with too few courts (0.18.2): five more Unranked teams for three Unranked slots. The five new
 // teams were in the league for week one with no game (one night sat out each); the three that played
 // week one are on none (the double-header team owes for its two games, so it's out for that), so the
@@ -758,7 +990,7 @@ $note = get_transient(RSL_Admin::NOTICE_PREFIX . $admin);
 $msg = is_array($note) && isset($note['message']) ? $note['message'] : '';
 delete_transient(RSL_Admin::NOTICE_PREFIX . $admin);
 $check('admin: the Make fixtures automatically notice lists who isn\'t playing, with a court sit-out\'s counts',
-    strpos($msg, 'Not playing: ') !== false && preg_match('/Pair U[^:;]* ' . $suffix . ': Not enough courts \(nights sat out before: this team \d+, the teams playing \d+ or more\)/', $msg) === 1, $msg);
+    strpos($msg, 'Not playing: ') !== false && preg_match('/Pair U[^:;]* ' . $suffix . ': Not enough courts \(nights sat out before: this team \d+(\.\d)?, the teams playing \d+(\.\d)? or more\)/', $msg) === 1, $msg);
 
 } catch (Throwable $thrown) {
     $fails++;
