@@ -6,7 +6,8 @@
  * Pure (no database): places_detail() against brute force on 3,000 random
  * per-night slot lists at allowances 0 to 4 (nights with 0 slots included, the
  * ceiling of 50 or twice the fewest slots, clamped), the 2027 table,
- * sit_out_numbers() / sit_out_words() / over_words() / over_line(), the
+ * sit_out_numbers() / sit_out_words() / over_words() / over_line() /
+ * limit_words(), the
  * waiting-list queue (ties on applied_at go by id), bumped() /
  * would_bump() / bumped_words(), places_line(), full_words() (a division with
  * no game slots too), waiting_words() (with and without the season).
@@ -157,6 +158,9 @@ $w = RSL_Capacity::sit_out_words(3, array(2, 1, 1), false);
 $check('words: a fraction under 1', $w === 'about 0.7 nights each sat out this season, so some sit out 1', $w);
 $w = RSL_Capacity::sit_out_words(20, array(12, 12), false);
 $check('words: no sit-outs at all', $w === 'there are game slots for every team on every night this season', $w);
+$check('limit_words(): 2 nights, 1 night, and plain sitting out at 0', RSL_Capacity::limit_words(2) === 'sitting out more than 2 nights a season'
+    && RSL_Capacity::limit_words(1) === 'sitting out more than 1 night a season' && RSL_Capacity::limit_words(0) === 'sitting out',
+    RSL_Capacity::limit_words(0));
 $info = array('label' => 'Ranked', 'places' => 30, 'slots_left' => array_fill(0, 10, 12), 'started' => false, 'checked' => true);
 $w = RSL_Capacity::over_words($info, 31);
 $check('over_words(): teams for places, then the numbers', $w === '31 teams for 30 places: about 2.3 nights each sat out this season, so some sit out 3', $w);
@@ -434,7 +438,8 @@ $check('admin: the places line for the season and division with applications', s
 $rows = $app_rows($html);
 $check('admin: applications on the waiting list are labelled (3), and nobody is over the cap yet', substr_count($rows, 'On the waiting list') === 3
     && substr_count($rows, '<tr') === 4 && strpos($rows, 'Approve over the cap') === false && strpos($rows, 'Approving makes') === false, $rows);
-$check('admin: the words under the places lines name the allowance (0 here), with nothing set by hand', strpos($html, esc_html('no team sitting out more than 0 nights in the season')) !== false
+$check('admin: the words under the places lines name the allowance (0 here: no team sitting out), with nothing set by hand', strpos($html, esc_html('fit with no team sitting out (set on')) !== false
+    && strpos($html, 'more than 0 nights') === false
     && strpos($html, 'set by hand takes its places') === false);
 
 // --- Withdrawing and declining move the queue -----------------------------------------------------------------
@@ -501,7 +506,7 @@ $check('a logged-out visitor sees no division words', strpos($v, 'is full for') 
 
 // --- Placement --------------------------------------------------------------------------------------------------
 $warn = implode(' | ', RSL_Placement::blockers($A)['warnings']);
-$check('placement\'s warning uses the places and names the allowance', strpos($warn, 'Ranked would have 5 teams for 2 places: about 1.4 nights each sat out this season, so some sit out 2. 2 is the most it takes with no team sitting out more than 0 nights a season.') !== false
+$check('placement\'s warning uses the places and names the allowance', strpos($warn, 'Ranked would have 5 teams for 2 places: about 1.4 nights each sat out this season, so some sit out 2. 2 is the most it takes with no team sitting out.') !== false
     && strpos($warn, 'first night has game slots') === false, $warn);
 
 // --- A season with no nights, and one that has started --------------------------------------------------------------
@@ -658,7 +663,7 @@ $check('Add a team taking the place an application was in line for: the notice s
     && RSL_Capacity::on_waiting_list(RSL_Teams::get($appq->id)), $n['message']);
 $warn = RSL_Placement::blockers($D)['warnings'];
 $check('...now placement\'s new Ranked team goes over: the numbers and the allowance, and no Ranked bump (nobody ordinary left there)',
-    (bool) preg_grep('/^Ranked would have 3 teams for 2 places: about 1 night each sat out (this season|in the \d+ nights? left)\. 2 is the most it takes with no team sitting out more than 0 nights a season\.$/', $warn)
+    (bool) preg_grep('/^Ranked would have 3 teams for 2 places: about 1 night each sat out (this season|in the \d+ nights? left)\. 2 is the most it takes with no team sitting out\.$/', $warn)
     && in_array($bump_u, $warn, true) && !in_array($bump_r, $warn, true), implode(' | ', $warn));
 $ver = intval(RSL_Free_Agents::building($D)['draft_version']);
 $named = RSL_Placement::update_new($D, 'U1', array('name' => "DU New $suffix"), $ver);

@@ -197,6 +197,15 @@ class RSL_Capacity {
     }
 
     /**
+     * The allowance in words, after "with no team" or "without teams":
+     * "sitting out more than 2 nights a season", or "sitting out" at 0.
+     */
+    public static function limit_words($allowance) {
+        $n = intval($allowance);
+        return $n > 0 ? 'sitting out more than ' . $n . ' night' . ($n === 1 ? '' : 's') . ' a season' : 'sitting out';
+    }
+
+    /**
      * The applications in one season and division, oldest first by applied_at
      * then id (as RSL_Teams::pending_applications() lists them): the first
      * places − active are ordinary, the rest are on the waiting list. $pending:
@@ -494,15 +503,4 @@ class RSL_Capacity {
         return in_array(intval($team->id), $info['waiting'], true) ? self::waiting_words($info, $with_season) : '';
     }
 
-    /**
-     * After an admin made a team active in a division or moved one into it:
-     * over_line() for that division read now ('' while it's within its places
-     * or not checked).
-     */
-    public static function over_notice($season, $division) {
-        if (!isset(RSL_Teams::DIVISIONS[$division])) {
-            return '';
-        }
-        return self::over_line(self::season($season)['divisions'][$division]);
-    }
 }

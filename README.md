@@ -142,11 +142,13 @@ finals (see `CLAUDE.md`).
 - **Code.** `RSL_Capacity` (new). Pure: `places()`, `places_detail()`
   (with `clamped`), `ceiling()`, `sit_outs()`, `sit_out_numbers()`,
   `sit_out_words()` (the one writer of the numbers), `over_words()`,
-  `over_line()`, `queue()`, `bumped()`, `bumped_words()`, `would_bump()`,
-  `places_line()`, `full_words()`, `waiting_words()`. The one wrapper is
+  `over_line()`, `limit_words()` (the allowance in words: "sitting out
+  more than 2 nights a season", or "sitting out" at 0), `queue()`,
+  `bumped()`, `bumped_words()`, `would_bump()`, `places_line()`,
+  `full_words()`, `waiting_words()`. The one wrapper is
   `season()` (`seasons()` for several at once, as the Start a team form
-  and the Teams screen need), with `on_waiting_list()`, `waiting_note()`,
-  `over_notice()` and `allowance()` over it; nothing works out places
+  and the Teams screen need), with `on_waiting_list()`, `waiting_note()`
+  and `allowance()` over it; nothing works out places
   another way. `RSL_Courts::season_slot_counts()` and
   `seasons_slot_counts()` (the venues and courts read once for several
   seasons) share `plans_for()` with `night_plan()`. `RSL_Teams::apply()`

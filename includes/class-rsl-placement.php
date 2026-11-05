@@ -1255,7 +1255,7 @@ class RSL_Placement {
             // The division's places are taken (RSL_Capacity, 0.19.0). Players may see this reason.
             $allow = $s['allowance'][$home];
             return array($players . ' — no place for another ' . $label . ' team'
-                . ($allow !== null ? ' without teams sitting out more than ' . $allow . ' night' . ($allow === 1 ? '' : 's') . ' a season' : '')
+                . ($allow !== null ? ' without teams ' . RSL_Capacity::limit_words($allow) : '')
                 . '; ' . $label . ' teams full', array('capacity'));
         }
         if ($n < $s['min_roster']) {
@@ -2570,7 +2570,7 @@ class RSL_Placement {
                 } elseif (!empty($info['clamped'])) {
                     $why = ' ' . $cap . ' is the most places a division takes.';
                 } elseif (empty($info['no_slots'])) {
-                    $why = ' ' . $cap . ' is the most it takes with no team sitting out more than ' . $allow . ' night' . ($allow === 1 ? '' : 's') . ' a season.';
+                    $why = ' ' . $cap . ' is the most it takes with no team ' . RSL_Capacity::limit_words($allow) . '.';
                 }
                 $add('warning', '', $divs[$div] . ' would have ' . RSL_Capacity::over_words($info, $count) . '.' . $why);
             }

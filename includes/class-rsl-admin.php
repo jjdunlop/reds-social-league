@@ -380,7 +380,7 @@ class RSL_Admin {
             $allowance = RSL_Capacity::allowance();
             $about = '';
             if ($worked) {
-                $about .= 'A division\'s places are the most teams its game slots fit with no team sitting out more than ' . $allowance . ' night' . ($allowance === 1 ? '' : 's') . ' in the season (set on Free Agents → Settings). ';
+                $about .= 'A division\'s places are the most teams its game slots fit with no team ' . RSL_Capacity::limit_words($allowance) . ' (set on Free Agents → Settings). ';
             }
             if ($by_hand) {
                 $about .= $worked ? 'A line marked set by hand takes its places from Most teams per division instead. ' : 'Places marked set by hand come from Most teams per division (Free Agents → Settings). ';
