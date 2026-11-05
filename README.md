@@ -163,7 +163,8 @@ finals (see `CLAUDE.md`).
   spare-slot double-headers; each season played under four rules from the
   same teams, slots, weeks off and joiners: before 0.18.2, nights sat out
   only (the first 0.18.2 build), the live count, and the live count
-  compared exactly (`level=0` would set another); spread = most minus
+  compared exactly (`level=0.25` puts a quarter night there instead, as
+  in the 0.25 numbers above); spread = most minus
   fewest nights sat out among the teams available every night; most by
   one team = the season's highest; closeness = the closeness cost of the
   games played by the draw's rating, 0 for 50/50, 1 for 67/33, for every
