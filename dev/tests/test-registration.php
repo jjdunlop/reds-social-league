@@ -313,7 +313,7 @@ $invite_msg = RSL_Portal::invite_message($invite_team);
 $check('invite message: team, season, link last', $invite_msg === 'Hey, join my Reds Social League team, ' . $invite_team->name . ', for the ' . RSL_Seasons::short_label($invite_team->season) . '! Sign up and join here: ' . RSL_Portal::invite_url($invite_team), $invite_msg);
 $check('captain tools: the message box and Copy message', strpos($cap_view, esc_textarea($invite_msg) . '</textarea>') !== false && strpos($cap_view, '>Copy message</button>') !== false);
 $p3_view = RSL_Portal::team_tools(RSL_Teams::get($team->id), $p3);
-$check('...and a visitor or someone not on the team sees none of it', RSL_Portal::team_tools(RSL_Teams::get($team->id), 0) === '' && RSL_Portal::team_tools(RSL_Teams::get($team->id), $new) === '');
+$check('...and a visitor or someone not on the team sees none of it', RSL_Portal::team_tools(RSL_Teams::get($team->id), 0) === '' && !RSL_Teams::is_member($team->id, $out) && RSL_Portal::team_tools(RSL_Teams::get($team->id), $out) === '');
 $check('a player (not captain) sees teammates but no statuses or tools', strpos($p3_view, "RSLR p1 $suffix") !== false && strpos($p3_view, 'Needs rego</span>') === false && strpos($p3_view, 'value="invite"') === false);
 wp_set_current_user($p3);
 RSL_Portal::process(array('rsl_nonce' => wp_create_nonce('rsl_front'), 'do' => 'remove_member', 'team_id' => $team->id, 'user_id' => $p1));
