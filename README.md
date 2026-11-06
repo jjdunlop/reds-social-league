@@ -6,6 +6,85 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## Team avatars (0.23.0)
+
+Club decision, 7 Nov 2026: a team's badge is a robot instead of its
+initials. Every team gets a DiceBear Voxel Bot drawn from a random seed, and
+captains no longer pick a team colour.
+
+- **The seed.** `teams.avatar_seed` (schema 13) is 16 random hex characters
+  (`RSL_Avatars::new_seed()`), never the team's name, so DiceBear never sees
+  a name and a team that renames keeps its robot all season.
+  `RSL_Teams::create()` gives every new team one (captain applications, Add a
+  team on the Teams screen, placement's new teams) and puts the team on the
+  avatar queue. The upgrade gives every existing team a seed and queues the
+  active ones and those waiting for approval. A team entered again for the
+  next season (`roll_over()`) keeps the old team's seed, and the old team's
+  two files are copied to the new team, so the robot carries over with no
+  fetch.
+- **The images live on this site.** For each seed the server fetches two
+  SVGs from DiceBear's hosted API, once: an animated one and a still one
+  (`api.dicebear.com/10.x/voxel-bot`, mirrored left to right, corners rounded
+  by 20%, one of 8 soft backgrounds DiceBear picks by seed). They're saved
+  as `uploads/rsl-team-avatars/team-<id>-<hash>.svg` and `...-still.svg`, the
+  hash being 12 hex characters of the seed's MD5, so a new seed is a new
+  address and no browser shows an old image. Visitors load them from our
+  site and their browsers never contact DiceBear. 10.x ignores the `radius`
+  setting (the corners came back square), so the address uses
+  `borderRadius=20`.
+- **Checked before saving.** A fetch must answer 200 with `image/svg+xml`
+  within 8 seconds, and the SVG must start with `<svg`, end with `</svg>` and
+  be at most 64 KB. Anything else is refused whole and nothing is saved:
+  scripts and foreignObject (with or without a namespace prefix), anything in
+  the XHTML namespace, a DOCTYPE or ENTITY, numeric character references,
+  `on...` attributes, `javascript:`, an `href`, `xlink:href` or CSS `url()`
+  pointing anywhere but a `#fragment` in the same file, `@import`,
+  `image-set()`, and an animation that sets an href (`RSL_Avatars::clean()`).
+  DiceBear's real output (about 7 KB, with `<use href="#...">`,
+  `url(#clip-...)` and a keyframes `<style>`) passes.
+- **Never fetched while a page is drawn.** A ladder of 30 teams would
+  otherwise make 60 requests in one view. When a badge's files aren't there
+  yet the page draws the initials badge, as before, and puts the team on the
+  queue (`rsl_avatar_queue`). One WP-cron event (`rsl_avatar_fetch`) works
+  through up to 10 teams a run and comes back 30 seconds later while any
+  remain (WP-cron runs on site visits). A failed fetch stops the run; that
+  team waits 10 minutes, then 20, then 40, and never more than a day.
+- **The badge.** `RSL_Public::badge()` keeps its signature. With the files
+  there it draws a `<picture>`: the still robot for anyone whose browser or
+  phone asks for less motion, the animated one for everyone else, `alt=""`
+  and `aria-hidden` (the team name is always beside it), lazy loading, and
+  the same sizes as the initials (44 px normally, 72 on the team page, 28 in
+  fixtures and the ladder), corners rounded before the image loads too. The
+  fixtures and the ladder now pass each team's id and seed, so they show the
+  robots. Objects that are only a name and a colour (the free agent requests
+  list builds those) still get the initials.
+- **New avatar.** The captain, or a league admin, has a New avatar button
+  under the team's name on its team page; league admins also have one on the
+  Teams screen's team edit. It makes a new seed and fetches both images
+  before saving the seed, then says "New avatar saved. Not keen? Try again."
+  A failed fetch keeps the old robot: "A new avatar couldn't be fetched just
+  now, so the old one stays. Try again in a few minutes." Each team gets 20
+  tries a day, counting failed ones: "You've tried 20 avatars today; try
+  again tomorrow." Anyone else gets "Only the captain can change the team's
+  avatar." The replaced files stay two days, for pages a cache still serves,
+  and older ones go.
+- **No colour for captains.** The team application (Start a team at
+  registration, and the application card) has no Team colour field, and a
+  colour posted from a page opened before the update is ignored. A team made
+  without one gets navy, which the initials use until the robot arrives. The
+  column and the Teams screen's colour fields stay. The ref scoreboard still
+  colours each side with its team's colour, so two new teams both show navy
+  there.
+- **Account merges.** The seed isn't an account id, so `RSL_Merge` lists
+  nothing new.
+
+Team avatars: Voxel Bot by DiceBear, CC0.
+
+Tests: `dev/tests/test-avatars.php`. It never calls DiceBear: a
+`pre_http_request` filter answers and counts every request.
+`dev/lib-mail-stop.php` now also puts the avatar job off a day while a test
+holds the mail, so no other request fetches images for a test's teams.
+
 ## A Social League admin role (0.22.0)
 
 Until now every Social League screen and every league admin power on the
