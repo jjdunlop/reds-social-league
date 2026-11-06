@@ -583,8 +583,8 @@ class RSL_Portal {
                 self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : 'Player removed from the team.');
                 return $back_to;
             case 'new_avatar':
-                // Another random avatar (0.23.0), from the button by the team page's header; refusals keep the old one.
-                $result = RSL_Avatars::regenerate($team->id, $user_id);
+                // Use this one (0.23.0): the robot chosen under New avatar by the team page's header; refusals keep the old one.
+                $result = RSL_Avatars::regenerate($team->id, $user_id, RSL_Avatars::posted_seed($post));
                 self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : RSL_Avatars::SAVED_WORDS);
                 return $back_to;
             case 'new_code':
@@ -687,10 +687,11 @@ class RSL_Portal {
     /**
      * The team application's fields (0.17.0), one markup for the registration form's Start a team
      * panel and the #rsl-apply card: which season (season_field(), team_season), team name,
-     * division, roughly what level. No colour since 0.23.0: every team gets a random avatar
-     * (RSL_Avatars), and a team's colour (navy unless an admin sets one) is behind its initials
-     * only until the avatar is there. $v: values to show again (an apply draft: name, division,
-     * level, season). $required: the card's browser checks; never in the
+     * division, roughly what level, and the robot (0.23.0: RSL_Avatars::chooser(), Your team's
+     * robot, its avatar_seed field; the application's team gets that seed). No colour since
+     * 0.23.0: a team's colour (navy unless an admin sets one) is behind its initials only until
+     * the avatar is there. $v: values to show again (an apply draft: name, division, level,
+     * season, seed: the robot shown first). $required: the card's browser checks; never in the
      * registration panel, which CSS hides while another route is chosen (a hidden required field
      * would block the form). The server checks either way (RSL_Teams::apply(), pick_open()).
      * Under the division, a line for each season offered where a division is full (0.19.0,
@@ -698,7 +699,7 @@ class RSL_Portal {
      * logged-in players reach this form, so a page cache never shows it to anyone else.
      */
     public static function team_fields($v, $choices, $required) {
-        $v = array_merge(array('name' => '', 'division' => 'ranked', 'level' => '', 'season' => ''), is_array($v) ? $v : array());
+        $v = array_merge(array('name' => '', 'division' => 'ranked', 'level' => '', 'season' => '', 'seed' => ''), is_array($v) ? $v : array());
         $req = $required ? ' required' : '';
         $full = array();
         foreach (RSL_Capacity::seasons(array_keys(is_array($choices) ? $choices : array())) as $info) {
@@ -724,6 +725,7 @@ class RSL_Portal {
             </select>
         </label>
         <p class="rsl-hint">Just a starting guess so your first games are even — it isn't shown anywhere, and your results take over after a couple of weeks.</p>
+        <?php echo RSL_Avatars::chooser(array('title' => "Your team's robot", 'hint' => RSL_Avatars::START_WORDS, 'first' => (string) $v['seed'])); ?>
         <p class="rsl-hint">You'll be the captain. Once the league approves it you'll get an invite link for your players.</p>
         <?php
         return ob_get_clean();
@@ -736,7 +738,9 @@ class RSL_Portal {
 
     /**
      * The team fields from a form, cleaned (RSL_Teams::apply() and pick_open() check them). A
-     * colour posted (a page opened before 0.23.0) is ignored: the team gets the default.
+     * colour posted (a page opened before 0.23.0) is ignored: the team gets the default. The
+     * chosen robot's seed (avatar_seed) as sent: RSL_Teams::create() keeps it only when it's a
+     * valid seed, else the team gets a random one.
      * $legacy (do=apply only): the card's names before 0.17.0 too, for a page opened before the
      * update. Never at registration, whose form posts the player's own level as `level`.
      */
@@ -754,6 +758,7 @@ class RSL_Portal {
             'division' => isset(RSL_Teams::DIVISIONS[$division]) ? $division : 'ranked',
             'level' => sanitize_key($get('team_level', 'level')),
             'season' => sanitize_key($get('team_season', '')),
+            'seed' => RSL_Avatars::posted_seed($post),
         );
     }
 
@@ -785,6 +790,7 @@ class RSL_Portal {
             'name' => $v['name'],
             'division' => $v['division'],
             'level' => $v['level'],
+            'avatar_seed' => $v['seed'],
         ));
         if (!is_wp_error($team) && !is_object($team)) {
             $team = new WP_Error('rsl_save', 'That team couldn\'t be saved — please try again.');
@@ -1504,17 +1510,25 @@ class RSL_Portal {
     }
 
     /**
-     * New avatar (0.23.0): a small form by the team page's header for the team's captain or a
-     * league admin (RSL_Access::can()); '' for anyone else. It posts here (do=new_avatar) and
-     * comes back to the team page; RSL_Avatars::regenerate() checks again and says why it won't.
+     * New avatar (0.23.0): by the team page's header for the team's captain or a league admin
+     * (RSL_Access::can()); '' for anyone else. A closed details (New avatar) holding the robot
+     * chooser (RSL_Avatars::chooser(): Your team's robot for the captain, The team's robot for a
+     * league admin) and Use this one, which posts the chosen seed here (do=new_avatar) and comes
+     * back to the team page; RSL_Avatars::regenerate() checks again and says why it won't.
      */
     public static function avatar_button($team, $user_id) {
         $user_id = intval($user_id);
-        if (!$user_id || !is_object($team) || empty($team->id) || !(RSL_Teams::is_captain($team->id, $user_id) || RSL_Access::can($user_id))) {
+        if (!$user_id || !is_object($team) || empty($team->id)) {
             return '';
         }
-        return '<form method="post" class="rsl-avatar-new">' . self::fields('new_avatar', array('team_id' => $team->id, 'back' => RSL_Public::team_url($team)))
-            . '<button type="submit">New avatar</button></form>';
+        $captain = RSL_Teams::is_captain($team->id, $user_id);
+        if (!$captain && !RSL_Access::can($user_id)) {
+            return '';
+        }
+        return '<details class="rsl-avatar-new"><summary>New avatar</summary><form method="post">'
+            . self::fields('new_avatar', array('team_id' => $team->id, 'back' => RSL_Public::team_url($team)))
+            . RSL_Avatars::chooser(array('title' => $captain ? "Your team's robot" : "The team's robot", 'hint' => RSL_Avatars::KEEPS_LEVEL_WORDS))
+            . '<button type="submit" class="rsl-avatar-use">Use this one</button></form></details>';
     }
 
     /**

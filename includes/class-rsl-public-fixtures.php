@@ -224,8 +224,9 @@ class RSL_Public_Fixtures {
     }
 
     /**
-     * One side of a game as a team for its link and badge: id, name, slug, colour and avatar seed
-     * (0.23.0: so the badge is the team's avatar) from the game's row. $side: 'home' or 'away'.
+     * One side of a game as a team for its link and badge: id, name, slug, colour, avatar seed and
+     * avatar stage (0.23.0: so the badge is the team's avatar at its stored stage) from the game's
+     * row. $side: 'home' or 'away'.
      */
     private static function side_team($g, $side) {
         $p = $side === 'home' ? 'home' : 'away';
@@ -235,6 +236,7 @@ class RSL_Public_Fixtures {
             'slug' => $g->{$p . '_slug'},
             'colour' => $g->{$p . '_colour'},
             'avatar_seed' => isset($g->{$p . '_avatar_seed'}) ? (string) $g->{$p . '_avatar_seed'} : '',
+            'avatar_stage' => isset($g->{$p . '_avatar_stage'}) ? intval($g->{$p . '_avatar_stage'}) : 1,
         );
     }
 

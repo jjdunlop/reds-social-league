@@ -156,7 +156,7 @@ class RSL_Public {
             <div>
                 <h2 class="rsl-title"><?php echo esc_html($team->name); ?></h2>
                 <p class="rsl-meta"><?php echo esc_html(RSL_Teams::DIVISIONS[$team->division]); ?> &middot; <?php echo esc_html(RSL_Seasons::label($season)); ?> &middot; <?php echo count($members); ?> player<?php echo count($members) === 1 ? '' : 's'; ?></p>
-                <?php // 0.23.0: New avatar, for the captain and league admins only. ?>
+                <?php // 0.23.0: New avatar (the robot chooser and Use this one), for the captain and league admins only. ?>
                 <?php echo RSL_Portal::avatar_button($team, $user_id); ?>
             </div>
         </div>
@@ -449,8 +449,10 @@ JS;
             .rsl-badge-large { width: 72px; height: 72px; font-size: 26px; }
             ' . RSL_Avatars::css() . '
             .rsl-avatar-new { margin: 6px 0 0; }
-            .rsl .rsl-avatar-new button { padding: 3px 10px; border: 1px solid var(--rsl-navy); border-radius: 4px; background: #fff; color: var(--rsl-navy); font-size: 13px; font-weight: 600; line-height: 1.5; text-transform: none; cursor: pointer; }
-            .rsl .rsl-avatar-new button:hover { background: #eef2f8; }
+            .rsl .rsl-avatar-new > summary { display: inline-block; padding: 3px 10px; border: 1px solid var(--rsl-navy); border-radius: 4px; background: #fff; color: var(--rsl-navy); font-size: 13px; font-weight: 600; line-height: 1.5; list-style: none; cursor: pointer; }
+            .rsl .rsl-avatar-new > summary::-webkit-details-marker { display: none; }
+            .rsl .rsl-avatar-new > summary:hover { background: #eef2f8; }
+            .rsl .rsl-avatar-new button.rsl-avatar-use { padding: 6px 14px; border: 1px solid var(--rsl-navy); border-radius: 4px; background: var(--rsl-navy); color: #fff; font-size: 14px; font-weight: 600; line-height: 1.5; text-transform: none; cursor: pointer; }
             .rsl-team-head { display: flex; align-items: center; gap: 16px; }
             .rsl-team-head .rsl-title { margin: 0; }
             .rsl-meta { margin: 4px 0 0; }

@@ -30,7 +30,8 @@
  *
  * The team avatar job (0.23.0, RSL_Avatars::CRON_HOOK) is put off a day too, so another request
  * never fetches images from DiceBear for a test's teams (every new team is queued); release takes
- * the teams that are gone off its queue and puts the job back while any remain.
+ * the teams that are gone off its queue and puts the job back while any remain or a season is
+ * flagged for a stage check (a test that records a result or publishes a night flags its season).
  */
 
 if (!defined('ABSPATH')) {

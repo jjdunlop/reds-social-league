@@ -115,6 +115,9 @@ class RSL_Fixtures {
                 self::drop_idle_supervisors($game->night_id);
             }
             RSL_Payments::sync_night($game->night_id); // its fees come off
+            if ($deleted) {
+                self::results_changed($game->season);
+            }
         }
         return $deleted;
     }
@@ -162,8 +165,10 @@ class RSL_Fixtures {
     }
 
     private static function select_sql() {
-        // The teams' avatar seeds (0.23.0) for their badges: '' while the schema upgrade is still to finish.
-        $seeds = RSL_Database::schema_current() ? "h.avatar_seed AS home_avatar_seed, a.avatar_seed AS away_avatar_seed" : "'' AS home_avatar_seed, '' AS away_avatar_seed";
+        // The teams' avatar seeds and stages (0.23.0) for their badges: '' and 1 while the schema upgrade is still to finish.
+        $seeds = RSL_Database::schema_current()
+            ? "h.avatar_seed AS home_avatar_seed, a.avatar_seed AS away_avatar_seed, h.avatar_stage AS home_avatar_stage, a.avatar_stage AS away_avatar_stage"
+            : "'' AS home_avatar_seed, '' AS away_avatar_seed, 1 AS home_avatar_stage, 1 AS away_avatar_stage";
         return "SELECT g.*, n.night_date, n.type AS night_type, n.published_at,
                 h.name AS home_name, h.slug AS home_slug, h.colour AS home_colour,
                 a.name AS away_name, a.slug AS away_slug, a.colour AS away_colour, $seeds,
@@ -212,7 +217,19 @@ class RSL_Fixtures {
             'live' => null,
         ), array('id' => $game->id));
         RSL_Payments::sync_night($game->night_id);
+        self::results_changed($game->season);
         return self::get($game->id);
+    }
+
+    /**
+     * A season's results or published nights changed (0.23.0): the rsl_results_changed action,
+     * which RSL_Avatars::stage_check() takes (team robots build up with Season Points). Fired
+     * after the write; the avatar job does the work later, never this request.
+     */
+    private static function results_changed($season) {
+        if (is_string($season) && $season !== '') {
+            do_action('rsl_results_changed', $season);
+        }
     }
 
     /**
@@ -273,6 +290,7 @@ class RSL_Fixtures {
             'result_at' => current_time('mysql'),
         ), array('id' => $game->id));
         RSL_Payments::sync_night($game->night_id);
+        self::results_changed($game->season);
         return self::get($game->id);
     }
 
@@ -284,6 +302,7 @@ class RSL_Fixtures {
         $game = self::get($game_id);
         if ($game) {
             RSL_Payments::sync_night($game->night_id);
+            self::results_changed($game->season);
         }
         return $game;
     }
@@ -393,6 +412,7 @@ class RSL_Fixtures {
         } elseif (self::published_ranked_games($night->season) === 0) {
             RSL_Ratings::forget_start($night->season);
         }
+        self::results_changed($night->season);
         return RSL_Courts::get_night($night_id);
     }
 

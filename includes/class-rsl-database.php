@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 class RSL_Database {
 
     /** Bump when the schema changes; maybe_upgrade() re-runs install(). */
-    const SCHEMA_VERSION = '13';
+    const SCHEMA_VERSION = '14';
     const SCHEMA_OPTION = 'rsl_schema_version';
     const UPGRADE_LOCK = 'rsl_upgrade_lock';
 
@@ -43,6 +43,10 @@ class RSL_Database {
         // (RSL_Avatars; '' = none yet), never the team's name. Text, never an
         // account (not bigint, so nothing for RSL_Merge). Writers and readers of
         // the column check schema_current() first.
+        // avatar_stage (schema 14, 0.23.0): the stage (1 to 8) the team's avatar
+        // files are for, from its Season Points level (RSL_Avatars; the avatar job
+        // writes it, after fetching that stage's images). Readers check
+        // schema_current() first and take 1 without it.
         dbDelta("CREATE TABLE " . self::table('teams') . " (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             season varchar(20) NOT NULL,
@@ -70,6 +74,7 @@ class RSL_Database {
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             rolled_from bigint(20) unsigned DEFAULT NULL,
             avatar_seed varchar(32) NOT NULL DEFAULT '',
+            avatar_stage tinyint(3) unsigned NOT NULL DEFAULT 1,
             PRIMARY KEY  (id),
             UNIQUE KEY season_slug (season, slug),
             KEY season (season),
@@ -489,6 +494,8 @@ class RSL_Database {
         }
         // Schema 13 (0.23.0): every team without an avatar seed gets one, and the teams that are
         // drawn go on the avatar queue (only teams still without a seed, so repeating it is safe).
+        // Schema 14's avatar_stage starts at 1: the avatar job and its hourly check move each team
+        // to its stage.
         if (method_exists('RSL_Avatars', 'backfill')) {
             RSL_Avatars::backfill();
         }

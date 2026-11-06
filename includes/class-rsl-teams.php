@@ -100,9 +100,10 @@ class RSL_Teams {
 
     /**
      * Create a team. $args: name, division, colour (navy when none), level, status, applied_by,
-     * avatar_seed (roll_over() keeps the old team's; else a new random one, RSL_Avatars). Every
-     * new team goes on the avatar queue: its images are fetched by the job, never by this
-     * request. Returns the team or WP_Error.
+     * avatar_seed (the robot a captain chose when applying, or the old team's for roll_over(),
+     * when it's a valid seed; else a new random one, RSL_Avatars). Its avatar starts at stage 1
+     * (the column's default: no Season Points yet). Every new team goes on the avatar queue: its
+     * images are fetched by the job, never by this request. Returns the team or WP_Error.
      */
     public static function create($season, $args) {
         global $wpdb;
@@ -263,6 +264,7 @@ class RSL_Teams {
             return new WP_Error('rsl_not_pending', 'That application has already been dealt with.');
         }
         self::release_members($team->id);
+        RSL_Avatars::retire($team->id); // never drawn again: its avatar files go KEEP_OLD later
         self::notify_captain($team->id, 'declined');
         return self::get($team->id);
     }
@@ -278,6 +280,7 @@ class RSL_Teams {
             return new WP_Error('rsl_not_pending', 'There\'s no pending application of yours to withdraw.');
         }
         self::release_members($team->id);
+        RSL_Avatars::retire($team->id); // never drawn again: its avatar files go KEEP_OLD later
         return true;
     }
 
@@ -612,8 +615,9 @@ class RSL_Teams {
     /**
      * The team's captain (or an admin) enters it again for next_season_for(): a new application
      * through apply(), so capacity, the waiting list and every rule of applying stay one path, with
-     * the team's name, division, colour and avatar seed (0.23.0: its files are copied, RSL_Avatars::
-     * copy_from(), so it keeps its look), and as level the team's est_level when it holds one of
+     * the team's name, division, colour and avatar seed (0.23.0: the same robot, starting again at
+     * stage 1 as Season Points do; RSL_Avatars::copy_from() copies the old team's files when they
+     * are for stage 1, else the queue fetches them), and as level the team's est_level when it holds one of
      * levels(), else $level (then required; est_level is never shown to the captain). The captain
      * is the applicant, whoever sends it. The new application gets rolled_from (this team's id)
      * and this team's preferences (set_preferences()). Refused with a readable WP_Error when the
