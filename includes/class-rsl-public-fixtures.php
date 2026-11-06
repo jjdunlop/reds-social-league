@@ -964,7 +964,7 @@ class RSL_Public_Fixtures {
             .rsl-odds-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--rsl-border); }
             .rsl-odds-bar span { display: block; height: 100%; opacity: .85; }
             .rsl-odds-label { grid-column: 1 / -1; text-align: center; color: var(--rsl-muted); font-size: 11px; }
-            .rsl-form:not(form) { display: inline-flex; gap: 3px; } /* the form guide; never a <form class=rsl-form> (0.20.0: the captain's forms are on this page) */
+            .rsl-form:not(form) { display: inline-flex; gap: 3px; } /* the form guide only: the captain forms on the team page carry rsl-form too (0.20.1) */
             .rsl-form:not(form) span { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 4px; font-size: 10px; font-weight: 800; color: #fff; }
             .rsl-form-w { background: #2e7d32; }
             .rsl-form-l { background: #b32d2e; }
