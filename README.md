@@ -19,6 +19,13 @@ Top up, see fixtures or request a week off; a player's Top up or see
 fixtures), and the season schedule's buttons read Request week off and
 Request two games.
 
+The team card's season pay buttons (Rest of the season, My share of the
+season) count the team's own requests: `RSL_Payments::games_to_come()`
+is one game a regular night still to be drawn, none on a week off, two on
+a two-games night (pure core `count_games()`). Byes aren't known until
+each week's draw, so the button says about N games and a line under the
+buttons says so.
+
 ## Places in each division and a waiting list (0.19.0)
 
 - **The rule** (the club's, 5 Nov 2026). A division takes at most as many

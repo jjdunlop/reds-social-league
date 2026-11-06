@@ -369,6 +369,25 @@ $check('the team card offers each player their share of the rest of the season',
 RSL_Payments::record_payment($teamE->id, $even, $mateE);
 $check('...and once they have paid it, not again — while a teammate\'s share stays the same', $my_share($mateE) == 0 && abs($my_share($capE) - $even) <= 1, $my_share($mateE) . ' / ' . $my_share($capE));
 
+// 0.19.1: the season buttons count the team's week off and two-game requests.
+$gn = function ($id, $date, $type = 'regular', $pub = null) { return (object) array('id' => $id, 'night_date' => $date, 'type' => $type, 'published_at' => $pub); };
+$gnights = array($gn(1, '2091-01-01'), $gn(2, '2091-01-08'), $gn(3, '2091-01-15'), $gn(4, '2091-01-22', 'bye'), $gn(5, '2091-01-29', 'finals'), $gn(6, '2090-12-25'), $gn(7, '2091-02-05', 'regular', '2091-01-30 10:00:00'));
+$check('count_games: one a regular night still to be drawn', RSL_Payments::count_games($gnights, array(), '2091-01-01') === 3);
+$check('...none on a week off, two on a two-games night', RSL_Payments::count_games($gnights, array(1 => 'off', 3 => 'double'), '2091-01-01') === 3
+    && RSL_Payments::count_games($gnights, array(2 => 'off'), '2091-01-01') === 2 && RSL_Payments::count_games($gnights, array(2 => 'double'), '2091-01-01') === 4);
+$future = array_values(array_filter(RSL_Courts::nights($season), function ($n) {
+    return $n->type === 'regular' && $n->night_date >= current_time('Y-m-d') && !RSL_Fixtures::is_published($n);
+}));
+if ($future) {
+    $req_off = RSL_Requests::request($teamE->id, $future[0]->id, 'off', $capE);
+    $want = RSL_Payments::nights_to_come($season) - 1;
+    wp_set_current_user($capE);
+    $cardE = RSL_Payments::team_card(RSL_Teams::get($teamE->id));
+    $check('a week off takes a game off the season count', !is_wp_error($req_off) && RSL_Payments::games_to_come(RSL_Teams::get($teamE->id)) === $want, is_wp_error($req_off) ? $req_off->get_error_message() : '');
+    $shown = $want >= 2 && $want * 75 - RSL_Payments::balance($teamE->id) > 75;
+    $check('...and the card says about', !$shown || strpos($cardE, 'Rest of the season (about ' . $want . ' games)') !== false, $shown ? 'shown' : 'not offered');
+}
+
 // --- Admin ------------------------------------------------------------------------------------------------
 wp_set_current_user($admin);
 RSL_Admin_Payments::process(array('rsl_nonce' => wp_create_nonce('rsl_payments_action'), 'do' => 'adjust', 'team_id' => $T(3), 'amount' => '200', 'note' => 'Bank transfer'));

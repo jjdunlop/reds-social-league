@@ -688,6 +688,35 @@ class RSL_Payments {
     }
 
     /**
+     * The games a team can expect in the rest of its season, for the pay buttons: one on each
+     * regular night still to be drawn (nights_to_come()), none on a night it asked to have off,
+     * two on a night it asked for two games. Byes aren't known until each week's draw, so it's an
+     * estimate (the card says about).
+     */
+    public static function games_to_come($team) {
+        $asked = array();
+        foreach (RSL_Requests::for_team($team->id) as $night_id => $r) {
+            if ($r->status === 'active' && in_array($r->type, array('off', 'double'), true)) {
+                $asked[intval($night_id)] = $r->type;
+            }
+        }
+        return self::count_games(RSL_Courts::nights($team->season), $asked, current_time('Y-m-d'));
+    }
+
+    /** Pure core of games_to_come(). $nights: night rows; $asked: night id => 'off' | 'double'; $today: Y-m-d. */
+    public static function count_games($nights, $asked, $today) {
+        $games = 0;
+        foreach ($nights as $n) {
+            if ($n->type !== 'regular' || $n->night_date < $today || RSL_Fixtures::is_published($n)) {
+                continue;
+            }
+            $type = isset($asked[intval($n->id)]) ? $asked[intval($n->id)] : '';
+            $games += $type === 'off' ? 0 : ($type === 'double' ? 2 : 1);
+        }
+        return $games;
+    }
+
+    /**
      * Each member's fair part of what the team still needs ($need): the
      * amounts that bring everyone's top-ups up to one common level, so
      * together they come to exactly $need. Someone who has already put in
@@ -761,7 +790,7 @@ class RSL_Payments {
         $balance = self::balance($team->id);
         $owing = max(0, -$balance);
         $blocked = self::blocked($team->id);
-        $to_come = self::nights_to_come($team->season);
+        $to_come = self::games_to_come($team);
         $season_need = round($to_come * $s['game_fee'] - $balance, 2);
         $labels = RSL_Fixtures::round_labels($team->season);
         $rows = array_slice(self::ledger($team->id), 0, 6);
@@ -775,7 +804,7 @@ class RSL_Payments {
             $choices[] = array($s['game_fee'], 'Next game');
         }
         if ($season_need > $s['game_fee'] && $season_need > $owing) {
-            $choices[] = array($season_need, 'Rest of the season (' . $to_come . ' game' . ($to_come === 1 ? '' : 's') . ')');
+            $choices[] = array($season_need, 'Rest of the season (about ' . $to_come . ' game' . ($to_come === 1 ? '' : 's') . ')');
         }
         // Each player's fair part of what the rest of the season still needs —
         // so someone who joined through the free agent list knows what to pay.
@@ -825,6 +854,9 @@ class RSL_Payments {
                     <form method="post" class="rsl-money-other"><?php echo self::topup_fields($team->id); ?>
                         <label>Other amount $<input type="number" name="amount" min="5" max="2000" step="1" required></label> <button type="submit" class="rsl-req-btn">Pay</button></form>
                 </div>
+                <?php if ($season_need > $s['game_fee']): ?>
+                    <p class="rsl-hint">Season amounts count your week off and two-game requests. Byes aren't known until each week's fixtures come out.</p>
+                <?php endif; ?>
             <?php else: ?>
                 <p class="rsl-hint">Online payment isn't set up yet — pay the league directly for now.</p>
             <?php endif; ?>
