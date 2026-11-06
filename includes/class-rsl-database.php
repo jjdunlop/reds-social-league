@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 class RSL_Database {
 
     /** Bump when the schema changes; maybe_upgrade() re-runs install(). */
-    const SCHEMA_VERSION = '11';
+    const SCHEMA_VERSION = '12';
     const SCHEMA_OPTION = 'rsl_schema_version';
     const UPGRADE_LOCK = 'rsl_upgrade_lock';
 
@@ -35,7 +35,10 @@ class RSL_Database {
         // captain's fixturing preferences. spots_*: "looking for players" —
         // how many, which positions, who's welcome (the captain's own words,
         // shown to free agents) and a short note. formed_by: 'placement' for
-        // a team made from free agents.
+        // a team made from free agents. rolled_from (schema 12, 0.21.0): the
+        // id of the team this one was entered again from for the season after
+        // (RSL_Teams::roll_over()); NULL for any other team. A league row id,
+        // never an account. Readers check schema_current() first.
         dbDelta("CREATE TABLE " . self::table('teams') . " (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             season varchar(20) NOT NULL,
@@ -61,10 +64,12 @@ class RSL_Database {
             spots_note varchar(100) NOT NULL DEFAULT '',
             formed_by varchar(20) NOT NULL DEFAULT '',
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            rolled_from bigint(20) unsigned DEFAULT NULL,
             PRIMARY KEY  (id),
             UNIQUE KEY season_slug (season, slug),
             KEY season (season),
-            KEY invite_code (invite_code)
+            KEY invite_code (invite_code),
+            KEY rolled_from (rolled_from)
         ) $charset;");
 
         // League players: someone who has registered for the social league.
@@ -111,8 +116,11 @@ class RSL_Database {
         // accept before they're on the team. source: 'email' (the captain
         // typed their email — until they accept the captain sees only that)
         // or 'pool' (picked from the free agent list — email is '', the
-        // captain sees their first name). A pool invite to someone in a
-        // friend group carries group_code and takes the group. expires_at:
+        // captain sees their first name) or 'rollover' (0.21.0: a player from
+        // the team this one was entered again from, made when the league
+        // approves it; the captain sees their name, as on the roster). A pool
+        // invite to someone in a friend group carries group_code and takes
+        // the group. expires_at:
         // NULL = never (email invites). Status: pending, accepted, declined,
         // cancelled, expired, or closed (they joined another team).
         dbDelta("CREATE TABLE " . self::table('invites') . " (

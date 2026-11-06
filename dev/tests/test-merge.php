@@ -144,6 +144,7 @@ try {
     // goes in RSL_Merge::columns() or here, after a look at what it holds.
     $not_account_ids = array_fill_keys(array(
         'teams.id',
+        'teams.rolled_from', // the team this one was entered again from (0.21.0), a team id
         'regos.id', 'regos.order_id', 'regos.order_item_id',
         'invites.id', 'invites.team_id',
         'free_agents.id', 'free_agents.team_id',

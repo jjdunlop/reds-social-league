@@ -189,6 +189,16 @@ class RSL_Seasons {
         return self::quarter_span($key);
     }
 
+    /**
+     * Has the season started (0.21.0)? True when it has dates (span() dated) and its first game
+     * night is today or earlier. A season with no dates has not started, whatever its quarter.
+     * A finished season has started too. False for a bad key.
+     */
+    public static function has_started($key) {
+        $s = self::span($key);
+        return $s && !empty($s['dated']) && $s['start'] <= current_time('Y-m-d');
+    }
+
     private static function is_ymd($d) {
         return is_string($d) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) && strtotime($d);
     }
