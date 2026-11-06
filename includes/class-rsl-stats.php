@@ -184,8 +184,8 @@ class RSL_Stats {
      * games (results, not live scores), nights, active teams (with their
      * avatar seeds, 0.23.0, but not their stages: the avatar job writes
      * those after every results night, and each write would throw the
-     * saved stats away; the leaders' badges may show the stage before for
-     * up to the hour the copy lasts, and those files stay two days) and
+     * saved stats away; the ladder's leaders box reads each leader's seed
+     * and stage as stored, RSL_Public_Fixtures::avatars_now()) and
      * night requests, plus the finals rule (named, finals-games:5, so stats saved
      * under 0.18.1's earlier count of rounds are never reused), the plugin
      * version and the ladder model's settings (RSL_Ratings::ladder_model(),

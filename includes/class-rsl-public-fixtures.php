@@ -423,11 +423,46 @@ class RSL_Public_Fixtures {
         if (!$items) {
             return '';
         }
+        $now = self::avatars_now(array_map(function ($it) { return $it[1]; }, $items));
         $html = '<div class="rsl-leaders">';
         foreach ($items as $it) {
-            $html .= '<div class="rsl-leader"><small>' . esc_html($it[0]) . '</small>' . self::team_cell($it[1]) . '<span>' . esc_html($it[2]) . '</span></div>';
+            $team = $it[1];
+            if (is_object($team) && isset($team->id, $now[intval($team->id)])) {
+                $team = clone $team;
+                $team->avatar_seed = $now[intval($team->id)]->avatar_seed;
+                $team->avatar_stage = $now[intval($team->id)]->avatar_stage;
+            }
+            $html .= '<div class="rsl-leader"><small>' . esc_html($it[0]) . '</small>' . self::team_cell($team) . '<span>' . esc_html($it[2]) . '</span></div>';
         }
         return $html . '</div>';
+    }
+
+    /**
+     * The leaders' teams come from RSL_Stats' saved copy, which can be up to an hour old and never
+     * follows a stage change (its fingerprint leaves avatar_stage out), so their badges would draw
+     * a stage the job has moved on from, whose files may never have existed (a team that went
+     * straight from no files to stage 3), queueing a run that fetches nothing on every view. This
+     * reads each one's seed and stage as stored (one query; team id => row), so a leader's badge is
+     * the one its ladder row shows. Empty while the schema upgrade is to finish.
+     */
+    private static function avatars_now($teams) {
+        global $wpdb;
+        $ids = array();
+        foreach ($teams as $t) {
+            if (is_object($t) && !empty($t->id)) {
+                $ids[intval($t->id)] = true;
+            }
+        }
+        if (!$ids || !RSL_Database::schema_current()) {
+            return array();
+        }
+        $ids = array_keys($ids);
+        $rows = $wpdb->get_results("SELECT id, avatar_seed, avatar_stage FROM " . RSL_Database::table('teams') . " WHERE id IN (" . implode(',', array_map('intval', $ids)) . ")");
+        $out = array();
+        foreach ((array) $rows as $r) {
+            $out[intval($r->id)] = $r;
+        }
+        return $out;
     }
 
     private static function form_pills($form) {

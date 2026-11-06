@@ -846,6 +846,20 @@ $check('...the old stage\'s files stay for cached pages, listed to go two days o
     count(array_intersect($ts_s1, $files_of($ts->id))) === 2 && $listed($ts_s1[0]) >= time() + RSL_Avatars::KEEP_OLD - 120 && $listed($ts_s1[1]) >= time() + RSL_Avatars::KEEP_OLD - 120
     && $listed($ts_s3[1]) === 0 && !$flagged($S) && !$in_queue($ts->id) && !$in_queue($ts2->id));
 $check('...the badge is now stage 3', strpos(RSL_Public::badge($ts_b), $ts_s3[1]) !== false);
+// The leaders box draws teams from the saved stats, built while the team was at stage 1 (the fingerprint leaves the stage out).
+$leaders_m = new ReflectionMethod('RSL_Public_Fixtures', 'leaders');
+$leaders_m->setAccessible(true);
+$old_ts = clone $ts_b;
+$old_ts->avatar_stage = 1;
+$old_ts2 = clone $ts2_b;
+$old_ts2->avatar_stage = 1;
+$set_queue(array());
+$reset();
+$box = $leaders_m->invoke(null, array('leaders' => array('improved' => array('team' => $old_ts2, 'value' => 40), 'giant_killer' => null,
+    'points' => array($ts_b->division => array('team' => $old_ts, 'value' => 85)))));
+$check('the ladder\'s leaders box draws each team\'s stage as stored now, not the saved stats\' (stage 3 and 8; stage 1\'s files would be stale, and stage 1 for a team that went straight to 8 never existed, which drew the initials and queued it on every view)',
+    strpos($box, $ts_s3[1]) !== false && strpos($box, $ts_s1[1]) === false && strpos($box, $names($ts2->id, $ts2->avatar_seed, 8)[1]) !== false
+    && strpos($box, '<span class="rsl-badge') === false && !$in_queue($ts->id) && !$in_queue($ts2->id) && $calls() === 0, $box);
 $fp_before = $fp->invoke(null, $S);
 $set_stage($ts3->id, 2);
 $fp_stage = $fp->invoke(null, $S);
