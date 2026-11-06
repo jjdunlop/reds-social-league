@@ -145,7 +145,7 @@ class RSL_Avatars {
     const KEEP_OLD = 172800;
 
     /** The img's width and height for each badge size (the stylesheets set the drawn size, as for the initials). */
-    const SIZES = array('' => 44, 'large' => 72, 'small' => 28);
+    const SIZES = array('' => 44, 'large' => 72, 'medium' => 36, 'small' => 28);
 
     /** Robots the chooser offers (Try another goes round them, saying which one it shows). */
     const CHOICES = 12;

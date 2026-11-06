@@ -533,6 +533,11 @@ $check('...large is 72 (the team page), small 28 (fixtures and the ladder), each
     && strpos($bl, 'width="72" height="72"') !== false && strpos($bl, 'class="rsl-badge rsl-avatar rsl-badge-large"') !== false
     && strpos($bs, 'width="28" height="28"') !== false && strpos($bs, 'class="rsl-badge rsl-avatar rsl-badge-small"') !== false
     && strpos($bs, 'rsl-avatar-pic-small') !== false, $bl . ' / ' . $bs);
+$bm = RSL_Public::badge($t1, 'medium');
+$check('...medium is 36 (the ladder and its leaders, 0.23.1), with its size class, and the fixtures stylesheet sizes the initials to match',
+    strpos($bm, 'class="rsl-avatar-pic rsl-avatar-pic-medium"') !== false && strpos($bm, 'width="36" height="36"') !== false
+    && strpos($bm, 'class="rsl-badge rsl-avatar rsl-badge-medium"') !== false
+    && strpos(RSL_Public_Fixtures::styles(), '.rsl-badge-medium { width: 36px; height: 36px;') !== false, $bm);
 $check('...no address but this site\'s: nothing that names DiceBear', stripos($b . $bl . $bs, 'dicebear') === false && strpos($b, 'http') === strpos($b, esc_url($base)));
 $src = '';
 foreach (array('class-rsl-public.php', 'class-rsl-portal.php', 'class-rsl-admin.php') as $file) {
@@ -812,8 +817,8 @@ $check('setup: their Season Points planted (85, 300, 0) in the season\'s saved s
 $ladder = new RSL_Public_Fixtures();
 $reset();
 $lad = $ladder->render_ladder();
-$check('a ladder render with stages out of date: no request, and each badge is its stored stage (the page never works out a level)', $calls() === 0
-    && strpos($lad, $ts_s1[1]) !== false && strpos($lad, '-s3') === false && !$in_queue($ts->id) && intval(RSL_Teams::get($ts->id)->avatar_stage) === 1, wp_json_encode($http['all']));
+$check('a ladder render with stages out of date: no request, and each badge is its stored stage (the page never works out a level), at 36 px', $calls() === 0
+    && strpos($lad, $ts_s1[1]) !== false && strpos($lad, 'rsl-badge rsl-avatar rsl-badge-medium') !== false && strpos($lad, 'rsl-badge-small"') === false && strpos($lad, '-s3') === false && !$in_queue($ts->id) && intval(RSL_Teams::get($ts->id)->avatar_stage) === 1, wp_json_encode($http['all']));
 $set_queue(array()); // the teams it queued for missing files (that part is checked above) aren't this part's
 $fpq = 0;
 $counter = function ($q) use (&$fpq) {

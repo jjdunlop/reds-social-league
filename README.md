@@ -103,7 +103,8 @@ captains no longer pick a team colour.
   phone asks for less motion, the animated one for everyone else, `alt=""`
   and `aria-hidden` (the team name is always beside it), lazy loading, and
   the same sizes as the initials (44 px normally, 72 on the team page, 28 in
-  fixtures and the ladder), corners rounded before the image loads too. The
+  fixtures, and 36 on the ladder and its leaders boxes since 0.23.1, as at
+  28 the robot's face was hard to make out), corners rounded before the image loads too. The
   fixtures and the ladder pass each team's id, seed and stage, so they show
   the robots. Objects that are only a name and a colour (the free agent
   requests list builds those) still get the initials.

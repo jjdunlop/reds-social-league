@@ -576,7 +576,7 @@ class RSL_Public_Fixtures {
     }
 
     private static function team_cell($team) {
-        return '<a class="rsl-team-cell" href="' . esc_url(RSL_Public::team_url($team)) . '">' . RSL_Public::badge($team, 'small') . '<span>' . esc_html($team->name) . '</span></a>';
+        return '<a class="rsl-team-cell" href="' . esc_url(RSL_Public::team_url($team)) . '">' . RSL_Public::badge($team, 'medium') . '<span>' . esc_html($team->name) . '</span></a>';
     }
 
     private static function move($move) {
@@ -932,6 +932,7 @@ class RSL_Public_Fixtures {
             .rsl-score small, .rsl-team-games small { color: var(--rsl-muted); font-size: 12px; }
             .rsl-vs { color: var(--rsl-muted); font-weight: 600; font-size: 14px !important; }
             .rsl-badge-small { width: 28px; height: 28px; font-size: 11px; }
+            .rsl-badge-medium { width: 36px; height: 36px; font-size: 13px; }
             .rsl-links { margin-top: 20px; }
             .rsl-table-wrap { overflow-x: auto; }
             .rsl-ladder, .rsl-team-games { width: 100%; border-collapse: collapse; }
