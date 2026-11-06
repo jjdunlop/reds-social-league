@@ -6,6 +6,14 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## A ready-to-send invite message (0.19.1)
+
+The captain's Add players box shows a message with the invite link,
+"Hey, join my Reds Social League team, NAME, for the 2027 Pre-season!
+Sign up and join here: LINK", in a box the captain can edit. Copy message
+copies what's in the box. `RSL_Portal::invite_message()` is the one place
+the wording lives. The emails keep their own link wording.
+
 ## Places in each division and a waiting list (0.19.0)
 
 - **The rule** (the club's, 5 Nov 2026). A division takes at most as many

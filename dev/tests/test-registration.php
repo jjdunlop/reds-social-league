@@ -303,6 +303,10 @@ $roster = substr($cap_view, strpos($cap_view, '<h4>Players'), strpos($cap_view, 
 $check('captain: teammates show cleared / needs rego', strpos($roster, '&#10003; Cleared') !== false && strpos($roster, '&#10007; Needs rego') !== false);
 $check('captain never sees why (membership vs rego)', stripos($roster, 'Full/life') === false && stripos($roster, 'membership') === false && strpos($roster, 'Rego paid') === false && strpos($roster, 'until') === false);
 $check('captain tools: invite link and email invite', strpos($cap_view, 'join=' . $code) !== false && strpos($cap_view, 'name="do" value="invite"') !== false);
+$invite_team = RSL_Teams::get($team->id);
+$invite_msg = RSL_Portal::invite_message($invite_team);
+$check('invite message: team, season, link last', $invite_msg === 'Hey, join my Reds Social League team, ' . $invite_team->name . ', for the ' . RSL_Seasons::short_label($invite_team->season) . '! Sign up and join here: ' . RSL_Portal::invite_url($invite_team), $invite_msg);
+$check('captain tools: the message box and Copy message', strpos($cap_view, esc_textarea($invite_msg) . '</textarea>') !== false && strpos($cap_view, '>Copy message</button>') !== false);
 $p3_view = $page($p3);
 $check('a player (not captain) sees teammates but no statuses or tools', strpos($p3_view, "RSLR p1 $suffix") !== false && strpos($p3_view, 'Needs rego</span>') === false && strpos($p3_view, 'value="invite"') === false);
 wp_set_current_user($p3);

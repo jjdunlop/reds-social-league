@@ -318,6 +318,12 @@ class RSL_Portal {
         return add_query_arg('join', RSL_Teams::invite_code($team), self::url());
     }
 
+    /** What the captain's Copy message button copies: plain text, the invite link last so chat apps preview it. */
+    public static function invite_message($team) {
+        return 'Hey, join my Reds Social League team, ' . wp_specialchars_decode($team->name, ENT_QUOTES)
+            . ', for the ' . RSL_Seasons::short_label($team->season) . '! Sign up and join here: ' . self::invite_url($team);
+    }
+
     // ------------------------------------------------------------------
     // Actions
     // ------------------------------------------------------------------
@@ -1229,10 +1235,10 @@ class RSL_Portal {
                 <?php endif; ?>
 
                 <h4>Add players</h4>
-                <p class="rsl-hint">Share your invite link — anyone who opens it can register and join straight away:</p>
+                <p class="rsl-hint">Send this to your players. Anyone who opens the link can register and join straight away:</p>
+                <textarea class="rsl-invite" rows="3" aria-label="Message for your players"><?php echo esc_textarea(self::invite_message($team)); ?></textarea>
                 <div class="rsl-row">
-                    <input type="text" readonly value="<?php echo esc_attr(self::invite_url($team)); ?>" class="rsl-invite" onclick="this.select()">
-                    <button type="button" class="rsl-btn rsl-btn-secondary" onclick="var i=this.previousElementSibling;i.select();navigator.clipboard&&navigator.clipboard.writeText(i.value);this.textContent='Copied';">Copy</button>
+                    <button type="button" class="rsl-btn rsl-btn-secondary" onclick="var t=this.parentNode.previousElementSibling;t.select();if(navigator.clipboard){navigator.clipboard.writeText(t.value);}else{document.execCommand('copy');}this.textContent='Copied';">Copy message</button>
                 </div>
                 <div class="rsl-hint">Code: <strong><?php echo esc_html(RSL_Teams::invite_code($team)); ?></strong>
                     &middot; <form method="post" class="rsl-inline-form" onsubmit="return confirm('Make a new invite link? The current one will stop working.');"><?php echo self::fields('new_code', array('team_id' => $team->id)); ?><button type="submit" class="rsl-link">Make a new link</button></form></div>
@@ -1308,7 +1314,7 @@ class RSL_Portal {
             .rsl-roster li > span:first-child { flex: 1 1 auto; }
             .rsl-status { font-size: 13px; font-weight: 600; }
             .rsl-ok { color: #1e6b2a; } .rsl-no { color: #b32d2e; } .rsl-unknown { color: var(--rsl-muted); }
-            .rsl-invite { font-family: monospace; }
+            .rsl-portal textarea.rsl-invite { display: block; width: 100%; padding: 7px 9px; margin: 4px 0 0; border: 1px solid #c3c8d0; border-radius: 4px; box-sizing: border-box; font: inherit; resize: vertical; }
             .rsl-portal .rsl-badge { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 44px; height: 44px; border-radius: 50%; color: #fff; font-weight: 700; font-size: 16px; }
             .rsl-portal .rsl-team-head { display: flex; align-items: center; gap: 12px; }
             .rsl-portal .rsl-team-head .rsl-title { margin: 0; font-size: 1.2em; }
