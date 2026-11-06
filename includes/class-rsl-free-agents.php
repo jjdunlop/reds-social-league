@@ -755,7 +755,7 @@ class RSL_Free_Agents {
         if (!$team) {
             return new WP_Error('rsl_team', 'That team no longer exists.');
         }
-        if (!RSL_Teams::is_captain($team->id, $user_id) && !user_can($user_id, 'manage_options')) {
+        if (!RSL_Teams::is_captain($team->id, $user_id) && !RSL_Access::can($user_id)) {
             return new WP_Error('rsl_not_captain', 'Only the captain can change that.');
         }
         $positions = array_values(array_intersect((array) (isset($data['positions']) ? $data['positions'] : array()), array_keys(RSL_Players::positions())));
@@ -1023,7 +1023,7 @@ class RSL_Free_Agents {
         if (!$req || !$team) {
             return new WP_Error('rsl_fa_req', 'That request isn\'t open any more.');
         }
-        if (!RSL_Teams::is_captain($team->id, $captain_id) && !user_can($captain_id, 'manage_options')) {
+        if (!RSL_Teams::is_captain($team->id, $captain_id) && !RSL_Access::can($captain_id)) {
             return new WP_Error('rsl_not_captain', 'Only the team\'s captain can answer requests.');
         }
         if (!$accept) {

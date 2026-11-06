@@ -5,7 +5,7 @@
  *  - See why each game is there: each team's chance of winning a set, earlier meetings,
  *    double-headers, time preferences met or missed, who isn't playing.
  *  - Publish the night (fixtures go public), then enter results / forfeits.
- * Every change posts to admin-post.php (nonce + manage_options) and
+ * Every change posts to admin-post.php (nonce + RSL_Access::can()) and
  * redirects back with a notice.
  */
 
@@ -23,7 +23,7 @@ class RSL_Admin_Fixtures {
     }
 
     public function menu() {
-        add_submenu_page(RSL_Admin::PAGE, 'Fixtures', 'Fixtures', 'manage_options', self::PAGE, array($this, 'render'));
+        add_submenu_page(RSL_Admin::PAGE, 'Fixtures', 'Fixtures', RSL_Access::CAP, self::PAGE, array($this, 'render'));
     }
 
     public function handle() {
@@ -40,7 +40,7 @@ class RSL_Admin_Fixtures {
         $season = isset($post['season']) && RSL_Seasons::is_valid($post['season']) ? $post['season'] : RSL_Seasons::current();
         $night_id = isset($post['night_id']) ? intval($post['night_id']) : 0;
         $back = self::url(array('season' => $season, 'night' => $night_id));
-        if (!current_user_can('manage_options') || !isset($post['rsl_nonce']) || !wp_verify_nonce($post['rsl_nonce'], 'rsl_fixtures_action')) {
+        if (!RSL_Access::can() || !isset($post['rsl_nonce']) || !wp_verify_nonce($post['rsl_nonce'], 'rsl_fixtures_action')) {
             self::notice('error', 'Security check failed — please try again.');
             return $back;
         }
@@ -197,7 +197,7 @@ class RSL_Admin_Fixtures {
     // ------------------------------------------------------------------
 
     public function render() {
-        if (!current_user_can('manage_options')) {
+        if (!RSL_Access::can()) {
             return;
         }
         $season = isset($_GET['season']) && RSL_Seasons::is_valid($_GET['season']) ? $_GET['season'] : RSL_Seasons::current();

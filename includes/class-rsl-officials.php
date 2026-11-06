@@ -440,7 +440,7 @@ class RSL_Officials {
         if (!$user_id) {
             return new WP_Error('rsl_score', 'Log in to enter scores.');
         }
-        if (user_can($user_id, 'manage_options')) {
+        if (RSL_Access::can($user_id)) {
             return null;
         }
         $jobs = $jobs !== null ? $jobs : self::jobs_for_night($game->night_id);

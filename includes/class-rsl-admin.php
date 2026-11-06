@@ -1,7 +1,7 @@
 <?php
 /**
  * Admin: Social League → Teams. Every change posts to admin-post.php
- * (nonce + manage_options), then redirects back with a one-off notice —
+ * (nonce + RSL_Access::can()), then redirects back with a one-off notice —
  * Post/Redirect/Get, so a refresh never repeats an action.
  */
 
@@ -24,9 +24,9 @@ class RSL_Admin {
     public function menu() {
         $pending = count(RSL_Teams::pending_applications());
         $bubble = $pending ? ' <span class="awaiting-mod">' . intval($pending) . '</span>' : '';
-        add_menu_page('Social League', 'Social League' . $bubble, 'manage_options', self::PAGE, array($this, 'render'), 'dashicons-groups', 33);
-        add_submenu_page(self::PAGE, 'Teams', 'Teams' . $bubble, 'manage_options', self::PAGE, array($this, 'render'));
-        add_submenu_page(self::PAGE, 'Registration', 'Registration', 'manage_options', self::REG_PAGE, array($this, 'render_registration'));
+        add_menu_page('Social League', 'Social League' . $bubble, RSL_Access::CAP, self::PAGE, array($this, 'render'), 'dashicons-groups', 33);
+        add_submenu_page(self::PAGE, 'Teams', 'Teams' . $bubble, RSL_Access::CAP, self::PAGE, array($this, 'render'));
+        add_submenu_page(self::PAGE, 'Registration', 'Registration', RSL_Access::CAP, self::REG_PAGE, array($this, 'render_registration'));
     }
 
     // ------------------------------------------------------------------
@@ -48,7 +48,7 @@ class RSL_Admin {
         $season = isset($post['season']) ? sanitize_text_field(wp_unslash($post['season'])) : RSL_Seasons::current();
         $back = admin_url('admin.php?page=' . self::PAGE . '&season=' . rawurlencode($season));
 
-        if (!current_user_can('manage_options') || !isset($post['rsl_nonce']) || !wp_verify_nonce($post['rsl_nonce'], 'rsl_team_action')) {
+        if (!RSL_Access::can() || !isset($post['rsl_nonce']) || !wp_verify_nonce($post['rsl_nonce'], 'rsl_team_action')) {
             self::notice('error', 'Security check failed — please try again.');
             return $back;
         }
@@ -308,7 +308,7 @@ class RSL_Admin {
     // ------------------------------------------------------------------
 
     public function render() {
-        if (!current_user_can('manage_options')) {
+        if (!RSL_Access::can()) {
             return;
         }
         $season = isset($_GET['season']) && RSL_Seasons::is_valid($_GET['season']) ? $_GET['season'] : RSL_Seasons::current();
@@ -610,7 +610,7 @@ class RSL_Admin {
 
     /** Social League → Registration: the rego products, past-order scan, manual regos. */
     public function render_registration() {
-        if (!current_user_can('manage_options')) {
+        if (!RSL_Access::can()) {
             return;
         }
         $post_url = admin_url('admin-post.php');

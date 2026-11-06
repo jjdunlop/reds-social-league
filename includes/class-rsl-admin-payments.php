@@ -8,7 +8,7 @@
  *    with credits / charges (cash paid, refunds, corrections) with a note.
  *  - Earlier seasons' balances not yet cleared, each with "carry it to
  *    this season's team".
- * Every change posts to admin-post.php (nonce + manage_options).
+ * Every change posts to admin-post.php (nonce + RSL_Access::can()).
  */
 
 if (!defined('ABSPATH')) {
@@ -25,7 +25,7 @@ class RSL_Admin_Payments {
     }
 
     public function menu() {
-        add_submenu_page(RSL_Admin::PAGE, 'Team Balances', 'Team Balances', 'manage_options', self::PAGE, array($this, 'render'));
+        add_submenu_page(RSL_Admin::PAGE, 'Team Balances', 'Team Balances', RSL_Access::CAP, self::PAGE, array($this, 'render'));
     }
 
     public function handle() {
@@ -41,7 +41,7 @@ class RSL_Admin_Payments {
     public static function process($post) {
         $team_id = isset($post['team_id']) ? intval($post['team_id']) : 0;
         $back = $team_id ? self::url(array('team' => $team_id)) : self::url();
-        if (!current_user_can('manage_options') || !isset($post['rsl_nonce']) || !wp_verify_nonce($post['rsl_nonce'], 'rsl_payments_action')) {
+        if (!RSL_Access::can() || !isset($post['rsl_nonce']) || !wp_verify_nonce($post['rsl_nonce'], 'rsl_payments_action')) {
             self::notice('error', 'Security check failed — please try again.');
             return $back;
         }
@@ -92,7 +92,7 @@ class RSL_Admin_Payments {
     }
 
     public function render() {
-        if (!current_user_can('manage_options')) {
+        if (!RSL_Access::can()) {
             return;
         }
         echo '<div class="wrap rsl-pay"><h1>Team Balances</h1>' . self::take_notice();

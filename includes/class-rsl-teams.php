@@ -55,7 +55,7 @@ class RSL_Teams {
         if (!$team) {
             return new WP_Error('rsl_team', 'That team no longer exists.');
         }
-        if (!self::is_captain($team->id, $user_id) && !user_can($user_id, 'manage_options')) {
+        if (!self::is_captain($team->id, $user_id) && !RSL_Access::can($user_id)) {
             return new WP_Error('rsl_not_captain', 'Only the captain can change the team\'s preferences.');
         }
         $time = isset($prefs['time']) && isset(self::time_preferences()[$prefs['time']]) ? $prefs['time'] : 'any';
@@ -443,7 +443,7 @@ class RSL_Teams {
         if (!$team || $team->status !== 'active') {
             return new WP_Error('rsl_team', 'Invites open once your team is approved.');
         }
-        if (!self::is_captain($team->id, $captain_id) && !user_can($captain_id, 'manage_options')) {
+        if (!self::is_captain($team->id, $captain_id) && !RSL_Access::can($captain_id)) {
             return new WP_Error('rsl_not_captain', 'Only the captain can invite players.');
         }
         $email = sanitize_email($email);
@@ -452,7 +452,7 @@ class RSL_Teams {
         }
         $table = RSL_Database::table('invites');
         $today = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table WHERE invited_by = %d AND source = 'email' AND created_at > %s", $captain_id, date('Y-m-d H:i:s', current_time('timestamp') - DAY_IN_SECONDS)));
-        if ($today >= self::EMAIL_INVITES_PER_DAY && !user_can($captain_id, 'manage_options')) {
+        if ($today >= self::EMAIL_INVITES_PER_DAY && !RSL_Access::can($captain_id)) {
             return new WP_Error('rsl_invite_cap', 'That\'s ' . self::EMAIL_INVITES_PER_DAY . ' email invites today — share your invite link instead.');
         }
         $user = get_user_by('email', $email);
@@ -571,7 +571,7 @@ class RSL_Teams {
         global $wpdb;
         $table = RSL_Database::table('invites');
         $invite = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d AND status = 'pending'", $invite_id));
-        if (!$invite || (!self::is_captain($invite->team_id, $captain_id) && !user_can($captain_id, 'manage_options'))) {
+        if (!$invite || (!self::is_captain($invite->team_id, $captain_id) && !RSL_Access::can($captain_id))) {
             return new WP_Error('rsl_invite', 'That invite isn\'t open any more.');
         }
         $wpdb->update($table, array('status' => 'cancelled', 'responded_at' => current_time('mysql')), array('id' => $invite->id));
@@ -618,7 +618,7 @@ class RSL_Teams {
         if (!$team) {
             return new WP_Error('rsl_team', 'That team no longer exists.');
         }
-        if (!self::is_captain($team->id, $user_id) && !user_can($user_id, 'manage_options')) {
+        if (!self::is_captain($team->id, $user_id) && !RSL_Access::can($user_id)) {
             return new WP_Error('rsl_not_captain', 'Only the captain can enter the team again.');
         }
         if ($team->status !== 'active') {

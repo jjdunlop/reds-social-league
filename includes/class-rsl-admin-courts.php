@@ -6,7 +6,7 @@
  *  - Season calendar: the season's dates and game lengths, then a grid of
  *    game nights × venues; click a night to see it as a timeline of courts
  *    and slots, change it for that night only, or copy it forward.
- * Every change posts to admin-post.php (nonce + manage_options) and
+ * Every change posts to admin-post.php (nonce + RSL_Access::can()) and
  * redirects back with a notice.
  */
 
@@ -24,7 +24,7 @@ class RSL_Admin_Courts {
     }
 
     public function menu() {
-        add_submenu_page(RSL_Admin::PAGE, 'Courts & Nights', 'Courts & Nights', 'manage_options', self::PAGE, array($this, 'render'));
+        add_submenu_page(RSL_Admin::PAGE, 'Courts & Nights', 'Courts & Nights', RSL_Access::CAP, self::PAGE, array($this, 'render'));
     }
 
     public function handle() {
@@ -39,7 +39,7 @@ class RSL_Admin_Courts {
     /** One action from posted fields; returns where to go back to. Testable. */
     public static function process($post) {
         $season = isset($post['season']) && RSL_Seasons::is_valid($post['season']) ? $post['season'] : RSL_Seasons::current();
-        if (!current_user_can('manage_options') || !isset($post['rsl_nonce']) || !wp_verify_nonce($post['rsl_nonce'], 'rsl_courts_action')) {
+        if (!RSL_Access::can() || !isset($post['rsl_nonce']) || !wp_verify_nonce($post['rsl_nonce'], 'rsl_courts_action')) {
             self::notice('error', 'Security check failed — please try again.');
             return self::url();
         }
@@ -153,7 +153,7 @@ class RSL_Admin_Courts {
     // ------------------------------------------------------------------
 
     public function render() {
-        if (!current_user_can('manage_options')) {
+        if (!RSL_Access::can()) {
             return;
         }
         $tab = isset($_GET['tab']) && $_GET['tab'] === 'venues' ? 'venues' : 'calendar';

@@ -651,7 +651,7 @@ class RSL_Public_Fixtures {
             $by_night[intval($g->night_id)][] = $g;
         }
         $user_id = get_current_user_id();
-        $captain = $user_id && (RSL_Teams::is_captain($team->id, $user_id) || current_user_can('manage_options'));
+        $captain = $user_id && (RSL_Teams::is_captain($team->id, $user_id) || RSL_Access::can());
         // Requests are the team's business: only its members (and admins) see them.
         $insider = $captain || ($user_id && RSL_Teams::is_member($team->id, $user_id));
         $requests = $insider ? RSL_Requests::for_team($team->id) : array();
@@ -707,7 +707,7 @@ class RSL_Public_Fixtures {
                                         $start = RSL_Officials::night_start($n);
                                         $too_late = ($start && current_time('timestamp') >= $start)
                                             || array_filter($mine, function ($x) { return $x->status !== 'scheduled'; });
-                                        if ($captain && $req->status === 'active' && (!$too_late || current_user_can('manage_options'))) {
+                                        if ($captain && $req->status === 'active' && (!$too_late || RSL_Access::can())) {
                                             echo $button('cancel_request', 'We can make it after all', $n, array('request_id' => $req->id));
                                         }
                                     } elseif ($captain && $r['outcome'] === 'pending') {

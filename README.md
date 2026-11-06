@@ -6,6 +6,56 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## A Social League admin role (0.22.0)
+
+Until now every Social League screen and every league admin power on the
+website needed `manage_options`, so running the league meant being a full
+WordPress Administrator. Club decision, 6 Nov 2026: trusted people (Team
+Balances included) get the league and nothing else.
+
+- **The role.** `rsl_league_admin`, shown as Social League admin, holds
+  `read`, `rsl_manage_league` (`RSL_Access::CAP`) and `view_admin_dashboard`
+  (WooCommerce's wp-admin gate). `RSL_Access::ensure_role()` makes it on
+  `init`, adds back a capability it has lost, and never removes it.
+  Ultimate Member lets anyone holding the capability into wp-admin
+  (`um_user_permissions_filter` sets `can_access_wpadmin`), and while nobody
+  has set the role up in Ultimate Member its priority is -1, so it never
+  becomes a member's priority role. Administrators hold the capability
+  through a `user_has_cap` filter (anyone with `manage_options`), so nothing
+  is stored for them and every screen works for them as before.
+- **What it opens.** Every Social League screen and its actions (Teams,
+  Registration, Courts & Nights, Fixtures, Refs & Supervisors, Team Balances,
+  Free Agents), and on the website what an admin could already do for any
+  team: night requests, the roster and captain tools on its team page, its
+  balance card and top-up, any game's score, and no daily limit on email
+  invites. `RSL_Access::can()` is the one check, in the screens and in the
+  data classes' captain-or-admin rules, and every Social League menu's
+  capability is `RSL_Access::CAP`. A league admin who opens the Dashboard
+  goes to the Teams screen. They get nothing else in WordPress.
+- **Who holds it.** Social League > League admins is for administrators only
+  (`manage_options` and `promote_users`, on the screen and every action). It
+  lists each league admin's name and email with Remove, and adds one by email
+  or login. Adding uses `add_role()` and removing `remove_role()`, so the
+  person's member roles stay. An unknown account gets "No account has that
+  email address or login." and an administrator "X is an administrator, so
+  already has the Social League screens." The Role dropdown on Users > Edit
+  replaces every role, so the screen says "Changing someone's role on
+  Users > Edit can remove this role; add it again here if that happens."
+  League admins don't see the admin bar on the website (WooCommerce hides
+  it from accounts that can't edit posts), so the screen gives the Teams
+  screen's link to send them.
+- **Account merges.** The role lives in the account's own roles, not in a
+  league table, so `RSL_Merge` lists nothing new. The Club Manager's merge
+  keeps the kept account's roles and won't merge away an account holding a
+  role other than the member roles.
+
+Every `manage_options` check in `includes/` that guarded league work (45,
+counting the six file comments that named it) now reads the new capability.
+The only ones left are in `RSL_Access`: the grant, the Dashboard rule (an
+administrator stays on the Dashboard) and the League admins screen's checks.
+Tests: `dev/tests/test-league-admin.php`, which also fails if any other file
+in `includes/` contains `manage_options`.
+
 ## Enter the team again for the next season (0.21.0)
 
 Seasons run back to back (2027: Pre-season 24 Jan to 21 Mar, Mid-season 1

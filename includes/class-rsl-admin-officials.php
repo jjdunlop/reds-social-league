@@ -7,7 +7,7 @@
  *    before a night refs can still drop a job; most games per ref per night.
  *  - Pay report for a date range (nights that have happened), with a CSV
  *    for the treasurer.
- * Every change posts to admin-post.php (nonce + manage_options).
+ * Every change posts to admin-post.php (nonce + RSL_Access::can()).
  */
 
 if (!defined('ABSPATH')) {
@@ -25,7 +25,7 @@ class RSL_Admin_Officials {
     }
 
     public function menu() {
-        add_submenu_page(RSL_Admin::PAGE, 'Refs & Supervisors', 'Refs & Supervisors', 'manage_options', self::PAGE, array($this, 'render'));
+        add_submenu_page(RSL_Admin::PAGE, 'Refs & Supervisors', 'Refs & Supervisors', RSL_Access::CAP, self::PAGE, array($this, 'render'));
     }
 
     public function handle() {
@@ -39,7 +39,7 @@ class RSL_Admin_Officials {
 
     /** One action from posted fields; returns where to go back to. Testable. */
     public static function process($post) {
-        if (!current_user_can('manage_options') || !isset($post['rsl_nonce']) || !wp_verify_nonce($post['rsl_nonce'], 'rsl_officials_action')) {
+        if (!RSL_Access::can() || !isset($post['rsl_nonce']) || !wp_verify_nonce($post['rsl_nonce'], 'rsl_officials_action')) {
             self::notice('error', 'Security check failed — please try again.');
             return self::url();
         }
@@ -122,7 +122,7 @@ class RSL_Admin_Officials {
     }
 
     public function csv() {
-        if (!current_user_can('manage_options') || !isset($_GET['_wpnonce']) || !wp_verify_nonce($_GET['_wpnonce'], 'rsl_officials_csv')) {
+        if (!RSL_Access::can() || !isset($_GET['_wpnonce']) || !wp_verify_nonce($_GET['_wpnonce'], 'rsl_officials_csv')) {
             wp_die('Security check failed.');
         }
         list($from, $to) = self::range();
@@ -159,7 +159,7 @@ class RSL_Admin_Officials {
     // ------------------------------------------------------------------
 
     public function render() {
-        if (!current_user_can('manage_options')) {
+        if (!RSL_Access::can()) {
             return;
         }
         $post = admin_url('admin-post.php');

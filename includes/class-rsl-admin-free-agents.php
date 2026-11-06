@@ -13,7 +13,7 @@
  *    stale tab is refused instead of quietly overwriting the first.
  *  - Settings: the free agent rules, this season's date overrides, and the
  *    sign-up season pin.
- * Every change posts to admin-post.php (nonce + manage_options) and
+ * Every change posts to admin-post.php (nonce + RSL_Access::can()) and
  * redirects back with a notice. Names, emails and the admin-only fields
  * appear here because only admins see this screen — none of it reaches
  * captains (they only ever get RSL_Free_Agents::browse_for_captain()).
@@ -36,9 +36,9 @@ class RSL_Admin_Free_Agents {
     }
 
     public function menu() {
-        $n = current_user_can('manage_options') ? self::waiting_count() : 0;
+        $n = RSL_Access::can() ? self::waiting_count() : 0;
         $bubble = $n ? ' <span class="awaiting-mod">' . intval($n) . '</span>' : '';
-        add_submenu_page(RSL_Admin::PAGE, 'Free Agents', 'Free Agents' . $bubble, 'manage_options', self::PAGE, array($this, 'render'));
+        add_submenu_page(RSL_Admin::PAGE, 'Free Agents', 'Free Agents' . $bubble, RSL_Access::CAP, self::PAGE, array($this, 'render'));
     }
 
     /**
@@ -80,7 +80,7 @@ class RSL_Admin_Free_Agents {
         $tab = isset(self::TABS[$tab]) ? $tab : 'overview';
         $back = self::url(array('season' => $season, 'tab' => $tab));
 
-        if (!current_user_can('manage_options') || !isset($post['rsl_nonce']) || !wp_verify_nonce($post['rsl_nonce'], self::ACTION)) {
+        if (!RSL_Access::can() || !isset($post['rsl_nonce']) || !wp_verify_nonce($post['rsl_nonce'], self::ACTION)) {
             self::notice('error', 'Security check failed — please try again.');
             return $back;
         }
@@ -524,7 +524,7 @@ class RSL_Admin_Free_Agents {
     // ------------------------------------------------------------------
 
     public function render() {
-        if (!current_user_can('manage_options')) {
+        if (!RSL_Access::can()) {
             return;
         }
         $season = isset($_GET['season']) && is_scalar($_GET['season']) ? sanitize_text_field(wp_unslash($_GET['season'])) : '';

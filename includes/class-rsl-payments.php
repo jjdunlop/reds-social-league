@@ -422,7 +422,7 @@ class RSL_Payments {
     /** Put a top-up in the cart; returns the checkout URL or WP_Error. Only the team's members (or admins). */
     public static function start_topup($team_id, $user_id, $amount) {
         $team = RSL_Teams::get($team_id);
-        if (!$team || (!RSL_Teams::is_member($team->id, $user_id) && !user_can($user_id, 'manage_options'))) {
+        if (!$team || (!RSL_Teams::is_member($team->id, $user_id) && !RSL_Access::can($user_id))) {
             return new WP_Error('rsl_money', 'Only players on the team can top up its balance.');
         }
         $amount = round((float) $amount, 2);
@@ -782,7 +782,7 @@ class RSL_Payments {
 
     public static function team_card($team) {
         $user_id = get_current_user_id();
-        $admin = current_user_can('manage_options');
+        $admin = RSL_Access::can();
         if (!$user_id || (!RSL_Teams::is_member($team->id, $user_id) && !$admin)) {
             return '';
         }

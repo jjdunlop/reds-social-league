@@ -535,7 +535,7 @@ class RSL_Portal {
         // Night requests and the captain's tools come from the team page: back there ($back_to), even on a refusal.
         // Captain tools: the person must captain THIS team (or be a league admin).
         $team = RSL_Teams::get(isset($post['team_id']) ? intval($post['team_id']) : 0);
-        if (!$team || !(RSL_Teams::is_captain($team->id, $user_id) || user_can($user_id, 'manage_options'))) {
+        if (!$team || !(RSL_Teams::is_captain($team->id, $user_id) || RSL_Access::can($user_id))) {
             self::flash('error', 'Only the team captain can do that.');
             return $back_to;
         }
@@ -1440,7 +1440,7 @@ class RSL_Portal {
      */
     public static function team_tools($team, $user_id) {
         $user_id = intval($user_id);
-        if (!$user_id || !(RSL_Teams::is_member($team->id, $user_id) || user_can($user_id, 'manage_options'))) {
+        if (!$user_id || !(RSL_Teams::is_member($team->id, $user_id) || RSL_Access::can($user_id))) {
             return '';
         }
         $is_captain = RSL_Teams::is_captain($team->id, $user_id);

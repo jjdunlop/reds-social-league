@@ -35,7 +35,7 @@ class RSL_Requests {
         if (!isset(self::TYPES[$type]) || $type === 'unpaid') {
             return new WP_Error('rsl_request', 'Unknown request.');
         }
-        if (!RSL_Teams::is_captain($team->id, $user_id) && !user_can($user_id, 'manage_options')) {
+        if (!RSL_Teams::is_captain($team->id, $user_id) && !RSL_Access::can($user_id)) {
             return new WP_Error('rsl_captain', 'Only the team captain can do that.');
         }
         if ($night->type !== 'regular') {
@@ -87,7 +87,7 @@ class RSL_Requests {
     public static function cancel($request_id, $user_id) {
         global $wpdb;
         $req = self::get($request_id);
-        $admin = user_can($user_id, 'manage_options');
+        $admin = RSL_Access::can($user_id);
         if (!$req || !($req->status === 'active' || ($admin && $req->type === 'cant_make' && $req->status === 'handled'))) {
             return new WP_Error('rsl_request', 'That request is no longer open.');
         }

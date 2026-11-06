@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Reds Social League
  * Description: MURVC's social volleyball league: player registration and social rego, captain team applications, invites and rosters, courts and game nights, fixtures, results, ratings and ladders.
- * Version: 0.21.0
+ * Version: 0.22.0
  * Author: MURVC
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -13,11 +13,12 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('RSL_VERSION', '0.21.0');
+define('RSL_VERSION', '0.22.0');
 define('RSL_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('RSL_PLUGIN_URL', plugin_dir_url(__FILE__));
 
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-database.php';
+require_once RSL_PLUGIN_DIR . 'includes/class-rsl-access.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-seasons.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-players.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-rego.php';
@@ -99,6 +100,9 @@ function rsl_init() {
         add_action('init', 'rsl_ensure_pages_and_routes', 99);
     }
     add_action('init', 'rsl_schedule_cron');
+    // The Social League admin role and its capability (0.22.0): before
+    // anything checks it, and before the admin screens add their menus.
+    RSL_Access::register_hooks();
     // The Club Manager's account merges: hooked here, before any admin
     // page or admin-post request can preview or run one.
     RSL_Merge::init();
