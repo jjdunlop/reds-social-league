@@ -964,8 +964,8 @@ class RSL_Public_Fixtures {
             .rsl-odds-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--rsl-border); }
             .rsl-odds-bar span { display: block; height: 100%; opacity: .85; }
             .rsl-odds-label { grid-column: 1 / -1; text-align: center; color: var(--rsl-muted); font-size: 11px; }
-            .rsl-form { display: inline-flex; gap: 3px; }
-            .rsl-form span { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 4px; font-size: 10px; font-weight: 800; color: #fff; }
+            .rsl-form:not(form) { display: inline-flex; gap: 3px; } /* the form guide; never a <form class=rsl-form> (0.20.0: the captain's forms are on this page) */
+            .rsl-form:not(form) span { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 4px; font-size: 10px; font-weight: 800; color: #fff; }
             .rsl-form-w { background: #2e7d32; }
             .rsl-form-l { background: #b32d2e; }
             .rsl-form-d { background: #8a8f98; }
@@ -991,6 +991,10 @@ class RSL_Public_Fixtures {
                 .rsl-game-court { flex: none; }
                 .rsl-score { min-width: 56px; }
                 .rsl-game .rsl-badge-small { display: none; }
+                .rsl-schedule td:first-child { white-space: nowrap; }
+                .rsl-schedule .rsl-result { white-space: normal; width: 1%; }
+                .rsl-schedule .rsl-req-form { display: block; margin: 0 0 6px; }
+                .rsl-schedule .rsl-req-btn { width: 100%; white-space: nowrap; }
             }
         </style>';
     }

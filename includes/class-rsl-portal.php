@@ -1336,7 +1336,7 @@ class RSL_Portal {
 
                 <h3 class="rsl-division">Add players</h3>
                 <p class="rsl-hint">Send this to your players. Anyone who opens the link can register and join straight away:</p>
-                <textarea class="rsl-invite" rows="3" aria-label="Message for your players"><?php echo esc_textarea(self::invite_message($team)); ?></textarea>
+                <textarea class="rsl-invite" rows="4" aria-label="Message for your players"><?php echo esc_textarea(self::invite_message($team)); ?></textarea>
                 <div class="rsl-row">
                     <button type="button" class="rsl-btn rsl-btn-secondary" onclick="var t=this.parentNode.previousElementSibling;t.select();if(navigator.clipboard){navigator.clipboard.writeText(t.value);}else{document.execCommand('copy');}this.textContent='Copied';">Copy message</button>
                 </div>
@@ -1435,7 +1435,8 @@ class RSL_Portal {
             .rsl-status { font-size: 13px; font-weight: 600; }
             .rsl-ok { color: #1e6b2a; } .rsl-no { color: #b32d2e; } .rsl-unknown { color: var(--rsl-muted); }
             .rsl-team-open { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin: 12px 0 4px; }
-            .rsl-team-tools { margin: 18px 0; }
+            .rsl-portal.rsl-team-tools { margin: 18px 0; max-width: none; }
+            .rsl-portal a.rsl-btn { text-decoration: none; }
             .rsl-portal textarea.rsl-invite { display: block; width: 100%; padding: 7px 9px; margin: 4px 0 0; border: 1px solid #c3c8d0; border-radius: 4px; box-sizing: border-box; font: inherit; resize: vertical; }
             .rsl-portal .rsl-badge { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 44px; height: 44px; border-radius: 50%; color: #fff; font-weight: 700; font-size: 16px; }
             .rsl-portal .rsl-team-head { display: flex; align-items: center; gap: 12px; }
