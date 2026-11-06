@@ -14,6 +14,11 @@ Sign up and join here: LINK", in a box the captain can edit. Copy message
 copies what's in the box. `RSL_Portal::invite_message()` is the one place
 the wording lives. The emails keep their own link wording.
 
+The card's link to the team page says what's there (a captain's reads
+Top up, see fixtures or request a week off; a player's Top up or see
+fixtures), and the season schedule's buttons read Request week off and
+Request two games.
+
 ## Places in each division and a waiting list (0.19.0)
 
 - **The rule** (the club's, 5 Nov 2026). A division takes at most as many

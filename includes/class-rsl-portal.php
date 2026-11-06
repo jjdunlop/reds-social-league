@@ -1193,7 +1193,7 @@ class RSL_Portal {
             <p class="rsl-balance-line <?php echo RSL_Payments::blocked($team->id) ? 'is-blocked' : ($bal < 0 ? 'is-owing' : ''); ?>">
                 <strong>Team balance: <?php echo $bal < 0 ? 'owes ' . esc_html(RSL_Payments::money(-$bal)) : esc_html(RSL_Payments::money($bal)) . ($bal > 0 ? ' credit' : ''); ?></strong>
                 <?php if (RSL_Payments::blocked($team->id)): ?> — not fixtured until it's paid down.<?php endif; ?>
-                <a href="<?php echo esc_url(RSL_Public::team_url($team)); ?>">Top up &rarr;</a>
+                <a href="<?php echo esc_url(RSL_Public::team_url($team)); ?>"><?php echo $is_captain ? 'Top up, see fixtures or request a week off' : 'Top up or see fixtures'; ?> &rarr;</a>
             </p>
 
             <h4>Players (<?php echo count($members); ?>)</h4>

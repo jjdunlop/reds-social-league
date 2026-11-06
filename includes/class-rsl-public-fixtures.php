@@ -764,8 +764,8 @@ class RSL_Public_Fixtures {
                                 <?php if ($req && in_array($req->type, array('off', 'double'), true)): ?>
                                     <?php echo $button('cancel_request', 'Withdraw request', $n, array('request_id' => $req->id)); ?>
                                 <?php else: ?>
-                                    <?php echo $button('request_off', 'Week off', $n); ?>
-                                    <?php echo $button('request_double', 'Two games', $n); ?>
+                                    <?php echo $button('request_off', 'Request week off', $n); ?>
+                                    <?php echo $button('request_double', 'Request two games', $n); ?>
                                 <?php endif; ?>
                             <?php endif; ?>
                         </td>
