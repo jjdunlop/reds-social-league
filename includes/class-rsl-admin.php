@@ -146,6 +146,11 @@ class RSL_Admin {
                 return $back;
 
             case 'save_rego_product':
+                // The rego products are the shop's: only an administrator chooses them (0.22.0).
+                if (!RSL_Access::may_choose_products()) {
+                    self::notice('error', 'Only an administrator can choose the rego products.');
+                    return admin_url('admin.php?page=' . self::REG_PAGE);
+                }
                 $year_id = isset($post['product_id']) ? intval($post['product_id']) : 0;
                 // Only when posted: a page opened before 0.15.0 doesn't clear it.
                 $season_posted = isset($post['season_product_id']);
@@ -619,7 +624,9 @@ class RSL_Admin {
         $season_product_id = RSL_Rego::season_product_id();
         $today = current_time('Y-m-d');
         $open = RSL_Seasons::open_for_signup();
-        $products = function_exists('wc_get_products') ? wc_get_products(array('status' => 'publish', 'limit' => 300, 'orderby' => 'title', 'order' => 'ASC')) : array();
+        // The rego product pickers are for administrators only (0.22.0); a league admin sees the products.
+        $choose = RSL_Access::may_choose_products();
+        $products = $choose && function_exists('wc_get_products') ? wc_get_products(array('status' => 'publish', 'limit' => 300, 'orderby' => 'title', 'order' => 'ASC')) : array();
         echo '<div class="wrap"><h1>Social League — Registration</h1>' . self::take_notice();
         ?>
         <p><strong><?php echo intval(RSL_Players::count()); ?></strong> players registered &middot; <strong><?php echo intval(RSL_Rego::count_current()); ?></strong> with a current social rego. Full and life club members are covered without a rego.</p>
@@ -629,6 +636,10 @@ class RSL_Admin {
 
         <h2>Rego products</h2>
         <p class="description">The WooCommerce products players buy. A season rego (<?php echo esc_html(RSL_Rego::price_label('season')); ?>) covers one season, which the player chooses on the league page from the seasons open for sign-up: from its first game night (or the payment date, if later) to its last. A season with no game nights set yet covers its quarter (January to March, and so on). A player already covered for every game night of a season can't buy it. A yearly rego (<?php echo esc_html(RSL_Rego::price_label()); ?>) gives 12 months from the payment date; renewing early starts when the current rego ends. Choose either or both: the league page offers whichever are set, season first. Use simple products with no extra required options. One rego goes in the cart at a time; a refunded or cancelled order ends its rego.</p>
+        <?php if (!$choose): ?>
+            <?php $named = function ($id) { return $id ? get_post_field('post_title', $id) . ' (#' . $id . ')' : 'Not set'; }; ?>
+            <p>Yearly rego product: <strong><?php echo esc_html($named($product_id)); ?></strong> &middot; Season rego product: <strong><?php echo esc_html($named($season_product_id)); ?></strong>. An administrator chooses the rego products.</p>
+        <?php else: ?>
         <form method="post" action="<?php echo esc_url($post_url); ?>" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
             <?php echo self::fields('save_rego_product', $season); ?>
             <label>Yearly rego product
@@ -647,6 +658,7 @@ class RSL_Admin {
             </select></label>
             <button type="submit" class="button button-primary">Save</button>
         </form>
+        <?php endif; ?>
         <?php if (!$product_id && !$season_product_id): ?>
             <p class="description">Neither is set: players can't pay online.</p>
         <?php endif; ?>

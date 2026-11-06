@@ -5,14 +5,18 @@
  * giving and removing the role keeps an account's other roles, the Ultimate
  * Member filters (called directly, so the test passes without Ultimate
  * Member), the Dashboard rule, real league admin work through the entry
- * points the screens use (a member refused each), the League admins screen
- * and its actions (administrators only), and a source check that nothing in
- * includes/ reads manage_options but RSL_Access's grant filter, its
- * Dashboard rule and the League admins checks.
+ * points the screens use (a member refused each), the shop's products left
+ * to administrators (Team Balances' top-up product, Registration's rego
+ * products), the League admins screen and its actions (administrators only),
+ * and a source check that nothing in includes/ reads manage_options but
+ * RSL_Access's grant filter, its Dashboard rule, the League admins checks and
+ * the products check.
  *
  *   wp eval-file dev/tests/test-league-admin.php
  *
- * Uses a far-future season and throwaway @example.test users; cleans up.
+ * Uses a far-future season, throwaway @example.test users and draft
+ * products; puts the product options and the Team Balances rules back as
+ * they were; cleans up.
  */
 
 if (!defined('WP_CLI') || !WP_CLI || (wp_get_environment_type() === 'production' && !getenv('RSL_DEV'))) {
@@ -34,15 +38,31 @@ $check = function ($label, $ok, $detail = '') use (&$fails, $hold) {
 };
 // Set before the try, so the cleanup can always run.
 $users = array();
+$posts = array();
 $no_promote = null;
+// The shop product options and the Team Balances rules, put back exactly as they were (null: there was none).
+$options_before = array();
+foreach (array(RSL_Payments::SETTINGS_OPTION, RSL_Payments::PRODUCT_OPTION, RSL_Rego::PRODUCT_OPTION, RSL_Rego::SEASON_PRODUCT_OPTION) as $o) {
+    $options_before[$o] = get_option($o, null);
+}
 $mk = function ($tag, $role = 'subscriber', $name = '') use ($suffix, &$users) {
     $u = wp_insert_user(array('user_login' => "rsla-$tag-$suffix", 'user_email' => "rsla-$tag-$suffix@example.test", 'user_pass' => wp_generate_password(),
         'display_name' => $name !== '' ? $name : "RSLA $tag $suffix", 'role' => $role));
-    if (is_int($u)) {
-        $users[] = $u;
-        rsl_dev_profile($u);
+    if (is_wp_error($u)) {
+        throw new Exception("Couldn't make the test account $tag: " . $u->get_error_message());
     }
+    $users[] = $u;
+    rsl_dev_profile($u);
     return $u;
+};
+// A draft product (never on sale), deleted in the cleanup.
+$mk_product = function ($tag) use ($suffix, &$posts) {
+    $id = wp_insert_post(array('post_type' => 'product', 'post_status' => 'draft', 'post_title' => "RSLA $tag product $suffix"), true);
+    if (is_wp_error($id) || !$id) {
+        throw new Exception("Couldn't make the test product $tag" . (is_wp_error($id) ? ': ' . $id->get_error_message() : '.'));
+    }
+    $posts[] = intval($id);
+    return intval($id);
 };
 $roles_of = function ($user_id) {
     $r = array_values((array) get_userdata($user_id)->roles);
@@ -75,6 +95,7 @@ $check('...and nothing that reaches the rest of WordPress', $role && !$role->has
 $names = wp_roles()->get_names();
 $check('its name is Social League admin', isset($names[RSL_Access::ROLE]) && $names[RSL_Access::ROLE] === 'Social League admin');
 $check('the capability is rsl_manage_league and the role rsl_league_admin', RSL_Access::CAP === 'rsl_manage_league' && RSL_Access::ROLE === 'rsl_league_admin');
+// This writes the shared roles option: for an instant the role lacks the capability, and the next line puts it back.
 $role->remove_cap('view_admin_dashboard');
 RSL_Access::ensure_role();
 $check('ensure_role() puts back a capability the role lost', get_role(RSL_Access::ROLE)->has_cap('view_admin_dashboard'));
@@ -103,12 +124,14 @@ if (get_role('customer')) {
 }
 $la_before = $roles_of($la);
 $other_before = $roles_of($other);
+$la_typed = "RSLA Bea & O'Neil $suffix"; // WordPress stores it HTML-escaped
 $la_name = RSL_Access::plain_name(get_userdata($la));
+$check('plain_name() gives the name as typed, not as WordPress stores it', $la_name === $la_typed, $la_name);
 $check('a plain member isn\'t a league admin', !RSL_Access::can($la) && !RSL_Access::can($member));
 $r = RSL_Access::give("rsla-la-$suffix@example.test", $admin);
 $check('give by email: the role is added', is_string($r) && in_array(RSL_Access::ROLE, $roles_of($la), true), is_wp_error($r) ? $r->get_error_message() : '');
 $check('...the account\'s other roles stay', array_values(array_diff($roles_of($la), array(RSL_Access::ROLE))) === $la_before, implode(',', $roles_of($la)));
-$check('...and the words name them as plain text', $r === $la_name . ' is now a Social League admin. Their other roles are unchanged.', (string) (is_string($r) ? $r : ''));
+$check('...and the words name them as plain text', $r === $la_typed . ' is now a Social League admin. Their other roles are unchanged.', (string) (is_string($r) ? $r : ''));
 $check('a league admin passes RSL_Access::can() and has no manage_options, edit_posts or promote_users',
     RSL_Access::can($la) && !user_can($la, 'manage_options') && !user_can($la, 'edit_posts') && !user_can($la, 'promote_users'));
 $check('...and has view_admin_dashboard (WooCommerce lets them into wp-admin)', user_can($la, 'view_admin_dashboard'));
@@ -117,11 +140,16 @@ $check('RSL_Access::can() with no argument is the current user', RSL_Access::can
 $check('...and a missing id is nobody, never the current user', !RSL_Access::can(null) && !RSL_Access::can(0));
 wp_set_current_user($admin);
 $check('giving it again says so', RSL_Access::give("rsla-la-$suffix", $admin) === $la_name . ' is already a Social League admin.');
+// Ultimate Member's saved copy of the profile, as it would be after a league admin's page view.
+update_option('um_cache_userdata_' . $la, array('can_access_wpadmin' => 1), false);
 $r = RSL_Access::revoke($la, $admin);
 $check('revoke: the role goes and every other role stays', $r === $la_name . ' is no longer a Social League admin. Their other roles are unchanged.' && $roles_of($la) === $la_before && !RSL_Access::can($la), implode(',', $roles_of($la)));
+$check('...and Ultimate Member\'s saved profile is cleared, so its wp-admin pass goes at once', get_option('um_cache_userdata_' . $la, 'gone') === 'gone');
 $check('revoking someone without it says so', RSL_Access::revoke($la, $admin) === $la_name . ' isn\'t a Social League admin.');
+update_option('um_cache_userdata_' . $la, array('can_access_wpadmin' => 0), false);
 $r = RSL_Access::give("rsla-la-$suffix", $admin);
 $check('give by login', is_string($r) && RSL_Access::can($la) && array_values(array_diff($roles_of($la), array(RSL_Access::ROLE))) === $la_before);
+$check('...which clears Ultimate Member\'s saved profile too', get_option('um_cache_userdata_' . $la, 'gone') === 'gone');
 $e = RSL_Access::give('', $admin);
 $check('nothing typed: a plain sentence', is_wp_error($e) && $e->get_error_message() === 'Type an email address or login.');
 $e = RSL_Access::give("nobody-$suffix@example.test", $admin);
@@ -239,6 +267,66 @@ $_GET = array();
 $check('the Teams, Registration and Team Balances screens open for a league admin, never for a member',
     strpos($teams_la, 'Social League — Teams') !== false && strpos($reg_la, 'Social League — Registration') !== false && strpos($pay_la, '<h1>Team Balances</h1>') !== false && $teams_m === '');
 
+// --- The shop's products stay with administrators -----------------------------------------------------
+$plain_product = $mk_product('plain');
+$rego_product = $mk_product('rego');
+$s_now = RSL_Payments::settings();
+$save_rules = function ($extra) use ($s_now) {
+    return RSL_Admin_Payments::process(array_merge(array('rsl_nonce' => wp_create_nonce('rsl_payments_action'), 'do' => 'save_settings', 'game_fee' => $s_now['game_fee'],
+        'free_cancel_hours' => $s_now['free_cancel_hours'], 'max_owing' => $s_now['max_owing'], 'contact_emails' => $s_now['contact_emails']), $extra));
+};
+$save_rego = function ($year_id, $season_id) use ($season) {
+    return RSL_Admin::process(array('rsl_nonce' => wp_create_nonce('rsl_team_action'), 'season' => $season, 'do' => 'save_rego_product', 'product_id' => $year_id, 'season_product_id' => $season_id));
+};
+$topup_before = RSL_Payments::product_id();
+$rego_before = array(RSL_Rego::product_id(), RSL_Rego::season_product_id());
+$check('a league admin may not choose the shop products, an administrator may', !RSL_Access::may_choose_products($la) && RSL_Access::may_choose_products($admin) && !RSL_Access::may_choose_products(0));
+wp_set_current_user($la);
+$save_rules(array('product_id' => $plain_product));
+$n = $notice();
+$check('Team Balances: a league admin saves the rules, and the top-up product they post is left as it was', RSL_Payments::product_id() === $topup_before
+    && $n['type'] === 'success', $n['message'] . ' / product ' . RSL_Payments::product_id());
+$save_rules(array());
+$n = $notice();
+$check('...as is a save with no product (never reset to 0)', RSL_Payments::product_id() === $topup_before && $n['type'] === 'success', $n['message']);
+$save_rego($plain_product, 0);
+$n = $notice();
+$check('Registration: a league admin can\'t choose the rego products', array(RSL_Rego::product_id(), RSL_Rego::season_product_id()) === $rego_before
+    && $n['type'] === 'error' && $n['message'] === 'Only an administrator can choose the rego products.', $n['message']);
+$check('...and their screens show the products without a picker', strpos($pay_la, 'name="product_id"') === false && strpos($pay_la, 'An administrator chooses the top-up product.') !== false
+    && strpos($reg_la, 'value="save_rego_product"') === false && strpos($reg_la, 'An administrator chooses the rego products.') !== false);
+wp_set_current_user($admin);
+$_GET = array('page' => RSL_Admin::REG_PAGE);
+$reg_admin = $screen(array(new RSL_Admin(), 'render_registration'));
+$_GET = array('page' => RSL_Admin_Payments::PAGE);
+$pay_admin = $screen(array(new RSL_Admin_Payments(), 'render'));
+$_GET = array();
+$check('...an administrator\'s have the pickers', strpos($pay_admin, 'name="product_id"') !== false && strpos($reg_admin, 'value="save_rego_product"') !== false
+    && strpos($pay_admin, 'An administrator chooses') === false && strpos($reg_admin, 'An administrator chooses') === false);
+$save_rules(array('product_id' => $plain_product));
+$n = $notice();
+$check('an administrator chooses the top-up product', RSL_Payments::product_id() === $plain_product && $n['type'] === 'success', $n['message']);
+update_option(RSL_Rego::SEASON_PRODUCT_OPTION, $rego_product, true); // put back in the cleanup
+$save_rules(array('product_id' => $rego_product, 'game_fee' => $s_now['game_fee'] + 1));
+$n = $notice();
+$check('...never a rego product, and then nothing is saved', RSL_Payments::product_id() === $plain_product && abs(RSL_Payments::settings()['game_fee'] - $s_now['game_fee']) < 0.001
+    && $n['type'] === 'error' && $n['message'] === 'The team top-up product can\'t be a rego product. Nothing was saved.', $n['message']);
+$check('...nor something that isn\'t a product', RSL_Payments::topup_product_problem(999999999) === 'Pick the top-up product from the list.' && RSL_Payments::topup_product_problem(0) === '');
+if (class_exists('TeamOversight_Memberships') && method_exists('TeamOversight_Memberships', 'get_product_mapping')) {
+    $mapped = $mk_product('mapped');
+    update_post_meta($mapped, TeamOversight_Memberships::PRODUCT_TIER_META, TeamOversight_Memberships::TIER_FULL);
+    update_post_meta($mapped, TeamOversight_Memberships::PRODUCT_TERM_META, 12);
+    $save_rules(array('product_id' => $mapped));
+    $n = $notice();
+    $check('...nor a product the Club Manager gives a club membership for', RSL_Rego::grants_membership($mapped) && !RSL_Rego::grants_membership($plain_product) && RSL_Payments::product_id() === $plain_product
+        && $n['message'] === "RSLA mapped product $suffix (#$mapped) gives a club membership in the Club Manager, so it can't be the top-up product. Nothing was saved.", $n['message']);
+} else {
+    echo "SKIP: a product the Club Manager gives a membership for (needs the Club Manager)\n";
+}
+$save_rego($rego_before[0], $rego_before[1]);
+$n = $notice();
+$check('an administrator saves the rego products', array(RSL_Rego::product_id(), RSL_Rego::season_product_id()) === $rego_before && $n['message'] === 'Rego products saved.', $n['message']);
+
 // --- The League admins screen: administrators only ---------------------------------------------------------
 $act = function ($fields) {
     return RSL_Access::process(array_merge(array('rsl_nonce' => wp_create_nonce(RSL_Access::ACTION)), $fields));
@@ -253,8 +341,10 @@ $n = $notice();
 $check('...and so is their Remove (they keep the role)', RSL_Access::can($la) && $n['type'] === 'error');
 $check('...and the screen shows them nothing', $screen(array('RSL_Access', 'render')) === '');
 wp_set_current_user($member);
-$act(array('do' => 'add', 'who' => "rsla-member-$suffix"));
-$check('...a member is refused too', !RSL_Access::can($member));
+$to = $act(array('do' => 'add', 'who' => "rsla-member-$suffix"));
+$n = $notice();
+$check('...a member is refused too, back to the Teams screen with the same sentence', !RSL_Access::can($member) && !in_array(RSL_Access::ROLE, $roles_of($member), true)
+    && $to === admin_url('admin.php?page=' . RSL_Admin::PAGE) && $n['type'] === 'error' && $n['message'] === RSL_Access::NOT_ALLOWED, $n['message']);
 
 wp_set_current_user($admin);
 RSL_Access::process(array('rsl_nonce' => 'bogus', 'do' => 'add', 'who' => "rsla-other-$suffix"));
@@ -273,8 +363,8 @@ $act(array('do' => 'add', 'who' => "nobody-$suffix"));
 $n = $notice();
 $check('...nor an unknown account', $n['type'] === 'error' && $n['message'] === 'No account has that email address or login.');
 $html = $screen(array('RSL_Access', 'render'));
-$check('the screen lists each league admin by name and email, with Remove', strpos($html, esc_html($la_name)) !== false && strpos($html, "rsla-la-$suffix@example.test") !== false
-    && strpos($html, esc_html($other_name)) !== false && strpos($html, 'value="remove"') !== false && strpos($html, '&amp;amp;') === false);
+$check('the screen lists each league admin by name (as typed, escaped once) and email, with Remove', strpos($html, esc_html($la_typed)) !== false && strpos($html, "rsla-la-$suffix@example.test") !== false
+    && strpos($html, esc_html($other_name)) !== false && strpos($html, 'value="remove"') !== false);
 $check('...the Add form and the line about Users > Edit', strpos($html, 'name="who"') !== false && strpos($html, 'value="' . RSL_Access::ACTION . '"') !== false
     && strpos($html, "Changing someone's role on Users &gt; Edit can remove this role; add it again here if that happens.") !== false);
 $act(array('do' => 'remove', 'user_id' => $other));
@@ -317,8 +407,8 @@ foreach (token_get_all((string) file_get_contents($dir . 'class-rsl-access.php')
     }
 }
 sort($where);
-$check('...and in class-rsl-access.php only the grant filter, the Dashboard rule and the League admins checks (menu, may_change, give) read it',
-    $where === array('dashboard_target', 'give', 'grant_admins', 'may_change', 'menu'), implode(', ', $where));
+$check('...and in class-rsl-access.php only the grant filter, the Dashboard rule, the League admins checks (menu, may_change, give) and the products check (may_choose_products) read it',
+    $where === array('dashboard_target', 'give', 'grant_admins', 'may_change', 'may_choose_products', 'menu'), implode(', ', $where));
 $body = function ($method) {
     $m = new ReflectionMethod('RSL_Access', $method);
     return implode('', array_slice(file($m->getFileName()), $m->getStartLine() - 1, $m->getEndLine() - $m->getStartLine() + 1));
@@ -368,6 +458,19 @@ $settings = get_option(RSL_Courts::SETTINGS_OPTION, array());
 if (is_array($settings) && isset($settings[$season])) {
     unset($settings[$season]);
     update_option(RSL_Courts::SETTINGS_OPTION, $settings, false);
+}
+foreach ($options_before as $o => $v) {
+    if ($v === null) {
+        delete_option($o);
+    } else {
+        update_option($o, $v);
+    }
+}
+foreach ($posts as $pid) {
+    wp_delete_post($pid, true);
+}
+foreach ($users as $uid) {
+    delete_option('um_cache_userdata_' . intval($uid));
 }
 rsl_dev_delete_users($users);
 rsl_dev_release_mail($hold);

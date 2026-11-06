@@ -94,6 +94,31 @@ class RSL_Payments {
         return intval(get_option(self::PRODUCT_OPTION));
     }
 
+    /**
+     * Why a product can't be the top-up product, or '' (0, not set, is fine).
+     * The amount a player chooses replaces its price, so it must be a product
+     * (not a variation), not a rego product (the past-order scan would read its
+     * orders as regos) and not one the Club Manager gives a club membership for
+     * (a top-up of any amount would buy the membership). Only an administrator
+     * chooses it (RSL_Access::may_choose_products(), 0.22.0).
+     */
+    public static function topup_product_problem($product_id) {
+        $product_id = intval($product_id);
+        if ($product_id <= 0) {
+            return '';
+        }
+        if (get_post_type($product_id) !== 'product') {
+            return 'Pick the top-up product from the list.';
+        }
+        if ($product_id === RSL_Rego::product_id() || $product_id === RSL_Rego::season_product_id()) {
+            return 'The team top-up product can\'t be a rego product.';
+        }
+        if (RSL_Rego::grants_membership($product_id)) {
+            return get_post_field('post_title', $product_id) . ' (#' . $product_id . ') gives a club membership in the Club Manager, so it can\'t be the top-up product.';
+        }
+        return '';
+    }
+
     // ------------------------------------------------------------------
     // Balances
     // ------------------------------------------------------------------

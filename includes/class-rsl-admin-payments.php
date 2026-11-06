@@ -3,7 +3,9 @@
  * Admin: Social League → Team Balances.
  *  - Rules: game fee, how long before a night "can't make it" is free,
  *    how much a team may owe and still be fixtured; the WooCommerce
- *    product used for top-ups; who's emailed about "can't make it"s.
+ *    product used for top-ups (chosen by an administrator only,
+ *    RSL_Access::may_choose_products(); a league admin sees it read-only);
+ *    who's emailed about "can't make it"s.
  *  - Every team's balance (most owing first), and one team's full history
  *    with credits / charges (cash paid, refunds, corrections) with a note.
  *  - Earlier seasons' balances not yet cleared, each with "carry it to
@@ -48,13 +50,25 @@ class RSL_Admin_Payments {
         $do = isset($post['do']) ? sanitize_key($post['do']) : '';
         switch ($do) {
             case 'save_settings':
+                // The top-up product is the shop's: only an administrator chooses it (0.22.0). A league admin's
+                // form has no picker, and a save that doesn't set it (a product posted by anyone else included)
+                // leaves it as it is, never 0. One the top-up can't be saves nothing.
+                $set_product = isset($post['product_id']) && RSL_Access::may_choose_products();
+                $product_id = $set_product ? max(0, intval($post['product_id'])) : 0;
+                $problem = $set_product ? RSL_Payments::topup_product_problem($product_id) : '';
+                if ($problem !== '') {
+                    self::notice('error', $problem . ' Nothing was saved.');
+                    return $back;
+                }
                 RSL_Payments::save_settings(array(
                     'game_fee' => isset($post['game_fee']) ? $post['game_fee'] : 75,
                     'free_cancel_hours' => isset($post['free_cancel_hours']) ? $post['free_cancel_hours'] : 48,
                     'max_owing' => isset($post['max_owing']) ? $post['max_owing'] : 75,
                     'contact_emails' => isset($post['contact_emails']) ? sanitize_text_field(wp_unslash($post['contact_emails'])) : '',
                 ));
-                update_option(RSL_Payments::PRODUCT_OPTION, isset($post['product_id']) ? intval($post['product_id']) : 0, true);
+                if ($set_product) {
+                    update_option(RSL_Payments::PRODUCT_OPTION, $product_id, true);
+                }
                 self::notice('success', 'Saved. A new game fee applies to fixtures published from now on.');
                 return $back;
             case 'adjust':
@@ -122,7 +136,9 @@ class RSL_Admin_Payments {
         $season = RSL_Seasons::current();
         $s = RSL_Payments::settings();
         $rows = RSL_Payments::season_balances($season);
-        $products = function_exists('wc_get_products') ? wc_get_products(array('status' => array('publish', 'private'), 'limit' => 300, 'orderby' => 'title', 'order' => 'ASC')) : array();
+        // The top-up product picker is for administrators only (0.22.0); a league admin sees the product.
+        $choose = RSL_Access::may_choose_products();
+        $products = $choose && function_exists('wc_get_products') ? wc_get_products(array('status' => array('publish', 'private'), 'limit' => 300, 'orderby' => 'title', 'order' => 'ASC')) : array();
         $owed = array_sum(array_map(function ($r) { return max(0, -$r->balance); }, $rows));
         $credit = array_sum(array_map(function ($r) { return max(0, $r->balance); }, $rows));
         ?>
@@ -201,6 +217,7 @@ class RSL_Admin_Payments {
             <label>Not fixtured when owing more than $<input type="number" name="max_owing" min="0" step="1" value="<?php echo esc_attr($s['max_owing']); ?>"></label>
             <label>League contact email(s) <input type="text" name="contact_emails" value="<?php echo esc_attr($s['contact_emails']); ?>" placeholder="<?php echo esc_attr(get_option('admin_email')); ?>" style="width: 300px;"></label>
             <span class="description">Who's emailed straight away when a team says it can't make it (separate several with commas). Empty: the site admin email. These addresses are also the reply address on every league email, so players see them: use a league address, not a personal one.</span>
+            <?php if ($choose): ?>
             <label>Top-up product
                 <select name="product_id">
                     <option value="0">— Not set: teams can't pay online —</option>
@@ -208,6 +225,10 @@ class RSL_Admin_Payments {
                         <option value="<?php echo intval($p->get_id()); ?>" <?php selected(RSL_Payments::product_id(), $p->get_id()); ?>><?php echo esc_html($p->get_name() . ' (#' . $p->get_id() . ')'); ?></option>
                     <?php endforeach; ?>
                 </select></label>
+            <?php else: ?>
+                <?php $topup = RSL_Payments::product_id(); ?>
+                <span>Top-up product: <strong><?php echo $topup ? esc_html(get_post_field('post_title', $topup) . ' (#' . $topup . ')') : 'Not set: teams can\'t pay online'; ?></strong>. An administrator chooses the top-up product.</span>
+            <?php endif; ?>
             <button class="button button-primary">Save</button>
         </form>
         <p class="description">The top-up product is a placeholder: a simple, virtual product (any price, e.g. $1), <strong>Published</strong> with Catalog visibility set to <strong>Hidden</strong> — a Private product can't be bought by players. The amount a player chooses replaces its price at checkout — GST included, so a $75 top-up costs exactly $75 — and the payment is credited to their team.</p>

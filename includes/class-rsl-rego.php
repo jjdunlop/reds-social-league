@@ -84,6 +84,22 @@ class RSL_Rego {
     }
 
     /**
+     * Does the Club Manager give a club membership for this product (its
+     * product or category mapping, any tier)? False without the Club
+     * Manager's mapping reader. Read only; the top-up product can't be one
+     * (RSL_Payments::topup_product_problem(), 0.22.0).
+     */
+    public static function grants_membership($product_id) {
+        $product_id = intval($product_id);
+        if ($product_id <= 0 || !class_exists('TeamOversight_Memberships') || !method_exists('TeamOversight_Memberships', 'get_product_mapping')) {
+            return false;
+        }
+        // The Club Manager's constructor adds its hooks for its first instance only, so another one is harmless.
+        $memberships = new TeamOversight_Memberships();
+        return (bool) $memberships->get_product_mapping($product_id);
+    }
+
+    /**
      * The unbroken run of regos covering $date: array('from' => the start of the row that
      * began it, 'until' => its last day, 'season' => the season key of the row that last
      * moved 'until' ('' for a yearly rego)), or null. Rows' own dates only. While the schema

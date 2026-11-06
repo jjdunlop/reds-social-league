@@ -20,6 +20,11 @@
  *    role, Add by email or login and Remove, with add_role() / remove_role(),
  *    so a person's other roles stay. The Role dropdown on Users > Edit
  *    replaces every role, so it can take this one away; the screen says so.
+ *    Both clear Ultimate Member's saved copy of the profile
+ *    (forget_um_cache()), which still says it may enter wp-admin.
+ *  - The shop products the league sells (the top-up and rego products) stay
+ *    with administrators (may_choose_products()); league admins see them
+ *    read-only.
  *  - A league admin who opens the Dashboard goes to the Teams screen
  *    (dashboard_target()), as there is nothing else for them there.
  *
@@ -137,6 +142,18 @@ class RSL_Access {
     }
 
     /**
+     * May this person choose the shop products the league sells (the team
+     * top-up product on Team Balances, the rego products on Registration)?
+     * Administrators only: a league admin can't edit products or prices, and
+     * a wrong product would sell something else at the league's price. The
+     * current user when null.
+     */
+    public static function may_choose_products($user_id = null) {
+        $user_id = $user_id === null ? get_current_user_id() : intval($user_id);
+        return $user_id > 0 && user_can($user_id, 'manage_options');
+    }
+
+    /**
      * Where the Dashboard sends the current user: the Teams screen for a CAP
      * holder without manage_options and without edit_posts (a league admin
      * with nothing else in wp-admin), else '' (they stay).
@@ -209,6 +226,7 @@ class RSL_Access {
         }
         self::ensure_role();
         $user->add_role(self::ROLE);
+        self::forget_um_cache($user->ID);
         return $name . ' is now a Social League admin. Their other roles are unchanged.';
     }
 
@@ -226,7 +244,23 @@ class RSL_Access {
             return $name . ' isn\'t a Social League admin.';
         }
         $user->remove_role(self::ROLE);
+        self::forget_um_cache($user->ID);
         return $name . ' is no longer a Social League admin. Their other roles are unchanged.';
+    }
+
+    /**
+     * Ultimate Member keeps each account's profile in an option, with
+     * can_access_wpadmin from um_permissions() merged in, and clears it on
+     * set_role() only, never on add_role() / remove_role(). Clear it after
+     * either, so a removed league admin loses that pass at once.
+     */
+    private static function forget_um_cache($user_id) {
+        $user_id = intval($user_id);
+        if (function_exists('UM') && is_object(UM()->user()) && method_exists(UM()->user(), 'remove_cache')) {
+            UM()->user()->remove_cache($user_id);
+            return;
+        }
+        delete_option('um_cache_userdata_' . $user_id);
     }
 
     // ------------------------------------------------------------------
@@ -296,7 +330,7 @@ class RSL_Access {
         $post_url = esc_url(admin_url('admin-post.php'));
         $holders = self::holders();
         echo '<div class="wrap"><h1>Social League — League admins</h1>' . self::take_notice();
-        echo '<p>Social League admins have every Social League screen here and the league\'s admin powers on the website, for example a request for any team or any game\'s score. They get nothing else in WordPress. Administrators have all of this already.</p>';
+        echo '<p>Social League admins have every Social League screen here and the league\'s admin powers on the website, for example a request for any team or any game\'s score. They get nothing else in WordPress, and choosing the top-up and rego products stays with administrators. Administrators have all of this already.</p>';
         if (!$holders) {
             echo '<p><strong>Nobody is a Social League admin yet.</strong></p>';
         } else {

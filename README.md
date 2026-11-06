@@ -26,17 +26,33 @@ Balances included) get the league and nothing else.
 - **What it opens.** Every Social League screen and its actions (Teams,
   Registration, Courts & Nights, Fixtures, Refs & Supervisors, Team Balances,
   Free Agents), and on the website what an admin could already do for any
-  team: night requests, the roster and captain tools on its team page, its
-  balance card and top-up, any game's score, and no daily limit on email
-  invites. `RSL_Access::can()` is the one check, in the screens and in the
-  data classes' captain-or-admin rules, and every Social League menu's
-  capability is `RSL_Access::CAP`. A league admin who opens the Dashboard
-  goes to the Teams screen. They get nothing else in WordPress.
+  team: night requests and the roster on its team page, its balance card and
+  top-up, and any game's score. The captain's own tools on the team page
+  (Add players, invites, the invite code, Remove) are drawn for the captain
+  only; a league admin adds or removes players on the Teams screen.
+  `RSL_Access::can()` is the one check, in the screens and in the data
+  classes' captain-or-admin rules, and every Social League menu's capability
+  is `RSL_Access::CAP`. A league admin who opens the Dashboard goes to the
+  Teams screen. They get nothing else in WordPress.
+- **The shop's products stay with administrators.** Choosing the top-up
+  product (Team Balances) and the rego products (Registration) is for
+  administrators only (`RSL_Access::may_choose_products()`): a league admin
+  can't edit products or prices, and a wrong product would sell something
+  else at the league's price. League admins see the chosen products
+  read-only; a Team Balances save of theirs keeps the top-up product as it
+  is, and their Registration product save is refused with "Only an
+  administrator can choose the rego products." The top-up product can't be
+  a rego product (as the rego products already couldn't be the top-up) or a
+  product the Club Manager gives a club membership for
+  (`RSL_Rego::grants_membership()`), since a top-up of any amount would buy
+  that membership; such a save is refused and saves nothing.
 - **Who holds it.** Social League > League admins is for administrators only
   (`manage_options` and `promote_users`, on the screen and every action). It
   lists each league admin's name and email with Remove, and adds one by email
   or login. Adding uses `add_role()` and removing `remove_role()`, so the
-  person's member roles stay. An unknown account gets "No account has that
+  person's member roles stay. Both clear Ultimate Member's saved copy of the
+  person's profile, which would otherwise keep letting a removed league admin
+  past its wp-admin block. An unknown account gets "No account has that
   email address or login." and an administrator "X is an administrator, so
   already has the Social League screens." The Role dropdown on Users > Edit
   replaces every role, so the screen says "Changing someone's role on
@@ -52,7 +68,8 @@ Balances included) get the league and nothing else.
 Every `manage_options` check in `includes/` that guarded league work (45,
 counting the six file comments that named it) now reads the new capability.
 The only ones left are in `RSL_Access`: the grant, the Dashboard rule (an
-administrator stays on the Dashboard) and the League admins screen's checks.
+administrator stays on the Dashboard), the League admins screen's checks and
+the products check.
 Tests: `dev/tests/test-league-admin.php`, which also fails if any other file
 in `includes/` contains `manage_options`.
 
