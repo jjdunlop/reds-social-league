@@ -502,7 +502,10 @@ class RSL_Portal {
                 $team = self::apply_from_post($user_id, $post, true);
                 if (is_wp_error($team)) {
                     self::flash('error', $team->get_error_message());
-                    return self::apply_retry($team) ? $back . '#rsl-apply' : $back;
+                    // Back to the card it came from (0.21.0): a roll card's box may hold one named rsl-apply-<season>.
+                    $card = (string) self::post_value($post, 'apply_id');
+                    $card = preg_match('/^rsl-apply-(\d{4}-[a-z0-9]+)$/', $card, $m) && RSL_Seasons::is_valid($m[1]) ? $card : 'rsl-apply';
+                    return self::apply_retry($team) ? $back . '#' . $card : $back;
                 }
                 // A full division never refuses it (0.19.0): the captain hears it's on the waiting list instead
                 // (apply_from_post() says whether it is; the words leave out a season the aside has just named).
@@ -1172,12 +1175,16 @@ class RSL_Portal {
             return $roll && $draft && isset($draft['season']) && $draft['season'] === $roll['season'];
         };
         $main_draft = ($draft_for($roll_now) && !$wrap_signup) || $draft_for($roll_next) ? array() : $draft;
+        // A declined application for a roll card's season: the card says it above its box, never inside it.
+        $declined_for = function ($roll) use ($user_id) {
+            return $roll ? RSL_Teams::last_decided_application($user_id, $roll['season']) : null;
+        };
         ?>
         <?php if ($two): ?>
             <h3 class="rsl-season-head">This season <span class="rsl-season"><?php echo esc_html(RSL_Seasons::label($current)); ?></span></h3>
             <?php $this->render_my_team($now_team, $user_id); ?>
             <?php if ($roll_now && !$wrap_signup): ?>
-                <?php echo self::roll_card($roll_now, $this->roll_other($user_id, $roll_now, $player, $open, $draft_for($roll_now) ? $draft : array(), $apply_taken ? 'rsl-apply-' . $roll_now['season'] : 'rsl-apply'), $draft_for($roll_now)); ?>
+                <?php echo self::roll_card($roll_now, $this->roll_other($user_id, $roll_now, $player, $open, $draft_for($roll_now) ? $draft : array(), $apply_taken ? 'rsl-apply-' . $roll_now['season'] : 'rsl-apply'), $draft_for($roll_now), $declined_for($roll_now)); ?>
                 <?php $apply_taken = true; ?>
             <?php endif; ?>
             <h3 class="rsl-season-head">Next season <span class="rsl-season"><?php echo esc_html(RSL_Seasons::label($signup)); ?></span></h3>
@@ -1185,13 +1192,13 @@ class RSL_Portal {
         <?php if ($wrap_signup): ?>
             <?php
             ob_start();
-            $this->render_season($user_id, $signup, $next_team, $player, $pending_signup, $fa_choices, $apply_choices, $draft);
-            echo self::roll_card($roll_now, ob_get_clean(), (bool) $draft);
+            $this->render_season($user_id, $signup, $next_team, $player, $pending_signup, $fa_choices, $apply_choices, $draft, 'rsl-apply', false);
+            echo self::roll_card($roll_now, ob_get_clean(), (bool) $draft, $declined_for($roll_now));
             ?>
         <?php else: ?>
             <?php $this->render_season($user_id, $signup, $next_team, $player, $pending_signup, $fa_choices, $apply_choices, $main_draft); ?>
             <?php if ($roll_next): ?>
-                <?php echo self::roll_card($roll_next, $this->roll_other($user_id, $roll_next, $player, $open, $draft_for($roll_next) ? $draft : array(), $apply_taken ? 'rsl-apply-' . $roll_next['season'] : 'rsl-apply'), $draft_for($roll_next)); ?>
+                <?php echo self::roll_card($roll_next, $this->roll_other($user_id, $roll_next, $player, $open, $draft_for($roll_next) ? $draft : array(), $apply_taken ? 'rsl-apply-' . $roll_next['season'] : 'rsl-apply'), $draft_for($roll_next), $declined_for($roll_next)); ?>
             <?php endif; ?>
         <?php endif; ?>
 
@@ -1238,14 +1245,15 @@ class RSL_Portal {
     /**
      * Their team application waiting for approval, with a way to withdraw it. While it's on the
      * waiting list (0.19.0) the card says so and what happens next; never anything about another
-     * team or application.
+     * team or application. An application entered again (0.21.0, rolled_from) says its players
+     * get their invites once it's approved, not that the captain invites them.
      */
     private static function pending_card($pending) {
         $waiting = RSL_Capacity::waiting_note($pending);
         ob_start();
         ?>
         <div class="rsl-card">
-            <p><strong>Your application for <?php echo esc_html($pending->name); ?> is waiting for approval.</strong> <?php echo $waiting !== '' ? esc_html($waiting) : 'We\'ll email you when it\'s approved — then you can invite your players.'; ?></p>
+            <p><strong>Your application for <?php echo esc_html($pending->name); ?> is waiting for approval.</strong> <?php echo $waiting !== '' ? esc_html($waiting) : (!empty($pending->rolled_from) ? 'We\'ll email you when it\'s approved, and your players get their invites then.' : 'We\'ll email you when it\'s approved — then you can invite your players.'); ?></p>
             <form method="post" onsubmit="return confirm('Withdraw your application for <?php echo esc_js($pending->name); ?>?');"><?php echo self::fields('withdraw', array('team_id' => $pending->id)); ?><button type="submit" class="rsl-btn rsl-btn-secondary">Withdraw application</button></form>
         </div>
         <?php
@@ -1261,16 +1269,18 @@ class RSL_Portal {
      * sign-up they aren't in yet; a card with nothing to offer isn't shown);
      * $draft: what they typed into an application that failed (it opens the card).
      * $apply_id: the application card's id (0.21.0: a second season's part on the page,
-     * inside a roll card, takes another so #rsl-apply appears once).
+     * inside a roll card, takes another so #rsl-apply appears once; the form posts it, so a
+     * failed application comes back to that card). $declined_here false: a roll card holds this
+     * part in its closed box and says a declined application itself, above the box (0.21.0).
      */
-    private function render_season($user_id, $season, $team, $player, $pending, $fa_choices, $apply_choices, $draft, $apply_id = 'rsl-apply') {
+    private function render_season($user_id, $season, $team, $player, $pending, $fa_choices, $apply_choices, $draft, $apply_id = 'rsl-apply', $declined_here = true) {
         ?>
         <?php if ($team): ?>
             <?php $this->render_my_team($team, $user_id); ?>
         <?php elseif ($pending): ?>
             <?php echo self::pending_card($pending); ?>
         <?php else: ?>
-            <?php $declined = RSL_Teams::last_decided_application($user_id, $season); ?>
+            <?php $declined = $declined_here ? RSL_Teams::last_decided_application($user_id, $season) : null; ?>
             <?php if ($declined): ?>
                 <div class="rsl-flash rsl-flash-error">Your application for <?php echo esc_html($declined->name); ?> wasn't approved<?php echo $declined->decision_note !== '' ? ': ' . esc_html($declined->decision_note) : '.'; ?></div>
             <?php endif; ?>
@@ -1292,7 +1302,7 @@ class RSL_Portal {
                 <details class="rsl-card" id="<?php echo esc_attr($apply_id); ?>"<?php echo $draft ? ' open' : ''; ?>>
                     <summary><strong>Captaining a team? Apply for it here</strong></summary>
                     <form method="post" class="rsl-form">
-                        <?php echo self::fields('apply'); ?>
+                        <?php echo self::fields('apply', $apply_id !== 'rsl-apply' ? array('apply_id' => $apply_id) : array()); ?>
                         <?php echo self::team_fields($draft, $apply_choices, true); ?>
                         <button type="submit" class="rsl-btn">Send application</button>
                     </form>
@@ -1344,9 +1354,12 @@ class RSL_Portal {
      * that the captain has entered it and the invite comes once it's approved, or (approved, no
      * invite waiting for them) to ask the captain for one. $other: what the page offers for that
      * season with no team (render_season()), in a closed Not carrying on? box; $open opens it (a
-     * failed application from there).
+     * failed application from there). $declined: their latest declined application for that
+     * season (RSL_Teams::last_decided_application()), said above the state, never inside the box;
+     * the team's own entry declined names the team and the season. The captain's form says when
+     * the team's division is full there (RSL_Capacity::season()), as the application card does.
      */
-    private static function roll_card($roll, $other, $open = false) {
+    private static function roll_card($roll, $other, $open = false, $declined = null) {
         $team = $roll['team'];
         $season = $roll['season'];
         $short = RSL_Seasons::short_label($season);
@@ -1355,9 +1368,22 @@ class RSL_Portal {
         ?>
         <div class="rsl-card rsl-card-accent rsl-roll" id="rsl-roll-<?php echo intval($team->id); ?>">
             <h3 class="rsl-roll-head"><?php echo esc_html(RSL_Seasons::label_with_dates($season, RSL_Seasons::span($season))); ?></h3>
+            <?php if ($declined): ?>
+                <?php $note = (string) $declined->decision_note; ?>
+                <div class="rsl-flash rsl-flash-error"><?php echo !empty($declined->rolled_from) && intval($declined->rolled_from) === intval($team->id)
+                    ? 'The league didn\'t approve ' . esc_html($team->name) . ' for ' . esc_html($short)
+                    : 'Your application for ' . esc_html($declined->name) . ' wasn\'t approved'; ?><?php echo $note !== '' ? ': ' . esc_html($note) : '.'; ?></div>
+            <?php endif; ?>
             <?php if ($roll['state'] === 'captain'): ?>
-                <p>Keep <?php echo esc_html($team->name); ?> going: enter it again with the same name, colour and division.</p>
+                <?php
+                $cap_info = RSL_Capacity::season($season);
+                $div = isset($cap_info['divisions'][$team->division]) ? $cap_info['divisions'][$team->division] : null;
+                ?>
+                <p>Keep <?php echo esc_html($team->name); ?> going: enter it again as it is now.</p>
                 <p class="rsl-hint">Once the league approves it, your players get an invite to accept, so anyone not carrying on can say no.</p>
+                <?php if ($div && (!empty($div['no_slots']) || !empty($div['full']))): ?>
+                    <p class="rsl-hint rsl-division-full"><?php echo esc_html($div['label'] . (!empty($div['no_slots']) ? ' has no game slots' : ' is full') . ' for ' . $short . ', so ' . $team->name . ' goes on the waiting list.'); ?></p>
+                <?php endif; ?>
                 <form method="post" class="rsl-form">
                     <?php echo self::fields('roll_over', array('team_id' => $team->id)); ?>
                     <?php if (!isset($levels[$team->est_level])): ?>
@@ -1393,13 +1419,14 @@ class RSL_Portal {
      * A roll card's Not carrying on? box (0.21.0): render_season() for the roll's season alone, as
      * the page shows a season with no team (the free agent list, a code, applying), with no team or
      * application there (roll_state() says so). $open: RSL_Seasons::signup_choices(); $apply_id:
-     * the application card's id, so it never clashes with the main season's.
+     * the application card's id, so it never clashes with the main season's. A declined
+     * application is left out here: roll_card() says it above the box.
      */
     private function roll_other($user_id, $roll, $player, $open, $draft, $apply_id) {
         $season = $roll['season'];
         $only = isset($open[$season]) ? array($season => $open[$season]) : array();
         ob_start();
-        $this->render_season($user_id, $season, null, $player, null, $only, $only, $draft, $apply_id);
+        $this->render_season($user_id, $season, null, $player, null, $only, $only, $draft, $apply_id, false);
         return ob_get_clean();
     }
 

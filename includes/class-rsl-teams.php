@@ -235,27 +235,35 @@ class RSL_Teams {
         return $approved;
     }
 
-    /** Admin declines (with a reason the captain sees). The captain is freed up. */
+    /**
+     * Admin declines (with a reason the captain sees). The captain is freed up. Like approve(), the
+     * update names the pending status (0.21.0), so a decline racing an approval never undoes it.
+     */
     public static function decline($team_id, $note = '') {
         global $wpdb;
         $team = self::get($team_id);
         if (!$team || $team->status !== 'pending') {
             return new WP_Error('rsl_not_pending', 'That application has already been dealt with.');
         }
-        $wpdb->update(RSL_Database::table('teams'), array('status' => 'declined', 'decided_by' => get_current_user_id() ?: null, 'decided_at' => current_time('mysql'), 'decision_note' => substr(sanitize_text_field($note), 0, 255)), array('id' => $team->id));
+        $done = $wpdb->update(RSL_Database::table('teams'), array('status' => 'declined', 'decided_by' => get_current_user_id() ?: null, 'decided_at' => current_time('mysql'), 'decision_note' => substr(sanitize_text_field($note), 0, 255)), array('id' => $team->id, 'status' => 'pending'));
+        if (!$done) {
+            return new WP_Error('rsl_not_pending', 'That application has already been dealt with.');
+        }
         self::release_members($team->id);
         self::notify_captain($team->id, 'declined');
         return self::get($team->id);
     }
 
-    /** The captain withdraws their own pending application. */
+    /** The captain withdraws their own pending application (only while it is still pending: the update names the status). */
     public static function withdraw($team_id, $user_id) {
         global $wpdb;
         $team = self::get($team_id);
         if (!$team || $team->status !== 'pending' || intval($team->applied_by) !== intval($user_id)) {
             return new WP_Error('rsl_not_pending', 'There\'s no pending application of yours to withdraw.');
         }
-        $wpdb->update(RSL_Database::table('teams'), array('status' => 'withdrawn'), array('id' => $team->id));
+        if (!$wpdb->update(RSL_Database::table('teams'), array('status' => 'withdrawn'), array('id' => $team->id, 'status' => 'pending'))) {
+            return new WP_Error('rsl_not_pending', 'There\'s no pending application of yours to withdraw.');
+        }
         self::release_members($team->id);
         return true;
     }
@@ -320,7 +328,8 @@ class RSL_Teams {
             $subject = 'Your team ' . $team->name . ' is approved';
             $body = "Hi {$captain->display_name},\n\n{$team->name} is approved for the " . RSL_Seasons::label($team->season) . " Reds Social League."
                 . ($invited > 0 ? ' ' . self::invited_words($invited) : '') . "\n\n"
-                . "Invite your players with this link:\n" . RSL_Portal::invite_url($team) . "\n\n"
+                // Last season's players already have their invites (0.21.0): the link is for anyone else.
+                . ($invited > 0 ? "Invite anyone else with this link:\n" : "Invite your players with this link:\n") . RSL_Portal::invite_url($team) . "\n\n"
                 . "Or add players who have already registered from your league page:\n$portal\n\n"
                 . "Everyone needs a current social rego (or full/life club membership) before their first game.\n";
         } else {
@@ -598,7 +607,8 @@ class RSL_Teams {
      * sign-up, the team's season hasn't started (RSL_Seasons::has_started(): a season with no
      * dates hasn't), the team was already entered again for that season (rolled_into()), or
      * apply() refuses (the captain already on a team or with an application there, a name taken,
-     * too many withdrawn). Returns the new application with ->waiting_list, or WP_Error. Two at
+     * too many withdrawn; roll_refusal() words those for that season). Returns the new application
+     * with ->waiting_list, or WP_Error. Two at
      * once for one team: a lock, so the second finds the first (rsl_rolled).
      */
     public static function roll_over($team_id, $user_id, $level = '') {
@@ -645,7 +655,7 @@ class RSL_Teams {
                 'level' => $pick,
             ));
             if (is_wp_error($app)) {
-                return $app;
+                return self::roll_refusal($app, $team, $season, (int) $captain->user_id, (int) $captain->user_id === $user_id);
             }
             $wpdb->update(RSL_Database::table('teams'), array('rolled_from' => $team->id), array('id' => $app->id));
             self::set_preferences($app->id, (int) $captain->user_id, array(
@@ -663,6 +673,26 @@ class RSL_Teams {
         } finally {
             self::unlock($lock);
         }
+    }
+
+    /**
+     * apply()'s refusal for roll_over(), with the words naming the season it was for: apply()'s
+     * own say this season, which on the league page reads as the season being played, where the
+     * team does have that name. Same codes (the league page's second-submit check reads them).
+     * $captain_id: the applicant; $by_captain: they sent it (else an admin did).
+     */
+    private static function roll_refusal($error, $team, $season, $captain_id, $by_captain) {
+        $short = RSL_Seasons::short_label($season);
+        switch ($error->get_error_code()) {
+            case 'rsl_duplicate':
+                return new WP_Error('rsl_duplicate', 'There\'s already a team called "' . $team->name . '" in ' . $short . ' — ask the league.');
+            case 'rsl_withdrawn':
+                return new WP_Error('rsl_withdrawn', ($by_captain ? 'You\'ve' : 'The captain has') . ' withdrawn ' . self::MAX_WITHDRAWN . ' applications for ' . $short . ' — talk to the league to enter the team again.');
+            case 'rsl_elsewhere':
+                $on = self::current_team_for_user($captain_id, $season);
+                return $on ? new WP_Error('rsl_elsewhere', ($by_captain ? 'You\'re' : 'The captain is') . ' already on ' . $on->name . ' for ' . $short . '.') : $error;
+        }
+        return $error;
     }
 
     /** The pending or active team entered again from this one for $season, or null. One query; null while the schema upgrade is still to finish. */
@@ -734,6 +764,24 @@ class RSL_Teams {
                 'rollinv:' . $invite_id);
         }
         return $count;
+    }
+
+    /**
+     * Rollover invites still waiting to active teams in $season (0.21.0): team id => the invited
+     * user ids. Placement counts them as places taken (RSL_Placement::build()), so free agents never
+     * fill the places last season's players would take before they answer. One query.
+     */
+    public static function rollover_invites_waiting($season) {
+        global $wpdb;
+        $out = array();
+        foreach ((array) $wpdb->get_results($wpdb->prepare(
+            "SELECT i.team_id, i.user_id FROM " . RSL_Database::table('invites') . " i JOIN " . RSL_Database::table('teams') . " t ON t.id = i.team_id"
+            . " WHERE t.season = %s AND t.status = 'active' AND i.source = 'rollover' AND i.status = 'pending' AND (i.expires_at IS NULL OR i.expires_at > %s)",
+            $season, current_time('mysql')
+        )) as $r) {
+            $out[intval($r->team_id)][] = intval($r->user_id);
+        }
+        return $out;
     }
 
     /** "5 players from last season's team have been invited and join once they accept." (the captain's approval email). */

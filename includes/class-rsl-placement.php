@@ -1632,8 +1632,10 @@ class RSL_Placement {
     /**
      * Units from the waiting rows (RSL_Free_Agents::pool(): looking and
      * unplaced), teams from the season's active teams, settings with court
-     * space. Also returns the team list and the places it read
-     * (RSL_Capacity::season()).
+     * space. Also returns the team list, the places it read
+     * (RSL_Capacity::season()) and, for a team entered again (0.21.0), how
+     * many of last season's players have an invite still waiting (team id =>
+     * count, counted in the team's n, so its places are held for them).
      */
     private static function build($season, $rows) {
         global $wpdb;
@@ -1771,6 +1773,23 @@ class RSL_Placement {
         ", $season)) as $m) {
             $roster[intval($m->team_id)][] = $m;
         }
+        // Places held for last season's players (0.21.0): a team entered again counts its rollover invites
+        // still waiting, so placement never gives their places to free agents before they answer. Someone
+        // also in the pool counts once, as a free agent.
+        $in_pool = array();
+        foreach ($rows as $r) {
+            $in_pool[intval($r->user_id)] = true;
+        }
+        $returning = array();
+        foreach (RSL_Teams::rollover_invites_waiting($season) as $tid => $uids) {
+            $held = 0;
+            foreach ($uids as $uid) {
+                $held += isset($in_pool[$uid]) ? 0 : 1;
+            }
+            if ($held > 0) {
+                $returning[$tid] = $held;
+            }
+        }
         $teams = array();
         foreach ($list as $t) {
             $id = intval($t->id);
@@ -1805,7 +1824,7 @@ class RSL_Placement {
                 'id' => $id,
                 'name' => $t->name,
                 'division' => $t->division,
-                'n' => intval($t->member_count),
+                'n' => intval($t->member_count) + (isset($returning[$id]) ? $returning[$id] : 0),
                 'band' => $band === null ? 3.0 : round($band, 3),
                 'pref_time' => $t->pref_time,
                 'lacks' => array_values(array_unique($lacks)),
@@ -1825,7 +1844,7 @@ class RSL_Placement {
             'weights' => $w,
             'used_refs' => $used,
         ));
-        return array($units, $teams, $settings, $list, $places);
+        return array($units, $teams, $settings, $list, $places, $returning);
     }
 
     /**
@@ -2000,9 +2019,9 @@ class RSL_Placement {
     private static function state($season) {
         global $wpdb;
         $rows = RSL_Free_Agents::pool($season);
-        list($units, $teams, $settings, $list, $places) = self::build($season, $rows);
+        list($units, $teams, $settings, $list, $places, $returning) = self::build($season, $rows);
         $st = array('season' => $season, 'b' => RSL_Free_Agents::building($season), 's' => $settings, 'places' => $places, 'rows' => $rows, 'units' => array(), 'unit_of' => array(),
-            'row_of' => array(), 'team_band' => array(), 'teams' => array(), 'by_dest' => array(), 'on_team' => array());
+            'row_of' => array(), 'team_band' => array(), 'teams' => array(), 'by_dest' => array(), 'on_team' => array(), 'returning' => $returning);
         foreach ($units as $u) {
             $st['units'][$u['ref']] = $u;
             foreach ($u['user_ids'] as $uid) {
@@ -2588,7 +2607,10 @@ class RSL_Placement {
             $rows = isset($st['by_dest']['t:' . $id]) ? count($st['by_dest']['t:' . $id]) : 0;
             $after = intval($t->member_count) + $rows;
             if ($after < $min) {
-                $add('warning', $rows ? 't:' . $id : '', $t->name . ' will have ' . $after . ' player' . ($after === 1 ? '' : 's') . ' (the minimum is ' . $min . ').');
+                // Entered again (0.21.0): the places held for last season's players who haven't answered yet.
+                $back = isset($st['returning'][$id]) ? intval($st['returning'][$id]) : 0;
+                $add('warning', $rows ? 't:' . $id : '', $t->name . ' will have ' . $after . ' player' . ($after === 1 ? '' : 's') . ' (the minimum is ' . $min . ')'
+                    . ($back > 0 ? '; ' . $back . ($back === 1 ? ' player' : ' players') . ' from last season\'s team still ' . ($back === 1 ? 'has an invite' : 'have invites') . ' to answer.' : '.'));
             }
         }
 

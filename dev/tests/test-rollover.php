@@ -1,15 +1,18 @@
 <?php
 /**
  * Entering a team again for the next season (0.21.0): RSL_Seasons::has_started(),
- * RSL_Teams::next_season_for(), roll_over() (every refusal, an admin sending it, what it
- * copies, a full division's waiting list, the same form sent twice), rolled_into(),
- * roll_state(), approve() inviting last season's players (the captain, a player on another
- * team there, one who left and one already invited left out; no second invite when approval
- * runs again; one email each, parked; the captain's sentence; the Teams screen's note and
- * notice), the team page's invite labels, accepting and declining, and the league page's card
- * for the captain and the player in each state: hidden before the team's season starts (or
- * with no dates) and once they have something in the next season, the Not carrying on? box
- * (closed, its ids once, opened by a failed application), and with two seasons on the page.
+ * RSL_Teams::next_season_for(), roll_over() (every refusal but the lock's, with the words of
+ * apply()'s naming the season; an admin sending it, what it copies, a full division's waiting
+ * list and the card's line about it, the same form sent twice), rolled_into() (and nothing
+ * while the schema upgrade is still to finish), roll_state(), a declined entry said above the
+ * box, approve() inviting last season's players (the captain, a player on another team there,
+ * one who left and one already invited left out; no second invite when approval runs again;
+ * one email each, parked; the captain's sentence and link label; the Teams screen's note and
+ * notice; placement holding their places), the team page's invite labels, accepting and
+ * declining, and the league page's card for the captain and the player in each state: hidden
+ * before the team's season starts (or with no dates) and once they have something in the next
+ * season, the Not carrying on? box (closed, its ids once, opened by a failed application, which
+ * comes back to its own card), and with two seasons on the page.
  *
  *   wp eval-file dev/tests/test-rollover.php
  *
@@ -167,8 +170,9 @@ $v = $view($cap);
 $form = $roll_form($v);
 $check('captain: a card under the team, headed with the next season and its dates, with Enter the team again', strpos($v, $card_id($old)) !== false
     && strpos($v, $card_id($old)) > strpos($v, 'Open team page') && strpos($v, $head) !== false
-    && strpos($v, 'Keep ' . $name . ' going: enter it again with the same name, colour and division.') !== false
+    && strpos($v, 'Keep ' . $name . ' going: enter it again as it is now.') !== false
     && strpos($v, 'Once the league approves it, your players get an invite to accept, so anyone not carrying on can say no.') !== false
+    && strpos($v, $name . ' goes on the waiting list.') === false
     && $form !== '' && strpos($form, 'name="team_id" value="' . $old->id . '"') !== false && strpos($v, '>Enter the team again</button>') !== false, $form);
 $check('...the team has a level, so the form asks none, and the level is never shown or filled in', strpos($form, 'team_level') === false
     && strpos($v, 'value="strong" selected') === false && strpos($v, 'est_level') === false
@@ -199,6 +203,12 @@ $v = $view($p1);
 $check('a failed application from the box: the box and the application card open again', $msg === 'A team needs a name.'
     && strpos($v, '<details class="rsl-roll-other" open>') !== false && strpos($v, 'id="rsl-apply" open') !== false, $msg);
 $check('...once', strpos($view($p1), '<details class="rsl-roll-other" open>') === false);
+$check('...it comes back to #rsl-apply, the card it came from', $to === RSL_Portal::url() . '#rsl-apply', $to);
+list($to, $msg) = $front($p1, array('do' => 'apply', 'team_season' => $S, 'team_name' => '', 'team_level' => 'social', 'apply_id' => 'rsl-apply-' . $S));
+list($to2, $msg2) = $front($p1, array('do' => 'apply', 'team_season' => $S, 'team_name' => '', 'team_level' => 'social', 'apply_id' => 'rsl-apply-nope'));
+$view($p1); // takes the draft
+$check('...or to rsl-apply-<season> when the card in a box had that id; anything else is #rsl-apply', $to === RSL_Portal::url() . '#rsl-apply-' . $S
+    && $to2 === RSL_Portal::url() . '#rsl-apply', $to . ' / ' . $to2);
 
 $fa = RSL_Free_Agents::join($p3, $S, array('division_pref' => 'either', 'browsable' => 1), true);
 $check('no card for a player on the next season\'s free agent list', !is_wp_error($fa) && RSL_Teams::roll_state($old2, $p3) === null
@@ -253,7 +263,11 @@ $check('refused by apply(): a team with no level needs one picked', $code(RSL_Te
 $check('...a word that isn\'t one of the levels is no level', $code(RSL_Teams::roll_over($old2->id, $cap2, 'elite')) === 'rsl_level');
 RSL_Teams::add_member($other->id, $cap2, 'player', false, array('admin' => true));
 $r = RSL_Teams::roll_over($old2->id, $cap2, 'social');
-$check('refused by apply(): the captain is on a team in the season after already', $code($r) === 'rsl_elsewhere' && strpos($r->get_error_message(), "Other $suffix") !== false, $code($r));
+$check('refused by apply(): the captain is on a team in the season after already, in words naming that season', $code($r) === 'rsl_elsewhere'
+    && $r->get_error_message() === "You're already on Other $suffix for 2099 Pre-season.", is_wp_error($r) ? $r->get_error_message() : $code($r));
+$r = RSL_Teams::roll_over($old2->id, $admin, 'social');
+$check('...an admin sending it hears it of the captain', $code($r) === 'rsl_elsewhere' && $r->get_error_message() === "The captain is already on Other $suffix for 2099 Pre-season.",
+    is_wp_error($r) ? $r->get_error_message() : $code($r));
 RSL_Teams::remove_member($other->id, $cap2);
 $side = RSL_Teams::apply($S, $cap2, array('name' => "Side $suffix", 'level' => 'social'));
 $check('refused by apply(): the captain has an application waiting there', $side && !is_wp_error($side) && $code(RSL_Teams::roll_over($old2->id, $cap2, 'social')) === 'rsl_pending');
@@ -262,15 +276,25 @@ foreach (array('w1', 'w2') as $w) {
     $wpdb->insert(RSL_Database::table('teams'), array('season' => $S, 'name' => "Withdrawn $w $suffix", 'slug' => "withdrawn-$w-$suffix", 'status' => 'withdrawn',
         'applied_by' => $cap2, 'created_at' => current_time('mysql')));
 }
-$check('refused by apply(): three applications withdrawn there', $code(RSL_Teams::roll_over($old2->id, $cap2, 'social')) === 'rsl_withdrawn');
+$r = RSL_Teams::roll_over($old2->id, $cap2, 'social');
+$check('refused by apply(): three applications withdrawn there, in words naming that season', $code($r) === 'rsl_withdrawn'
+    && $r->get_error_message() === "You've withdrawn 3 applications for 2099 Pre-season — talk to the league to enter the team again.", is_wp_error($r) ? $r->get_error_message() : $code($r));
 foreach (array('w1', 'w2') as $w) {
     $wpdb->delete(RSL_Database::table('teams'), array('season' => $S, 'slug' => "withdrawn-$w-$suffix"));
 }
 $dup = RSL_Teams::create($S, array('name' => $name2, 'division' => 'unranked', 'status' => 'active'));
-$check('refused by apply(): a team with that name in the season after already', $dup && !is_wp_error($dup) && $code(RSL_Teams::roll_over($old2->id, $cap2, 'social')) === 'rsl_duplicate');
+$r = RSL_Teams::roll_over($old2->id, $cap2, 'social');
+$check('refused by apply(): a team with that name in the season after already, in words naming that season (not this season)', $dup && !is_wp_error($dup)
+    && $code($r) === 'rsl_duplicate' && $r->get_error_message() === 'There\'s already a team called "' . $name2 . '" in 2099 Pre-season — ask the league.',
+    is_wp_error($r) ? $r->get_error_message() : $code($r));
 if ($dup && !is_wp_error($dup)) {
     $wpdb->delete(RSL_Database::table('teams'), array('id' => $dup->id));
 }
+// A team whose captain has left: an admin's entry is refused rather than sent with nobody as the applicant.
+$orphan = RSL_Teams::create($A, array('name' => "Orphan $suffix", 'division' => 'unranked', 'status' => 'active'));
+$r = $orphan && !is_wp_error($orphan) ? RSL_Teams::roll_over($orphan->id, $admin, 'social') : null;
+$check('refused: a team with no captain', $code($r) === 'rsl_no_captain' && $r->get_error_message() === "Orphan $suffix has no captain to enter it again — ask the league."
+    && RSL_Teams::rolled_into($orphan->id, $S) === null, $code($r));
 $check('...and no refusal left an application behind', RSL_Teams::rolled_into($old->id, $S) === null && RSL_Teams::rolled_into($old2->id, $S) === null
     && !RSL_Teams::pending_application_for_user($cap, $S) && !RSL_Teams::pending_application_for_user($cap2, $S));
 
@@ -294,6 +318,10 @@ $check('a player can\'t enter it from the page', $msg === 'Only the team captain
 // A full division (Most teams per division 1 for Ranked, one Ranked team there already) never refuses it.
 $full = RSL_Teams::create($S, array('name' => "Full $suffix", 'division' => 'ranked', 'status' => 'active'));
 $fa_now = array_merge($fa_base, array('capacity_override' => array('ranked' => 1, 'unranked' => 0)));
+$v = $view($cap);
+$full_at = strpos($v, 'Ranked is full for 2099 Pre-season, so ' . $name . ' goes on the waiting list.');
+$check('a full division: the captain\'s card says so above the button, before it\'s sent', $full_at !== false && $full_at > strpos($v, $card_id($old))
+    && $full_at < strpos($v, '>Enter the team again</button>'));
 list($to, $msg) = $front($cap, array('do' => 'roll_over', 'team_id' => $old->id));
 $new = RSL_Teams::rolled_into($old->id, $S);
 $waiting = $new ? RSL_Capacity::waiting_note($new, false) : '';
@@ -312,6 +340,15 @@ $r = RSL_Teams::roll_over($old->id, $cap);
 $check('refused: already entered again for that season', $code($r) === 'rsl_rolled' && $r->get_error_message() === $name . ' is already entered again for 2099 Pre-season.', $code($r));
 $check('rolled_into(): the application for that season, none for another season or from the new team', $new && intval(RSL_Teams::rolled_into($old->id, $S)->id) === intval($new->id)
     && RSL_Teams::rolled_into($old->id, $A) === null && RSL_Teams::rolled_into($new->id, $S) === null);
+// The schema guard again, now that there is a team entered again for it to find.
+$schema_behind = function () { return '11'; };
+add_filter('pre_option_' . RSL_Database::SCHEMA_OPTION, $schema_behind);
+$none = RSL_Teams::rolled_into($old->id, $S);
+$rp_behind = RSL_Teams::roll_state($old, $p1);
+remove_filter('pre_option_' . RSL_Database::SCHEMA_OPTION, $schema_behind);
+$schema_behind = null;
+$check('...and nothing while the schema upgrade is still to finish, though one is there (the player\'s card then says to ask the captain)', $new && $none === null
+    && is_array($rp_behind) && $rp_behind['state'] === 'player', wp_json_encode($rp_behind ? $rp_behind['state'] : null));
 
 // --- The league page while it waits for approval ------------------------------------------------------------------
 $v = $view($p1);
@@ -322,6 +359,8 @@ $check('player, while it waits for approval: the captain has entered it, the inv
 $v = $view($cap);
 $check('captain, once entered again: no card; the application shows under Later season, never the level', strpos($v, $card_id($old)) === false
     && RSL_Teams::roll_state($old, $cap) === null && strpos($v, 'Your application for ' . $name . ' is waiting for approval.') !== false && strpos($v, esc_html($strong)) === false);
+$check('...and it says the players get their invites once it\'s approved, not to invite them', strpos($v, 'We\'ll email you when it\'s approved, and your players get their invites then.') !== false
+    && strpos($v, 'then you can invite your players') === false);
 
 $admin_page = function () use ($A, $admin) {
     wp_set_current_user($admin);
@@ -336,6 +375,17 @@ $admin_page = function () use ($A, $admin) {
 $html = $admin_page();
 $check('the Teams screen: an application entered again says from which team', strpos($html, esc_html('Entered again from ' . $name . ' (2098 Post-season)')) !== false
     && strpos($html, esc_html('Entered again from ' . $name2 . ' (2098 Post-season)')) !== false);
+
+// A declined entry: the card says so above its box (never only inside it), and offers the form again.
+$dec = $app2 ? RSL_Teams::decline($app2->id, 'Unranked is full') : null;
+$v = $view($cap2);
+$said = strpos($v, 'The league didn\'t approve ' . $name2 . ' for 2099 Pre-season: Unranked is full</div>');
+$rs2 = RSL_Teams::roll_state($old2, $cap2);
+$check('declined: the captain\'s card says the league didn\'t approve it, above the box, with the form again', $dec && !is_wp_error($dec) && $said !== false
+    && $said > strpos($v, $card_id($old2)) && $said < strpos($v, '<details class="rsl-roll-other">') && strpos($v, 'wasn\'t approved') === false
+    && $roll_form($v) !== '' && is_array($rs2) && $rs2['state'] === 'captain', is_wp_error($dec) ? $dec->get_error_message() : '');
+$check('...a second decline (or a withdraw) finds nothing pending to change', is_wp_error(RSL_Teams::decline($app2->id, 'again'))
+    && is_wp_error(RSL_Teams::withdraw($app2->id, $cap2)) && RSL_Teams::get($app2->id)->decision_note === 'Unranked is full');
 
 // --- Approval invites last season's players ---------------------------------------------------------------------
 // Already invited (an email invite waiting), and on another team in the season after: both left out.
@@ -403,6 +453,8 @@ foreach ($captured as $atts) {
 }
 $check('the captain\'s approval email says how many were invited', $cap_mail && strpos((string) $cap_mail['message'], $name . ' is approved for the 2099 Pre-season (Summer) Reds Social League. 2 players from last season\'s team have been invited and join once they accept.') !== false,
     $cap_mail ? (string) $cap_mail['message'] : 'no email');
+$check('...and its link is for anyone else', $cap_mail && strpos((string) $cap_mail['message'], "Invite anyone else with this link:\n") !== false
+    && strpos((string) $cap_mail['message'], 'Invite your players with this link') === false);
 $check('...one player is worded as one', RSL_Teams::invited_words(1) === '1 player from last season\'s team has been invited and joins once they accept.');
 $check('the approve notice says how many players were invited', $n['type'] === 'success'
     && strpos($n['message'], $name . ' approved — the captain has been emailed their invite link. 2 players from last season\'s team were invited.') === 0, $n['message']);
@@ -421,6 +473,21 @@ $want_labels = array("RSLR p1 $suffix (last season)", "RSLR p4 $suffix (last sea
 sort($want_labels);
 $check('the captain sees them waiting by name with (last season); an email invite by its email', $labels === $want_labels
     && strpos(RSL_Portal::team_tools($approved, $cap), esc_html("RSLR p1 $suffix (last season)")) !== false, wp_json_encode($labels));
+
+// --- Placement holds their places until they answer ----------------------------------------------------------------
+$ctx = RSL_Placement::context($S);
+$pn = null;
+foreach ($ctx[1] as $pt) {
+    if ((int) $pt['id'] === (int) $new->id) {
+        $pn = $pt['n'];
+    }
+}
+$check('placement counts the invites still waiting as places taken: the captain and the two invited (not the email invite)', $pn === 3, var_export($pn, true));
+$min = intval(RSL_Free_Agents::settings()['min_roster']);
+$pd = RSL_Placement::draft($S);
+$check('...and the placement screen says how many from last season\'s team haven\'t answered', $min <= 1
+    || in_array($name . ' will have 1 player (the minimum is ' . $min . '); 2 players from last season\'s team still have invites to answer.', $pd['warnings'], true),
+    wp_json_encode($pd['warnings']));
 
 // --- Accept and decline -------------------------------------------------------------------------------------------
 $inv = array();

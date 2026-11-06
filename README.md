@@ -27,15 +27,21 @@ no application waiting, no free agent entry and no invite waiting
   same name, division and colour, the team's level when it has one (else
   the form asks for one; the level is never shown to the captain), the
   team's fixturing preferences, and `rolled_from`, the old team's id (schema
-  12). The flash says it's in, with the waiting list words when the
-  division is full. Refused, with a sentence, for anyone but the captain or
-  an admin (an admin's goes in with the captain as the applicant), a team
-  that isn't active, a next season not open, a season not started, a team
-  already entered for that season, or anything `apply()` refuses (the
+  12). When the team's division is full there, a line above the button
+  says the team goes on the waiting list, and the flash says it again.
+  Refused, with a sentence, for anyone but the captain or an admin (an
+  admin's goes in with the captain as the applicant), a team that isn't
+  active or has no captain, a next season not open, a season not started, a
+  team already entered for that season, or anything `apply()` refuses (the
   captain on a team or with an application there, the name taken, three
-  withdrawn). A second click of the button is its own success. Once it's
-  sent the card goes; the application shows under Later season (or Next
-  season) as any application does.
+  withdrawn; those words name the next season, never "this season"). A
+  second click of the button is its own success. Once it's sent the card
+  goes; the application shows under Later season (or Next season) as any
+  application does, saying the players get their invites once it's
+  approved. If the league declines it, the card comes back with "The league
+  didn't approve TEAM for 2027 Mid-season 1: NOTE" above the form (a
+  declined application of their own for that season is said there too,
+  never only inside the closed box).
 - **A player** sees "Want to keep playing with TEAM? Ask your captain to
   enter the team again. You'll get an invite to accept once the league
   approves it." Once the captain has: "Your captain has entered TEAM again
@@ -49,25 +55,41 @@ no application waiting, no free agent entry and no invite waiting
   team's captain, a player who left the old team, anyone already on a team
   or with an application waiting in that season, and anyone with an invite
   to the new team waiting. The captain's approval email adds "5 players
-  from last season's team have been invited and join once they accept.",
-  the Teams screen's notice says how many were invited, and the
-  application's row says "Entered again from Middles Only (2027
-  Pre-season)". Only one approval goes through (the update names the
-  pending status), so the players are never invited twice. On the team page
-  the captain sees them under Waiting to accept by name, with (last season)
-  after it.
+  from last season's team have been invited and join once they accept."
+  (and its link reads Invite anyone else with this link), the Teams
+  screen's notice says how many were invited, and the application's row
+  says "Entered again from Middles Only (2027 Pre-season)". Only one
+  approval goes through (the update names the pending status, as decline
+  and withdraw now do too), so the players are never invited twice. On the
+  team page the captain sees them under Waiting to accept by name, with
+  (last season) after it. A teammate already on a team or applying in that
+  season isn't invited, so the captain may notice one missing from that
+  list; inviting them anyway would make an invite they could never accept.
+- **Placement** holds their places: a team entered again counts its
+  rollover invites still waiting as players (`RSL_Placement::build()`,
+  from `RSL_Teams::rollover_invites_waiting()`; someone also on the free
+  agent list counts once, as a free agent), so free agents never take the
+  places of last season's players before they answer. The placement
+  screen's warning for a team still short says how many haven't answered
+  ("Middles Only will have 3 players (the minimum is 7); 6 players from
+  last season's team still have invites to answer."). The captain's own
+  free agent tools (`room_for()`) count members only, as before: the
+  captain can see who is waiting and cancel an invite.
 - **Not carrying on?** Inside the card a closed box, "Not carrying on? Find
   another team for 2027 Mid-season 1", holds what the page offers for a
   season with no team (the free agent list, an invite code, applying), for
   that season only. While two seasons are on the page and the next one is
   the sign-up season, that season's own part goes in the box, so it shows
   once. The application card's id stays `rsl-apply` once on the page; a
-  failed application from the box opens it again with what was typed.
+  failed application from the box opens it again with what was typed and
+  comes back to that card (its form posts the card's id, `rsl-apply` or
+  `rsl-apply-<season>`).
 - **A player who declined** (or joined after the approval) sees "Middles
   Only is playing 2027 Mid-season 1. To keep playing with them, ask your
   captain to invite you.", with the box.
 
-The team page is unchanged. Tests: `dev/tests/test-rollover.php`.
+The team page's layout is unchanged; only the Waiting to accept labels are
+new. Tests: `dev/tests/test-rollover.php`.
 
 ## One page for the team, one for you (0.20.0)
 
