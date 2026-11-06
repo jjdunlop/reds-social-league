@@ -582,6 +582,11 @@ class RSL_Portal {
                 $result = RSL_Teams::remove_member($team->id, $member_id);
                 self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : 'Player removed from the team.');
                 return $back_to;
+            case 'new_avatar':
+                // Another random avatar (0.23.0), from the button by the team page's header; refusals keep the old one.
+                $result = RSL_Avatars::regenerate($team->id, $user_id);
+                self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : RSL_Avatars::SAVED_WORDS);
+                return $back_to;
             case 'new_code':
                 RSL_Teams::regenerate_code($team->id);
                 self::flash('success', 'New invite link made — the old one no longer works.');
@@ -682,8 +687,10 @@ class RSL_Portal {
     /**
      * The team application's fields (0.17.0), one markup for the registration form's Start a team
      * panel and the #rsl-apply card: which season (season_field(), team_season), team name,
-     * division, roughly what level, colour. $v: values to show again (an apply draft: name,
-     * division, level, colour, season). $required: the card's browser checks; never in the
+     * division, roughly what level. No colour since 0.23.0: every team gets a random avatar
+     * (RSL_Avatars), and a team's colour (navy unless an admin sets one) is behind its initials
+     * only until the avatar is there. $v: values to show again (an apply draft: name, division,
+     * level, season). $required: the card's browser checks; never in the
      * registration panel, which CSS hides while another route is chosen (a hidden required field
      * would block the form). The server checks either way (RSL_Teams::apply(), pick_open()).
      * Under the division, a line for each season offered where a division is full (0.19.0,
@@ -691,7 +698,7 @@ class RSL_Portal {
      * logged-in players reach this form, so a page cache never shows it to anyone else.
      */
     public static function team_fields($v, $choices, $required) {
-        $v = array_merge(array('name' => '', 'division' => 'ranked', 'level' => '', 'colour' => '', 'season' => ''), is_array($v) ? $v : array());
+        $v = array_merge(array('name' => '', 'division' => 'ranked', 'level' => '', 'season' => ''), is_array($v) ? $v : array());
         $req = $required ? ' required' : '';
         $full = array();
         foreach (RSL_Capacity::seasons(array_keys(is_array($choices) ? $choices : array())) as $info) {
@@ -717,7 +724,6 @@ class RSL_Portal {
             </select>
         </label>
         <p class="rsl-hint">Just a starting guess so your first games are even — it isn't shown anywhere, and your results take over after a couple of weeks.</p>
-        <label class="rsl-field">Team colour <input type="color" name="team_colour" value="<?php echo esc_attr($v['colour'] !== '' ? $v['colour'] : '#1d3d6e'); ?>"></label>
         <p class="rsl-hint">You'll be the captain. Once the league approves it you'll get an invite link for your players.</p>
         <?php
         return ob_get_clean();
@@ -729,7 +735,8 @@ class RSL_Portal {
     }
 
     /**
-     * The team fields from a form, cleaned (RSL_Teams::apply() and pick_open() check them).
+     * The team fields from a form, cleaned (RSL_Teams::apply() and pick_open() check them). A
+     * colour posted (a page opened before 0.23.0) is ignored: the team gets the default.
      * $legacy (do=apply only): the card's names before 0.17.0 too, for a page opened before the
      * update. Never at registration, whose form posts the player's own level as `level`.
      */
@@ -746,7 +753,6 @@ class RSL_Portal {
             'name' => sanitize_text_field($get('team_name', 'name')),
             'division' => isset(RSL_Teams::DIVISIONS[$division]) ? $division : 'ranked',
             'level' => sanitize_key($get('team_level', 'level')),
-            'colour' => (string) sanitize_hex_color($get('team_colour', 'colour')),
             'season' => sanitize_key($get('team_season', '')),
         );
     }
@@ -778,7 +784,6 @@ class RSL_Portal {
         $team = is_wp_error($season) ? $season : RSL_Teams::apply($season, $user_id, array(
             'name' => $v['name'],
             'division' => $v['division'],
-            'colour' => $v['colour'],
             'level' => $v['level'],
         ));
         if (!is_wp_error($team) && !is_object($team)) {
@@ -1499,6 +1504,20 @@ class RSL_Portal {
     }
 
     /**
+     * New avatar (0.23.0): a small form by the team page's header for the team's captain or a
+     * league admin (RSL_Access::can()); '' for anyone else. It posts here (do=new_avatar) and
+     * comes back to the team page; RSL_Avatars::regenerate() checks again and says why it won't.
+     */
+    public static function avatar_button($team, $user_id) {
+        $user_id = intval($user_id);
+        if (!$user_id || !is_object($team) || empty($team->id) || !(RSL_Teams::is_captain($team->id, $user_id) || RSL_Access::can($user_id))) {
+            return '';
+        }
+        return '<form method="post" class="rsl-avatar-new">' . self::fields('new_avatar', array('team_id' => $team->id, 'back' => RSL_Public::team_url($team)))
+            . '<button type="submit">New avatar</button></form>';
+    }
+
+    /**
      * The captain's free agent tools on the team page, after the schedule (0.20.0: they run long, so
      * the standing and schedule stay near the top): short or full, requests to join, Looking for
      * players?, Find free agents. '' for anyone else, or when the team isn't active.
@@ -1602,6 +1621,7 @@ class RSL_Portal {
             .rsl-rego-season { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 6px 6px 0; }
             .rsl-season-pick { font-weight: 600; }
             .rsl-season-pick select { margin-left: 4px; max-width: 100%; }
+            ' . RSL_Avatars::css() . '
         </style>' . (class_exists('RSL_Portal_FA') ? RSL_Portal_FA::styles() : '');
     }
 }

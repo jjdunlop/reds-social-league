@@ -808,8 +808,8 @@ $fs = $segment($v, '<select name="fa_season">', '</select>');
 $none_closed = function ($seg) use ($GONE, $RUN, $S3) {
     return strpos($seg, '"' . $GONE . '"') === false && strpos($seg, '"' . $RUN . '"') === false && strpos($seg, '"' . $S3 . '"') === false;
 };
-$check('26.1 the register form: the team fields, and both season pickers offer the seasons open for sign-up (the sign-up season chosen)',
-    strpos($v, 'name="team_name"') !== false && strpos($v, 'name="team_division"') !== false && strpos($v, 'name="team_level"') !== false && strpos($v, 'name="team_colour"') !== false
+$check('26.1 the register form: the team fields (no colour since 0.23.0), and both season pickers offer the seasons open for sign-up (the sign-up season chosen)',
+    strpos($v, 'name="team_name"') !== false && strpos($v, 'name="team_division"') !== false && strpos($v, 'name="team_level"') !== false && strpos($v, 'name="team_colour"') === false
     && strpos($ts, 'value="' . $S1 . '" selected=\'selected\'') !== false && strpos($ts, 'value="' . $S2 . '"') !== false && $none_closed($ts)
     && strpos($fs, 'value="' . $S1 . '" selected=\'selected\'') !== false && strpos($fs, 'value="' . $S2 . '"') !== false && $none_closed($fs), $ts . ' / ' . $fs);
 $check('...nothing is required inside the hidden panels, and the legend names the league (more than one season)',
@@ -821,8 +821,8 @@ $start_fields = $reg_fields + array('route' => 'start', 'team_name' => "Startup 
 list($to, $fl) = $post_as($st['st1'], $start_fields);
 $app1 = RSL_Teams::pending_application_for_user($st['st1'], $S2);
 $want = "You're registered and your application for Startup $suffix (2091 Mid-season 2) is in. Once the league approves it you'll get an invite link for your players.";
-$check('26.2 Start a team: one submit registers and sends the application, for the season picked', RSL_Players::is_registered($st['st1']) && $app1
-    && $app1->name === "Startup $suffix" && $app1->division === 'unranked' && $app1->est_level === 'social' && $app1->colour === '#123456' && $app1->status === 'pending'
+$check('26.2 Start a team: one submit registers and sends the application, for the season picked (a colour posted is ignored: navy)', RSL_Players::is_registered($st['st1']) && $app1
+    && $app1->name === "Startup $suffix" && $app1->division === 'unranked' && $app1->est_level === 'social' && $app1->colour === '#1d3d6e' && $app1->status === 'pending'
     && !RSL_Teams::pending_application_for_user($st['st1'], $S1) && $to === RSL_Portal::url() && $fl['type'] === 'success' && $fl['message'] === $want, wp_json_encode(array($to, $fl)));
 list($to, $fl) = $post_as($st['st1'], $start_fields);
 $check('...the same form sent again (a double click): the same success, still one application', $fl['type'] === 'success' && $fl['message'] === $want
@@ -845,8 +845,8 @@ $check('26.4 Start a team with no name: still registered, the reason, back to th
     && !RSL_Teams::pending_application_for_user($st['st2'], $S1) && $ends_apply($to) && $fl['type'] === 'error'
     && strpos($fl['message'], 'You\'re registered, but your team application didn\'t go through: A team needs a name.') === 0, wp_json_encode(array($to, $fl)));
 $v = $page($st['st2']);
-$check('...the card opens with what was typed', strpos($v, 'id="rsl-apply" open') !== false
-    && strpos($segment($v, '<select name="team_level"', '</select>'), 'value="social" selected=\'selected\'') !== false && strpos($v, 'value="#654321"') !== false);
+$check('...the card opens with what was typed (no colour)', strpos($v, 'id="rsl-apply" open') !== false
+    && strpos($segment($v, '<select name="team_level"', '</select>'), 'value="social" selected=\'selected\'') !== false && strpos($v, 'value="#654321"') === false);
 $check('...once: the next view has no draft', strpos($page($st['st2']), 'id="rsl-apply" open') === false);
 
 // 5: a name already taken that season.

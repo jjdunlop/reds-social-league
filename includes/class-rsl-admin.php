@@ -107,6 +107,12 @@ class RSL_Admin {
                 self::notice('success', $saved);
                 return $team_back;
 
+            case 'new_avatar':
+                // Another random avatar for the team (0.23.0), as its captain can on the team page.
+                $result = RSL_Avatars::regenerate($team_id, get_current_user_id());
+                self::notice(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : RSL_Avatars::SAVED_WORDS);
+                return $team_back;
+
             case 'add_member':
                 $who = isset($post['who']) ? trim(sanitize_text_field(wp_unslash($post['who']))) : '';
                 $user = is_email($who) ? get_user_by('email', $who) : get_user_by('login', $who);
@@ -558,6 +564,11 @@ class RSL_Admin {
             </label>
             <button type="submit" class="button">Save</button>
         </form>
+        <form method="post" action="<?php echo esc_url($post_url); ?>" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0;">
+            <?php echo self::fields('new_avatar', $team->season, $team->id); ?>
+            <button type="submit" class="button">New avatar</button>
+            <span class="description">Another random robot for the team's badge. The captain can do this on the team page too (<?php echo intval(RSL_Avatars::DAILY_LIMIT); ?> a day for each team). The colour shows only behind the initials, until the robot is ready.</span>
+        </form>
         <p class="description">The level is the captain's starting guess (or yours) — admin-only, never public. It seeds a Ranked team's first-week matchmaking (<?php echo intval(RSL_Teams::level_seed_rating($team->est_level ?: 'solid')); ?> on the rating scale) until results take over. The public ladder never uses it: there every team starts on the same rating and only results move it, so changing the level never moves a team on the ladder.</p>
         <p><strong>Fixturing preferences:</strong> <?php echo esc_html(RSL_Teams::preferences_summary($team)); ?> <span class="description">(set by the captain on the league page)</span></p>
 
@@ -733,6 +744,6 @@ class RSL_Admin {
     }
 
     private static function badge_styles() {
-        return '<style>.rsl-badge{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;color:#fff;font-weight:700;font-size:13px;}</style>';
+        return '<style>.rsl-badge{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;color:#fff;font-weight:700;font-size:13px;}' . RSL_Avatars::css() . '</style>';
     }
 }

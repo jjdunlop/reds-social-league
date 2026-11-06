@@ -162,9 +162,11 @@ class RSL_Fixtures {
     }
 
     private static function select_sql() {
+        // The teams' avatar seeds (0.23.0) for their badges: '' while the schema upgrade is still to finish.
+        $seeds = RSL_Database::schema_current() ? "h.avatar_seed AS home_avatar_seed, a.avatar_seed AS away_avatar_seed" : "'' AS home_avatar_seed, '' AS away_avatar_seed";
         return "SELECT g.*, n.night_date, n.type AS night_type, n.published_at,
                 h.name AS home_name, h.slug AS home_slug, h.colour AS home_colour,
-                a.name AS away_name, a.slug AS away_slug, a.colour AS away_colour,
+                a.name AS away_name, a.slug AS away_slug, a.colour AS away_colour, $seeds,
                 c.name AS court_name, v.name AS venue_name
             FROM " . RSL_Database::table('games') . " g
             JOIN " . RSL_Database::table('nights') . " n ON n.id = g.night_id

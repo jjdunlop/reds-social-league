@@ -223,12 +223,27 @@ class RSL_Public_Fixtures {
         return ob_get_clean();
     }
 
+    /**
+     * One side of a game as a team for its link and badge: id, name, slug, colour and avatar seed
+     * (0.23.0: so the badge is the team's avatar) from the game's row. $side: 'home' or 'away'.
+     */
+    private static function side_team($g, $side) {
+        $p = $side === 'home' ? 'home' : 'away';
+        return (object) array(
+            'id' => intval($g->{$p . '_team_id'}),
+            'name' => $g->{$p . '_name'},
+            'slug' => $g->{$p . '_slug'},
+            'colour' => $g->{$p . '_colour'},
+            'avatar_seed' => isset($g->{$p . '_avatar_seed'}) ? (string) $g->{$p . '_avatar_seed'} : '',
+        );
+    }
+
     private static function game_row($g, $mine, $today, $stats) {
         $h = intval($g->home_team_id);
         $a = intval($g->away_team_id);
         $is_mine = $mine && in_array($mine, array($h, $a), true);
-        $home = (object) array('name' => $g->home_name, 'slug' => $g->home_slug, 'colour' => $g->home_colour);
-        $away = (object) array('name' => $g->away_name, 'slug' => $g->away_slug, 'colour' => $g->away_colour);
+        $home = self::side_team($g, 'home');
+        $away = self::side_team($g, 'away');
         $home_won = $away_won = false;
         if ($g->status === 'played') {
             $home_won = intval($g->home_sets) > intval($g->away_sets);
@@ -681,9 +696,7 @@ class RSL_Public_Fixtures {
                     <?php foreach ($mine as $i => $g): ?>
                         <?php
                         $is_home = intval($g->home_team_id) === intval($team->id);
-                        $opp = (object) ($is_home
-                            ? array('name' => $g->away_name, 'slug' => $g->away_slug, 'colour' => $g->away_colour)
-                            : array('name' => $g->home_name, 'slug' => $g->home_slug, 'colour' => $g->home_colour));
+                        $opp = self::side_team($g, $is_home ? 'away' : 'home');
                         $r = RSL_Fixtures::result_for($g, $team->id);
                         ?>
                         <tr<?php echo $upcoming && $r['outcome'] === 'pending' ? ' class="is-next"' : ''; ?>>
@@ -990,7 +1003,7 @@ class RSL_Public_Fixtures {
                 .rsl-game { flex-direction: column; align-items: stretch; gap: 6px; }
                 .rsl-game-court { flex: none; }
                 .rsl-score { min-width: 56px; }
-                .rsl-game .rsl-badge-small { display: none; }
+                .rsl-game .rsl-badge-small, .rsl-game .rsl-avatar-pic-small { display: none; }
                 .rsl-schedule td:first-child { white-space: nowrap; }
                 .rsl-schedule .rsl-result { white-space: normal; width: 1%; }
                 .rsl-schedule .rsl-req-form { display: block; margin: 0 0 6px; }

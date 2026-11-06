@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Reds Social League
  * Description: MURVC's social volleyball league: player registration and social rego, captain team applications, invites and rosters, courts and game nights, fixtures, results, ratings and ladders.
- * Version: 0.22.0
+ * Version: 0.23.0
  * Author: MURVC
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('RSL_VERSION', '0.22.0');
+define('RSL_VERSION', '0.23.0');
 define('RSL_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('RSL_PLUGIN_URL', plugin_dir_url(__FILE__));
 
@@ -26,6 +26,7 @@ require_once RSL_PLUGIN_DIR . 'includes/class-rsl-teams.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-mail.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-free-agents.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-public.php';
+require_once RSL_PLUGIN_DIR . 'includes/class-rsl-avatars.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-portal.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-portal-free-agents.php';
 require_once RSL_PLUGIN_DIR . 'includes/class-rsl-courts.php';
@@ -88,6 +89,7 @@ register_deactivation_hook(__FILE__, 'rsl_deactivate');
 function rsl_deactivate() {
     wp_clear_scheduled_hook('rsl_hourly');
     wp_clear_scheduled_hook(RSL_Mail::SEND_HOOK);
+    wp_clear_scheduled_hook(RSL_Avatars::CRON_HOOK);
     flush_rewrite_rules();
 }
 
@@ -106,6 +108,8 @@ function rsl_init() {
     // The Club Manager's account merges: hooked here, before any admin
     // page or admin-post request can preview or run one.
     RSL_Merge::init();
+    // Team avatars (0.23.0): the job that fetches queued teams' images.
+    RSL_Avatars::register_hooks();
     RSL_Free_Agents::init();
     new RSL_Public();
     new RSL_Public_Fixtures();

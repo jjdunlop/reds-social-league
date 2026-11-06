@@ -73,7 +73,7 @@ $mk = function ($tag, $role = 'subscriber') use ($suffix, &$users) {
 try {
 
 // --- Setup -------------------------------------------------------------------------------------------------
-$check('setup: the schema has teams.rolled_from (schema 12)', RSL_Database::schema_current() && RSL_Database::SCHEMA_VERSION === '12'
+$check('setup: the schema has teams.rolled_from (schema 12 or later)', RSL_Database::schema_current() && intval(RSL_Database::SCHEMA_VERSION) >= 12
     && (bool) $wpdb->get_var("SHOW COLUMNS FROM " . RSL_Database::table('teams') . " LIKE 'rolled_from'"));
 $set_dates = function ($season, $start, $end) {
     return RSL_Courts::save_settings($season, array('start' => $start, 'end' => $end, 'weekday' => 0));
@@ -327,7 +327,8 @@ $new = RSL_Teams::rolled_into($old->id, $S);
 $waiting = $new ? RSL_Capacity::waiting_note($new, false) : '';
 $check('the captain enters it again: an application for the season after, with them as captain', $new && $new->status === 'pending' && $new->season === $S
     && intval($new->applied_by) === $cap && RSL_Teams::is_captain($new->id, $cap) && $to === RSL_Portal::url(), $msg);
-$check('...with the name, division, colour and level, and rolled_from', $new && $new->name === $name && $new->division === 'ranked' && $new->colour === '#8c2361'
+$check('...with the name, division, colour, level and avatar seed (0.23.0), and rolled_from', $new && $new->name === $name && $new->division === 'ranked' && $new->colour === '#8c2361'
+    && $new->avatar_seed === $old->avatar_seed && RSL_Avatars::valid_seed($new->avatar_seed)
     && $new->est_level === 'strong' && intval($new->rolled_from) === intval($old->id));
 $check('...and the team preferences', $new && $new->pref_time === 'late' && (int) $new->pref_double === 1 && $new->pref_double_shape === 'break' && (int) $new->pref_standby === 1);
 $check('...a full division puts it on the waiting list, and the flash says so', $new && RSL_Capacity::on_waiting_list($new) && $waiting !== ''

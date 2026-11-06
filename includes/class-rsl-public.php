@@ -156,6 +156,8 @@ class RSL_Public {
             <div>
                 <h2 class="rsl-title"><?php echo esc_html($team->name); ?></h2>
                 <p class="rsl-meta"><?php echo esc_html(RSL_Teams::DIVISIONS[$team->division]); ?> &middot; <?php echo esc_html(RSL_Seasons::label($season)); ?> &middot; <?php echo count($members); ?> player<?php echo count($members) === 1 ? '' : 's'; ?></p>
+                <?php // 0.23.0: New avatar, for the captain and league admins only. ?>
+                <?php echo RSL_Portal::avatar_button($team, $user_id); ?>
             </div>
         </div>
         <?php echo RSL_Public_Fixtures::team_profile($team); ?>
@@ -169,8 +171,18 @@ class RSL_Public {
         return ob_get_clean();
     }
 
-    /** The team's badge: its initials on its colour (logos come later). */
+    /**
+     * The team's badge (0.23.0): its avatar (RSL_Avatars::picture()) once the team's two image
+     * files are on this site; until then, and for the partial objects some callers build (a name
+     * and a colour), its initials on its colour, as before. Never fetches: a team (an object with
+     * an id) whose files are missing goes on the avatar queue (RSL_Avatars::missing()).
+     */
     public static function badge($team, $size = '') {
+        $urls = RSL_Avatars::urls($team);
+        if ($urls) {
+            return RSL_Avatars::picture($urls, $size);
+        }
+        RSL_Avatars::missing($team);
         return '<span class="rsl-badge' . ($size ? ' rsl-badge-' . esc_attr($size) : '') . '" style="background:' . esc_attr($team->colour) . '" aria-hidden="true">'
             . esc_html(RSL_Teams::initials($team->name)) . '</span>';
     }
@@ -435,6 +447,10 @@ JS;
             .rsl-team-size { font-size: 13px; }
             .rsl-badge { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%; color: #fff; font-weight: 700; font-size: 15px; letter-spacing: 0.5px; }
             .rsl-badge-large { width: 72px; height: 72px; font-size: 26px; }
+            ' . RSL_Avatars::css() . '
+            .rsl-avatar-new { margin: 6px 0 0; }
+            .rsl .rsl-avatar-new button { padding: 3px 10px; border: 1px solid var(--rsl-navy); border-radius: 4px; background: #fff; color: var(--rsl-navy); font-size: 13px; font-weight: 600; line-height: 1.5; text-transform: none; cursor: pointer; }
+            .rsl .rsl-avatar-new button:hover { background: #eef2f8; }
             .rsl-team-head { display: flex; align-items: center; gap: 16px; }
             .rsl-team-head .rsl-title { margin: 0; }
             .rsl-meta { margin: 4px 0 0; }

@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 class RSL_Database {
 
     /** Bump when the schema changes; maybe_upgrade() re-runs install(). */
-    const SCHEMA_VERSION = '12';
+    const SCHEMA_VERSION = '13';
     const SCHEMA_OPTION = 'rsl_schema_version';
     const UPGRADE_LOCK = 'rsl_upgrade_lock';
 
@@ -39,6 +39,10 @@ class RSL_Database {
         // id of the team this one was entered again from for the season after
         // (RSL_Teams::roll_over()); NULL for any other team. A league row id,
         // never an account. Readers check schema_current() first.
+        // avatar_seed (schema 13, 0.23.0): the random seed of the team's avatar
+        // (RSL_Avatars; '' = none yet), never the team's name. Text, never an
+        // account (not bigint, so nothing for RSL_Merge). Writers and readers of
+        // the column check schema_current() first.
         dbDelta("CREATE TABLE " . self::table('teams') . " (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             season varchar(20) NOT NULL,
@@ -65,6 +69,7 @@ class RSL_Database {
             formed_by varchar(20) NOT NULL DEFAULT '',
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             rolled_from bigint(20) unsigned DEFAULT NULL,
+            avatar_seed varchar(32) NOT NULL DEFAULT '',
             PRIMARY KEY  (id),
             UNIQUE KEY season_slug (season, slug),
             KEY season (season),
@@ -481,6 +486,11 @@ class RSL_Database {
         if (method_exists('RSL_Free_Agents', 'backfill') && !get_option('rsl_fa_backfill_10')) {
             RSL_Free_Agents::backfill();
             update_option('rsl_fa_backfill_10', 1, false);
+        }
+        // Schema 13 (0.23.0): every team without an avatar seed gets one, and the teams that are
+        // drawn go on the avatar queue (only teams still without a seed, so repeating it is safe).
+        if (method_exists('RSL_Avatars', 'backfill')) {
+            RSL_Avatars::backfill();
         }
     }
 }

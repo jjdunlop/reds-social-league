@@ -177,8 +177,8 @@ class RSL_Stats {
 
     /**
      * A cheap fingerprint of everything season() is built from: the season's
-     * games (results, not live scores), nights, active teams and night
-     * requests, plus the finals rule (named, finals-games:5, so stats saved
+     * games (results, not live scores), nights, active teams (with their
+     * avatar seeds, 0.23.0) and night requests, plus the finals rule (named, finals-games:5, so stats saved
      * under 0.18.1's earlier count of rounds are never reused), the plugin
      * version and the ladder model's settings (RSL_Ratings::ladder_model(),
      * so a same-version build that changes the ladder gets a fresh key).
@@ -190,6 +190,8 @@ class RSL_Stats {
     private static function fingerprint($season) {
         global $wpdb;
         $nights = RSL_Database::table('nights');
+        // A team's avatar seed (0.23.0): the cached stats hold the teams their leaders' badges are drawn from.
+        $seed = RSL_Database::schema_current() ? 'avatar_seed' : "''";
         $row = $wpdb->get_row($wpdb->prepare("
             SELECT COUNT(*) AS n, BIT_XOR(CAST(CONV(SUBSTRING(MD5(x), 1, 16), 16, 10) AS UNSIGNED)) AS h FROM (
                 SELECT CONCAT_WS('|', 'g', id, night_id, division, start_time, home_team_id, away_team_id, status, sets, home_sets, away_sets, IFNULL(forfeit_team_id, 0)) AS x
@@ -197,7 +199,7 @@ class RSL_Stats {
                 UNION ALL
                 SELECT CONCAT_WS('|', 'n', id, night_date, type, IFNULL(published_at, '')) FROM $nights WHERE season = %s
                 UNION ALL
-                SELECT CONCAT_WS('|', 't', id, status, division, est_level, name, slug, colour, IFNULL(created_at, ''), IFNULL(decided_at, ''))
+                SELECT CONCAT_WS('|', 't', id, status, division, est_level, name, slug, colour, $seed, IFNULL(created_at, ''), IFNULL(decided_at, ''))
                     FROM " . RSL_Database::table('teams') . " WHERE season = %s AND status = 'active'
                 UNION ALL
                 SELECT CONCAT_WS('|', 'r', r.id, r.team_id, r.night_id, r.type, r.status)

@@ -98,7 +98,12 @@ class RSL_Teams {
     // Teams
     // ------------------------------------------------------------------
 
-    /** Create a team. $args: name, division, colour. Returns the team or WP_Error. */
+    /**
+     * Create a team. $args: name, division, colour (navy when none), level, status, applied_by,
+     * avatar_seed (roll_over() keeps the old team's; else a new random one, RSL_Avatars). Every
+     * new team goes on the avatar queue: its images are fetched by the job, never by this
+     * request. Returns the team or WP_Error.
+     */
     public static function create($season, $args) {
         global $wpdb;
         if (!RSL_Seasons::is_valid($season)) {
@@ -119,7 +124,7 @@ class RSL_Teams {
             return new WP_Error('rsl_duplicate', 'There\'s already a team called "' . $name . '" this season.');
         }
 
-        $saved = $wpdb->insert(RSL_Database::table('teams'), array(
+        $row = array(
             'season' => $season,
             'name' => $name,
             'slug' => self::unique_slug($season, $name),
@@ -131,14 +136,22 @@ class RSL_Teams {
             'applied_by' => isset($args['applied_by']) ? intval($args['applied_by']) : null,
             'applied_at' => isset($args['applied_by']) ? current_time('mysql') : null,
             'created_at' => current_time('mysql'),
-        ));
+        );
+        // The avatar's seed (0.23.0): never written while the schema upgrade is still to finish
+        // (the column may not be there yet); the job gives such a team one later.
+        if (RSL_Database::schema_current()) {
+            $row['avatar_seed'] = isset($args['avatar_seed']) && RSL_Avatars::valid_seed($args['avatar_seed']) ? $args['avatar_seed'] : RSL_Avatars::new_seed();
+        }
+        $saved = $wpdb->insert(RSL_Database::table('teams'), $row);
         // A failed insert (two same-name applications at once taking one slug, a value the
         // table refuses, a database error) is an error, never a missing team taken for one.
         if (!$saved) {
             return new WP_Error('rsl_save', 'That team couldn\'t be saved — please try again.');
         }
 
-        return self::get((int) $wpdb->insert_id);
+        $id = (int) $wpdb->insert_id;
+        RSL_Avatars::queue($id);
+        return self::get($id);
     }
 
     // ------------------------------------------------------------------
@@ -599,7 +612,8 @@ class RSL_Teams {
     /**
      * The team's captain (or an admin) enters it again for next_season_for(): a new application
      * through apply(), so capacity, the waiting list and every rule of applying stay one path, with
-     * the team's name, division and colour, and as level the team's est_level when it holds one of
+     * the team's name, division, colour and avatar seed (0.23.0: its files are copied, RSL_Avatars::
+     * copy_from(), so it keeps its look), and as level the team's est_level when it holds one of
      * levels(), else $level (then required; est_level is never shown to the captain). The captain
      * is the applicant, whoever sends it. The new application gets rolled_from (this team's id)
      * and this team's preferences (set_preferences()). Refused with a readable WP_Error when the
@@ -653,6 +667,7 @@ class RSL_Teams {
                 'division' => $team->division,
                 'colour' => $team->colour,
                 'level' => $pick,
+                'avatar_seed' => isset($team->avatar_seed) ? $team->avatar_seed : '',
             ));
             if (is_wp_error($app)) {
                 return self::roll_refusal($app, $team, $season, (int) $captain->user_id, (int) $captain->user_id === $user_id);
@@ -668,6 +683,7 @@ class RSL_Teams {
             if (!$rolled) {
                 return $app;
             }
+            RSL_Avatars::copy_from($team, $rolled);
             $rolled->waiting_list = !empty($app->waiting_list);
             return $rolled;
         } finally {

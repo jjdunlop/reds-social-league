@@ -27,6 +27,10 @@
  * stop off. A test that dies before its release (a fatal error, an uncaught exception, an exit)
  * is released by a shutdown function, so parked rows never wait for a "Retry failed".
  * Tests run on a local copy or a staging copy where nothing else queues league mail meanwhile.
+ *
+ * The team avatar job (0.23.0, RSL_Avatars::CRON_HOOK) is put off a day too, so another request
+ * never fetches images from DiceBear for a test's teams (every new team is queued); release takes
+ * the teams that are gone off its queue and puts the job back while any remain.
  */
 
 if (!defined('ABSPATH')) {
@@ -51,6 +55,10 @@ function rsl_dev_hold_mail($suffix) {
     wp_schedule_single_event(time() + DAY_IN_SECONDS, RSL_Mail::SEND_HOOK);
     wp_clear_scheduled_hook('rsl_hourly');
     wp_schedule_event(time() + DAY_IN_SECONDS, 'hourly', 'rsl_hourly');
+    if (class_exists('RSL_Avatars')) {
+        wp_clear_scheduled_hook(RSL_Avatars::CRON_HOOK);
+        wp_schedule_single_event(time() + DAY_IN_SECONDS, RSL_Avatars::CRON_HOOK);
+    }
     $GLOBALS['rsl_dev_mail_holds'][$hold['token']] = $hold;
     register_shutdown_function('rsl_dev_mail_shutdown', $hold['token']);
     return $hold;
@@ -104,6 +112,11 @@ function rsl_dev_release_mail($hold) {
     }
     wp_clear_scheduled_hook('rsl_hourly');
     wp_schedule_event(time() + 300, 'hourly', 'rsl_hourly'); // as rsl_schedule_cron() does
+    if (class_exists('RSL_Avatars')) {
+        wp_clear_scheduled_hook(RSL_Avatars::CRON_HOOK);
+        RSL_Avatars::forget_missing(); // the test's teams, deleted by its cleanup
+        RSL_Avatars::reschedule();
+    }
     unset($GLOBALS['rsl_dev_mail_holds'][$hold['token']]);
     remove_filter('pre_wp_mail', '__return_false', 999);
 }
