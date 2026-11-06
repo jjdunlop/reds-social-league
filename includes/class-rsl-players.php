@@ -14,14 +14,19 @@ if (!defined('ABSPATH')) {
 
 class RSL_Players {
 
-    /** Highest level played, in plain words, lowest first (the keys are stored — never rename them). */
+    /**
+     * Highest level played, in plain words, lowest first (the keys are stored — never rename them).
+     * 0.22.0 (club decision, 7 Nov 2026): the top two read Played State League and Played Premier League
+     * (before, Played club or VVL and State League or higher, which overlapped: State League is VVL); the
+     * keys and their order are unchanged, so the free agent level scores keep their meaning.
+     */
     public static function levels() {
         return array(
             'never' => 'Never played',
             'school' => 'Played at school or uni',
             'social' => 'Social comp regular',
-            'vvl' => 'Played club or VVL',
-            'state' => 'State League or higher',
+            'vvl' => 'Played State League',
+            'state' => 'Played Premier League',
         );
     }
 

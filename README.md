@@ -73,6 +73,11 @@ the products check.
 Tests: `dev/tests/test-league-admin.php`, which also fails if any other file
 in `includes/` contains `manage_options`.
 
+Also in 0.22.0: the registration form's top two levels read Played State
+League and Played Premier League (they read Played club or VVL and State
+League or higher, which overlapped). The stored keys (`vvl`, `state`) and
+their order are unchanged.
+
 ## Enter the team again for the next season (0.21.0)
 
 Seasons run back to back (2027: Pre-season 24 Jan to 21 Mar, Mid-season 1
