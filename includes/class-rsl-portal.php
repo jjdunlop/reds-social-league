@@ -56,12 +56,18 @@ class RSL_Portal {
     /** menu_state() by user id, for this request (flush_menu_state() empties it; tests use it). */
     private static $menu_states = array();
 
+    /** my_team_url() by user id, for this request (flush_menu_state() empties it too). */
+    private static $my_team_urls = array();
+
+    /** A custom menu link whose address ends in this is the viewer's My team link (0.20.0). */
+    const MY_TEAM_LINK = '#rsl-my-team';
+
     /**
      * The league page's menu item follows the person (0.17.0, wp_nav_menu_objects): "Register
      * for 2027" (the year of menu_season(): the sign-up season's; once the sign-up season has
      * finished, the first open season's, or with none open the next season's, 0.18.0) until
-     * they've registered, "My team" while they're on an active team or have a team application
-     * waiting in a season the league page shows, else "My league". Logged-in viewers only: a
+     * they've registered, then "My league" (0.20.0: "My team" is its own link, my_team_items(),
+     * to the team page, where everything about the team lives). Logged-in viewers only: a
      * logged-out visitor's item is static (and cached pages serve it), so it is never touched,
      * nor is an item Nav Menu Roles keeps for logged-out
      * visitors (_nav_menu_role 'out'; that plugin has already removed it for logged-in viewers on
@@ -71,7 +77,11 @@ class RSL_Portal {
      * per page view at most (menu_state(), memoised).
      */
     public static function menu_labels($items, $args = null) {
-        if (!is_array($items) || !$items || !is_user_logged_in()) {
+        if (!is_array($items) || !$items) {
+            return $items;
+        }
+        $items = self::my_team_items($items);
+        if (!$items || !is_user_logged_in()) {
             return $items;
         }
         $page_id = intval(get_option(self::PAGE_OPTION));
@@ -105,16 +115,74 @@ class RSL_Portal {
     }
 
     /**
-     * The words for a state: 'team' My team, 'league' My league, else "Register for <the year of
+     * My team (0.20.0): each custom menu link whose address ends in MY_TEAM_LINK goes to the
+     * viewer's team page (my_team_url()) and is marked as the current item there; it is removed for
+     * anyone on no team, logged-out visitors included, so a page cache never serves it. Reads
+     * nothing for a menu without one; one query per page view at most.
+     */
+    private static function my_team_items($items) {
+        $url = null;
+        $here = isset($_SERVER['REQUEST_URI']) ? untrailingslashit((string) wp_parse_url(wp_unslash($_SERVER['REQUEST_URI']), PHP_URL_PATH)) : '';
+        foreach ($items as $key => $item) {
+            if (!is_object($item) || !isset($item->url) || substr((string) $item->url, -strlen(self::MY_TEAM_LINK)) !== self::MY_TEAM_LINK) {
+                continue;
+            }
+            if ($url === null) {
+                $url = is_user_logged_in() ? self::my_team_url(get_current_user_id()) : '';
+            }
+            if ($url === '') {
+                unset($items[$key]);
+                continue;
+            }
+            $item->url = $url;
+            if ($here !== '' && untrailingslashit((string) wp_parse_url($url, PHP_URL_PATH)) === $here) {
+                $item->current = true;
+                $item->classes = array_merge(is_array($item->classes) ? $item->classes : array(), array('current-menu-item'));
+            }
+        }
+        return $items;
+    }
+
+    /**
+     * The viewer's team page for My team (0.20.0): their active team in the season being played,
+     * else the earliest later season the league page shows; '' when they're on none. One query;
+     * memoised.
+     */
+    public static function my_team_url($user_id) {
+        global $wpdb;
+        $user_id = intval($user_id);
+        if (!$user_id) {
+            return '';
+        }
+        if (isset(self::$my_team_urls[$user_id])) {
+            return self::$my_team_urls[$user_id];
+        }
+        $seasons = self::page_seasons();
+        $in = implode(',', array_fill(0, count($seasons), '%s'));
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT t.slug, t.season FROM " . RSL_Database::table('team_members') . " m JOIN " . RSL_Database::table('teams') . " t ON t.id = m.team_id
+                WHERE m.user_id = %d AND m.left_at IS NULL AND t.status = 'active' AND t.season IN ($in)",
+            array_merge(array($user_id), $seasons)
+        ));
+        $pick = null;
+        $current = RSL_Seasons::current();
+        foreach ((array) $rows as $r) {
+            if ($pick === null || $r->season === $current
+                || ($pick->season !== $current && RSL_Seasons::ordinal($r->season) < RSL_Seasons::ordinal($pick->season))) {
+                $pick = $r;
+            }
+        }
+        return self::$my_team_urls[$user_id] = $pick ? RSL_Public::team_url($pick) : '';
+    }
+
+    /**
+     * The words for a state: 'team' and 'league' My league (0.20.0; before it 'team' was My team), else "Register for <the year of
      * $signup>" (menu_labels() passes menu_season(): the sign-up season's; once the sign-up season
      * has finished, the first open season's, or with none open the next season's, never a year
      * already gone). Pure.
      */
     public static function menu_label($state, $signup) {
-        if ($state === 'team') {
-            return 'My team';
-        }
-        if ($state === 'league') {
+        if ($state === 'team' || $state === 'league') {
             return 'My league';
         }
         return 'Register for ' . (RSL_Seasons::is_valid($signup) ? substr($signup, 0, 4) : current_time('Y'));
@@ -174,6 +242,7 @@ class RSL_Portal {
     /** Forget the memoised menu states (tests change a person's state within one request). */
     public static function flush_menu_state() {
         self::$menu_states = array();
+        self::$my_team_urls = array();
     }
 
     /** The seasons the league page shows: the one being played, the sign-up season and those open for sign-up. Options only. */
@@ -349,13 +418,16 @@ class RSL_Portal {
         // (RSL_Seasons::pick_open()); joining by code is for the team's own season.
         $do = isset($post['do']) ? sanitize_key($post['do']) : '';
         $code = isset($post['join_code']) ? sanitize_text_field(wp_unslash($post['join_code'])) : '';
+        // The team page's forms (night requests and, since 0.20.0, the captain's tools) say where
+        // to come back to; anything else comes back here.
+        $back_to = isset($post['back']) ? wp_validate_redirect(esc_url_raw(wp_unslash($post['back'])), $back) : $back;
 
         // Free agent and captain "looking for players" actions.
         if (class_exists('RSL_Portal_FA')) {
             $fa = RSL_Portal_FA::process($do, $post, $user_id);
             if (is_array($fa)) {
                 self::flash($fa['type'], $fa['message']);
-                return !empty($fa['back']) ? wp_validate_redirect($fa['back'], $back) : $back;
+                return !empty($fa['back']) ? wp_validate_redirect($fa['back'], $back) : $back_to;
             }
         }
 
@@ -457,8 +529,7 @@ class RSL_Portal {
                 return $back;
         }
 
-        // Night requests come from the team page; go back there, even on a refusal.
-        $back_to = isset($post['back']) ? wp_validate_redirect(esc_url_raw(wp_unslash($post['back'])), $back) : $back;
+        // Night requests and the captain's tools come from the team page: back there ($back_to), even on a refusal.
         // Captain tools: the person must captain THIS team (or be a league admin).
         $team = RSL_Teams::get(isset($post['team_id']) ? intval($post['team_id']) : 0);
         if (!$team || !(RSL_Teams::is_captain($team->id, $user_id) || user_can($user_id, 'manage_options'))) {
@@ -494,24 +565,24 @@ class RSL_Portal {
             case 'invite':
                 $result = RSL_Teams::invite_by_email($team->id, $user_id, isset($post['email']) ? wp_unslash($post['email']) : '');
                 self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : 'Invite saved. If they\'ve registered for the league they\'ll see it now; if not, it\'ll be waiting when they register with that email — or send them your invite link.');
-                return $back;
+                return $back_to;
             case 'cancel_invite':
                 $result = RSL_Teams::cancel_invite(isset($post['invite_id']) ? intval($post['invite_id']) : 0, $user_id);
                 self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : 'Invite cancelled.');
-                return $back;
+                return $back_to;
             case 'remove_member':
                 $member_id = isset($post['user_id']) ? intval($post['user_id']) : 0;
                 if ($member_id === $user_id) {
                     self::flash('error', 'Captains can\'t remove themselves — ask the league admin to hand over the captaincy.');
-                    return $back;
+                    return $back_to;
                 }
                 $result = RSL_Teams::remove_member($team->id, $member_id);
                 self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : 'Player removed from the team.');
-                return $back;
+                return $back_to;
             case 'new_code':
                 RSL_Teams::regenerate_code($team->id);
                 self::flash('success', 'New invite link made — the old one no longer works.');
-                return $back;
+                return $back_to;
             case 'save_prefs':
                 $result = RSL_Teams::set_preferences($team->id, $user_id, array(
                     'time' => isset($post['pref_time']) ? sanitize_key($post['pref_time']) : 'any',
@@ -520,7 +591,7 @@ class RSL_Portal {
                     'standby' => !empty($post['pref_standby']),
                 ));
                 self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : 'Team preferences saved — fixtures use them from the next run.');
-                return $back;
+                return $back_to;
         }
 
         self::flash('error', 'Unknown action.');
@@ -1179,24 +1250,58 @@ class RSL_Portal {
         <?php
     }
 
+    /**
+     * The league page's card for a team the person is on (0.20.0). Everything about the team lives
+     * on its team page (the roster, fixtures, balance, requests and the captain's tools: team_tools()
+     * and team_prefs()), so the card says who they are on it, warns while the team owes, links there,
+     * and keeps what is about the person: the placed notice and Leave this team.
+     */
     private function render_my_team($team, $user_id) {
         $is_captain = RSL_Teams::is_captain($team->id, $user_id);
-        $members = RSL_Teams::members($team->id);
+        $url = RSL_Public::team_url($team);
+        $bal = RSL_Payments::balance($team->id);
+        $blocked = RSL_Payments::blocked($team->id);
         ?>
         <div class="rsl-card">
             <div class="rsl-team-head">
                 <?php echo RSL_Public::badge($team); ?>
-                <div><h3 class="rsl-title"><a href="<?php echo esc_url(RSL_Public::team_url($team)); ?>"><?php echo esc_html($team->name); ?></a></h3>
+                <div><h3 class="rsl-title"><a href="<?php echo esc_url($url); ?>"><?php echo esc_html($team->name); ?></a></h3>
                     <p class="rsl-meta"><?php echo esc_html(RSL_Teams::DIVISIONS[$team->division]); ?> &middot; <?php echo $is_captain ? 'You\'re the captain' : 'You\'re on this team'; ?></p></div>
             </div>
-            <?php $bal = RSL_Payments::balance($team->id); ?>
-            <p class="rsl-balance-line <?php echo RSL_Payments::blocked($team->id) ? 'is-blocked' : ($bal < 0 ? 'is-owing' : ''); ?>">
-                <strong>Team balance: <?php echo $bal < 0 ? 'owes ' . esc_html(RSL_Payments::money(-$bal)) : esc_html(RSL_Payments::money($bal)) . ($bal > 0 ? ' credit' : ''); ?></strong>
-                <?php if (RSL_Payments::blocked($team->id)): ?> — not fixtured until it's paid down.<?php endif; ?>
-                <a href="<?php echo esc_url(RSL_Public::team_url($team)); ?>"><?php echo $is_captain ? 'Top up, see fixtures or request a week off' : 'Top up or see fixtures'; ?> &rarr;</a>
-            </p>
+            <?php if ($bal < 0): ?>
+                <p class="rsl-balance-line <?php echo $blocked ? 'is-blocked' : 'is-owing'; ?>"><strong>Team balance: owes <?php echo esc_html(RSL_Payments::money(-$bal)); ?></strong><?php if ($blocked): ?> — not fixtured until it's paid down.<?php endif; ?></p>
+            <?php endif; ?>
+            <p class="rsl-team-open"><a class="rsl-btn" href="<?php echo esc_url($url); ?>">Open team page</a>
+                <span class="rsl-hint"><?php echo $is_captain ? 'Add players, make requests and set team preferences there.' : 'Your fixtures, teammates and the team balance are there.'; ?></span></p>
+            <?php if (class_exists('RSL_Portal_FA')): ?>
+                <?php echo RSL_Portal_FA::placed_notice($user_id, $team->season); ?>
+            <?php endif; ?>
+            <?php if (!$is_captain): ?>
+                <form method="post" class="rsl-leave" onsubmit="return confirm('Leave <?php echo esc_js($team->name); ?>? Your captain will need to invite you again to come back.');"><?php echo self::fields('leave_team', array('team_id' => $team->id)); ?><button type="submit" class="rsl-link">Leave this team</button></form>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
 
-            <h4>Players (<?php echo count($members); ?>)</h4>
+    /**
+     * The team page's part for the people on the team (0.20.0): the roster (the captain also sees
+     * ✓ cleared / ✗ needs rego, never why, and Remove), then the captain's tools for adding players
+     * (invites waiting, the invite message, the code, an email invite, the free agent tools). '' for
+     * anyone else; an admin who isn't on the team sees the roster only. Its forms post back to the
+     * team page.
+     */
+    public static function team_tools($team, $user_id) {
+        $user_id = intval($user_id);
+        if (!$user_id || !(RSL_Teams::is_member($team->id, $user_id) || user_can($user_id, 'manage_options'))) {
+            return '';
+        }
+        $is_captain = RSL_Teams::is_captain($team->id, $user_id);
+        $members = RSL_Teams::members($team->id);
+        $back = RSL_Public::team_url($team);
+        ob_start();
+        ?>
+        <div class="rsl-portal rsl-team-tools">
+            <h3 class="rsl-division">Players (<?php echo count($members); ?>)</h3>
             <ul class="rsl-roster">
                 <?php foreach ($members as $m): ?>
                     <?php $c = RSL_Rego::clearance_for($m->user_id, $team->season); // judged for the team's season: a rego paid ahead counts ?>
@@ -1208,19 +1313,13 @@ class RSL_Portal {
                             <?php else: ?>
                                 <span class="rsl-status <?php echo $c['cleared'] ? 'rsl-ok' : 'rsl-no'; ?>"><?php echo $c['cleared'] ? '&#10003; Cleared' : '&#10007; Needs rego'; ?></span>
                             <?php endif; ?>
-                            <?php if (intval($m->user_id) !== intval($user_id)): ?>
-                                <form method="post" class="rsl-inline-form" onsubmit="return confirm('Remove <?php echo esc_js($m->display_name); ?> from the team?');"><?php echo self::fields('remove_member', array('team_id' => $team->id, 'user_id' => $m->user_id)); ?><button type="submit" class="rsl-link">Remove</button></form>
+                            <?php if (intval($m->user_id) !== $user_id): ?>
+                                <form method="post" class="rsl-inline-form" onsubmit="return confirm('Remove <?php echo esc_js($m->display_name); ?> from the team?');"><?php echo self::fields('remove_member', array('team_id' => $team->id, 'user_id' => $m->user_id, 'back' => $back)); ?><button type="submit" class="rsl-link">Remove</button></form>
                             <?php endif; ?>
                         <?php endif; ?>
                     </li>
                 <?php endforeach; ?>
             </ul>
-            <?php if (class_exists('RSL_Portal_FA')): ?>
-                <?php echo RSL_Portal_FA::placed_notice($user_id, $team->season); ?>
-            <?php endif; ?>
-            <?php if (!$is_captain): ?>
-                <form method="post" class="rsl-leave" onsubmit="return confirm('Leave <?php echo esc_js($team->name); ?>? Your captain will need to invite you again to come back.');"><?php echo self::fields('leave_team', array('team_id' => $team->id)); ?><button type="submit" class="rsl-link">Leave this team</button></form>
-            <?php endif; ?>
 
             <?php if ($is_captain): ?>
                 <?php $invites = RSL_Teams::pending_invites_for_team($team->id); ?>
@@ -1229,34 +1328,45 @@ class RSL_Portal {
                     <ul class="rsl-roster">
                         <?php foreach ($invites as $inv): ?>
                             <li><span><?php echo esc_html($inv->label); ?></span><span class="rsl-meta">invited <?php echo esc_html(date('j M', strtotime($inv->created_at))); ?><?php if ($inv->expires_at): ?> &middot; until <?php echo esc_html(date_i18n('j M', strtotime($inv->expires_at))); ?><?php endif; ?></span>
-                                <form method="post" class="rsl-inline-form"><?php echo self::fields('cancel_invite', array('team_id' => $team->id, 'invite_id' => $inv->id)); ?><button type="submit" class="rsl-link">Cancel</button></form></li>
+                                <form method="post" class="rsl-inline-form"><?php echo self::fields('cancel_invite', array('team_id' => $team->id, 'invite_id' => $inv->id, 'back' => $back)); ?><button type="submit" class="rsl-link">Cancel</button></form></li>
                         <?php endforeach; ?>
                     </ul>
                 <?php endif; ?>
 
-                <h4>Add players</h4>
+                <h3 class="rsl-division">Add players</h3>
                 <p class="rsl-hint">Send this to your players. Anyone who opens the link can register and join straight away:</p>
                 <textarea class="rsl-invite" rows="3" aria-label="Message for your players"><?php echo esc_textarea(self::invite_message($team)); ?></textarea>
                 <div class="rsl-row">
                     <button type="button" class="rsl-btn rsl-btn-secondary" onclick="var t=this.parentNode.previousElementSibling;t.select();if(navigator.clipboard){navigator.clipboard.writeText(t.value);}else{document.execCommand('copy');}this.textContent='Copied';">Copy message</button>
                 </div>
                 <div class="rsl-hint">Code: <strong><?php echo esc_html(RSL_Teams::invite_code($team)); ?></strong>
-                    &middot; <form method="post" class="rsl-inline-form" onsubmit="return confirm('Make a new invite link? The current one will stop working.');"><?php echo self::fields('new_code', array('team_id' => $team->id)); ?><button type="submit" class="rsl-link">Make a new link</button></form></div>
+                    &middot; <form method="post" class="rsl-inline-form" onsubmit="return confirm('Make a new invite link? The current one will stop working.');"><?php echo self::fields('new_code', array('team_id' => $team->id, 'back' => $back)); ?><button type="submit" class="rsl-link">Make a new link</button></form></div>
                 <p class="rsl-hint">Or invite someone by their email — they'll join once they accept:</p>
-                <form method="post" class="rsl-row"><?php echo self::fields('invite', array('team_id' => $team->id)); ?><input type="email" name="email" placeholder="Their email" required><button type="submit" class="rsl-btn">Invite</button></form>
+                <form method="post" class="rsl-row"><?php echo self::fields('invite', array('team_id' => $team->id, 'back' => $back)); ?><input type="email" name="email" placeholder="Their email" required><button type="submit" class="rsl-btn">Invite</button></form>
                 <p class="rsl-hint">Everyone needs to be cleared (social rego or full/life membership) before their first game.</p>
 
                 <?php if (class_exists('RSL_Portal_FA') && $team->status === 'active'): ?>
-                    <?php echo RSL_Portal_FA::captain_tools($team, $user_id); ?>
+                    <?php echo RSL_Portal_FA::captain_tools($team, $user_id, $back); ?>
                 <?php endif; ?>
+            <?php endif; ?>
+        </div>
+        <?php
+        return ob_get_clean() . self::styles();
+    }
 
-                <h4>Season schedule</h4>
-                <p class="rsl-hint">Your team page shows every week of the season. Need a week off, or fancy two games one night? Ask there before that week's fixtures come out. <a href="<?php echo esc_url(RSL_Public::team_url($team)); ?>">Open the season schedule &rarr;</a></p>
-
-                <h4>Team preferences</h4>
+    /** The captain's team preferences on the team page, after the schedule (0.20.0); '' for anyone else. */
+    public static function team_prefs($team, $user_id) {
+        if (!$user_id || !RSL_Teams::is_captain($team->id, $user_id)) {
+            return '';
+        }
+        $back = RSL_Public::team_url($team);
+        ob_start();
+        ?>
+        <div class="rsl-portal rsl-team-tools">
+                <h3 class="rsl-division">Team preferences</h3>
                 <p class="rsl-hint">Used when the weekly fixtures are made. Even games come first, so preferences decide between otherwise equal options.</p>
                 <form method="post" class="rsl-form rsl-prefs">
-                    <?php echo self::fields('save_prefs', array('team_id' => $team->id)); ?>
+                    <?php echo self::fields('save_prefs', array('team_id' => $team->id, 'back' => $back)); ?>
                     <label class="rsl-field">Game time
                         <select name="pref_time"><?php foreach (RSL_Teams::time_preferences() as $k => $l): ?><option value="<?php echo esc_attr($k); ?>" <?php selected($team->pref_time, $k); ?>><?php echo esc_html($l); ?></option><?php endforeach; ?></select>
                     </label>
@@ -1267,9 +1377,9 @@ class RSL_Portal {
                     <label class="rsl-check"><input type="checkbox" name="pref_standby" value="1" <?php checked((int) $team->pref_standby, 1); ?>> We can be on standby to fill in if another team pulls out late</label>
                     <button type="submit" class="rsl-btn">Save preferences</button>
                 </form>
-            <?php endif; ?>
         </div>
         <?php
+        return ob_get_clean() . self::styles();
     }
 
     private static function styles() {
@@ -1314,6 +1424,8 @@ class RSL_Portal {
             .rsl-roster li > span:first-child { flex: 1 1 auto; }
             .rsl-status { font-size: 13px; font-weight: 600; }
             .rsl-ok { color: #1e6b2a; } .rsl-no { color: #b32d2e; } .rsl-unknown { color: var(--rsl-muted); }
+            .rsl-team-open { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin: 12px 0 4px; }
+            .rsl-team-tools { margin: 18px 0; }
             .rsl-portal textarea.rsl-invite { display: block; width: 100%; padding: 7px 9px; margin: 4px 0 0; border: 1px solid #c3c8d0; border-radius: 4px; box-sizing: border-box; font: inherit; resize: vertical; }
             .rsl-portal .rsl-badge { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 44px; height: 44px; border-radius: 50%; color: #fff; font-weight: 700; font-size: 16px; }
             .rsl-portal .rsl-team-head { display: flex; align-items: center; gap: 12px; }

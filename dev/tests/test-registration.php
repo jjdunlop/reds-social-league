@@ -298,8 +298,13 @@ RSL_Seasons::set_signup('');
 $wpdb->delete(RSL_Database::table('free_agents'), array('season' => $next_season, 'user_id' => $new));
 $check('on a team now and on next season\'s list: still told to pay before their first game', !is_wp_error($fa_next)
     && strpos($html, 'You need a social rego before your first game') !== false && strpos($html, 'no rush') === false);
-$cap_view = $page($cap);
-$roster = substr($cap_view, strpos($cap_view, '<h4>Players'), strpos($cap_view, '<h4>Add players') - strpos($cap_view, '<h4>Players'));
+$cap_card = $page($cap);
+// 0.20.0: the league page's card links to the team page, where the roster and the captain's tools live.
+$check('the league page card: Open team page, no roster or tools', strpos($cap_card, 'href="' . esc_url(RSL_Public::team_url(RSL_Teams::get($team->id))) . '">Open team page</a>') !== false
+    && strpos($cap_card, 'Players (') === false && strpos($cap_card, 'value="invite"') === false && strpos($cap_card, 'value="save_prefs"') === false);
+$cap_view = RSL_Portal::team_tools(RSL_Teams::get($team->id), $cap);
+$roster = substr($cap_view, strpos($cap_view, 'Players ('), strpos($cap_view, '>Add players</h3>') - strpos($cap_view, 'Players ('));
+$check('team page tools post back to the team page', strpos($cap_view, 'name="back" value="' . esc_attr(RSL_Public::team_url(RSL_Teams::get($team->id))) . '"') !== false);
 $check('captain: teammates show cleared / needs rego', strpos($roster, '&#10003; Cleared') !== false && strpos($roster, '&#10007; Needs rego') !== false);
 $check('captain never sees why (membership vs rego)', stripos($roster, 'Full/life') === false && stripos($roster, 'membership') === false && strpos($roster, 'Rego paid') === false && strpos($roster, 'until') === false);
 $check('captain tools: invite link and email invite', strpos($cap_view, 'join=' . $code) !== false && strpos($cap_view, 'name="do" value="invite"') !== false);
@@ -307,7 +312,8 @@ $invite_team = RSL_Teams::get($team->id);
 $invite_msg = RSL_Portal::invite_message($invite_team);
 $check('invite message: team, season, link last', $invite_msg === 'Hey, join my Reds Social League team, ' . $invite_team->name . ', for the ' . RSL_Seasons::short_label($invite_team->season) . '! Sign up and join here: ' . RSL_Portal::invite_url($invite_team), $invite_msg);
 $check('captain tools: the message box and Copy message', strpos($cap_view, esc_textarea($invite_msg) . '</textarea>') !== false && strpos($cap_view, '>Copy message</button>') !== false);
-$p3_view = $page($p3);
+$p3_view = RSL_Portal::team_tools(RSL_Teams::get($team->id), $p3);
+$check('...and a visitor or someone not on the team sees none of it', RSL_Portal::team_tools(RSL_Teams::get($team->id), 0) === '' && RSL_Portal::team_tools(RSL_Teams::get($team->id), $new) === '');
 $check('a player (not captain) sees teammates but no statuses or tools', strpos($p3_view, "RSLR p1 $suffix") !== false && strpos($p3_view, 'Needs rego</span>') === false && strpos($p3_view, 'value="invite"') === false);
 wp_set_current_user($p3);
 RSL_Portal::process(array('rsl_nonce' => wp_create_nonce('rsl_front'), 'do' => 'remove_member', 'team_id' => $team->id, 'user_id' => $p1));
@@ -315,8 +321,8 @@ $check('non-captain can\'t remove players (server-side)', RSL_Teams::is_member($
 wp_set_current_user($cap);
 RSL_Portal::process(array('rsl_nonce' => wp_create_nonce('rsl_front'), 'do' => 'remove_member', 'team_id' => $team->id, 'user_id' => $cap));
 $check('captain can\'t remove themselves', RSL_Teams::is_member($team->id, $cap));
-RSL_Portal::process(array('rsl_nonce' => wp_create_nonce('rsl_front'), 'do' => 'remove_member', 'team_id' => $team->id, 'user_id' => $p1));
-$check('captain removes a player', !RSL_Teams::is_member($team->id, $p1));
+$removed_to = RSL_Portal::process(array('rsl_nonce' => wp_create_nonce('rsl_front'), 'do' => 'remove_member', 'team_id' => $team->id, 'user_id' => $p1, 'back' => RSL_Public::team_url(RSL_Teams::get($team->id))));
+$check('captain removes a player, and comes back to the team page', !RSL_Teams::is_member($team->id, $p1) && $removed_to === RSL_Public::team_url(RSL_Teams::get($team->id)), $removed_to);
 RSL_Portal::process(array('rsl_nonce' => 'bogus', 'do' => 'new_code', 'team_id' => $team->id));
 $check('bad nonce refused', RSL_Teams::get($team->id)->invite_code === $code);
 $free = $mk('free'); $reg($free);
@@ -641,8 +647,8 @@ $check('...but cover that starts after today: the nudge, without promising the y
 $steam = RSL_Teams::create($S1, array('name' => "Season Team $suffix", 'division' => 'ranked'));
 RSL_Teams::add_member($steam->id, $sb, 'captain');
 RSL_Teams::add_member($steam->id, $sn);
-$v = $page($sb);
-$roster = (string) substr($v, (int) strpos($v, '<h4>Players'), (int) strpos($v, '<h4>Add players') - (int) strpos($v, '<h4>Players'));
+$v = RSL_Portal::team_tools(RSL_Teams::get($steam->id), $sb);
+$roster = (string) substr($v, (int) strpos($v, 'Players ('), (int) strpos($v, '>Add players</h3>') - (int) strpos($v, 'Players ('));
 $check('captain\'s roster for the team\'s season: the captain who paid ahead is cleared, the other player isn\'t (both judged on its first night)',
     strpos($roster, '&#10003; Cleared') !== false && strpos($roster, '&#10007; Needs rego') !== false && !RSL_Rego::clearance($sb)['cleared'], $roster);
 $described = RSL_Rego::describe(RSL_Rego::clearance_for($sb, $S1));

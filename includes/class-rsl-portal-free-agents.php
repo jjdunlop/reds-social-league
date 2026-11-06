@@ -193,7 +193,8 @@ class RSL_Portal_FA {
             case 'cap_pool_invite':
                 $fa_id = self::post_int($post, 'fa_id');
                 $filters = self::filters($post);
-                $back = array_filter($filters) ? add_query_arg(array_filter($filters), RSL_Portal::url()) : null;
+                $base = !empty($post['back']) ? wp_validate_redirect(esc_url_raw(wp_unslash($post['back'])), RSL_Portal::url()) : RSL_Portal::url();
+                $back = array_filter($filters) ? add_query_arg(array_filter($filters), $base) : null;
                 $card = null;
                 foreach (RSL_Free_Agents::browse_for_captain($team->id, $user_id) as $c) {
                     if ($c['fa_id'] === $fa_id) {
@@ -816,8 +817,9 @@ class RSL_Portal_FA {
      * list (only first name, level, positions and +N friends ever shown).
      * Requests and browsing only while matching is open; otherwise why.
      */
-    public static function captain_tools($team, $user_id) {
+    public static function captain_tools($team, $user_id, $back = '') {
         $user_id = intval($user_id);
+        $back = (string) $back; // the page the forms come back to (the team page, 0.20.0); '' = the league page
         if (!$team || $team->status !== 'active' || !RSL_Teams::is_captain($team->id, $user_id)) {
             return '';
         }
@@ -849,25 +851,25 @@ class RSL_Portal_FA {
         ?>
         <div class="rsl-fa-captain">
             <p class="rsl-fa-banner <?php echo esc_attr($banner[0]); ?>"><?php echo esc_html($banner[1]); ?></p>
-            <?php echo self::requests_section($team, $open, $room); ?>
+            <?php echo self::requests_section($team, $open, $room, $back); ?>
             <details class="rsl-fa-box"<?php echo $short && !$listed && $room > 0 ? ' open' : ''; ?>>
                 <summary><strong>Looking for players?</strong> <span class="rsl-meta"><?php echo esc_html($listed ? 'Listed — needs ' . intval($team->spots_open) : 'Not listed'); ?></span></summary>
-                <?php echo self::spots_form($team); ?>
+                <?php echo self::spots_form($team, $back); ?>
             </details>
-            <?php echo self::browse_section($team, $user_id, $open, $room); ?>
+            <?php echo self::browse_section($team, $user_id, $open, $room, $back); ?>
         </div>
         <?php
         return ob_get_clean() . self::styles();
     }
 
     /** "Looking for players?": how many, positions, who's welcome, a short note. */
-    private static function spots_form($team) {
+    private static function spots_form($team, $back = '') {
         $positions = array_filter(explode(',', (string) $team->spots_positions));
         $level = $team->spots_level !== '' ? $team->spots_level : 'any';
         ob_start();
         ?>
         <form method="post" class="rsl-form rsl-fa-spots">
-            <?php echo RSL_Portal::form_fields('cap_spots', array('team_id' => $team->id)); ?>
+            <?php echo RSL_Portal::form_fields('cap_spots', self::with_back(array('team_id' => $team->id), $back)); ?>
             <label class="rsl-field">Players you're after
                 <select name="spots">
                     <?php for ($i = 0; $i <= 4; $i++): ?>
@@ -898,7 +900,7 @@ class RSL_Portal_FA {
     }
 
     /** Requests waiting on the team, as RSL_Free_Agents::requests_for_team() gives them. */
-    private static function requests_section($team, $open, $room) {
+    private static function requests_section($team, $open, $room, $back = '') {
         $requests = $open ? RSL_Free_Agents::requests_for_team($team->id) : array();
         ob_start();
         ?>
@@ -920,11 +922,11 @@ class RSL_Portal_FA {
                         </div>
                         <div class="rsl-fa-act">
                             <?php if ($fits): ?>
-                                <form method="post" class="rsl-inline-form"><?php echo RSL_Portal::form_fields('cap_accept_request', array('team_id' => $team->id, 'request_id' => $c['request_id'])); ?><button type="submit" class="rsl-btn">Accept</button></form>
+                                <form method="post" class="rsl-inline-form"><?php echo RSL_Portal::form_fields('cap_accept_request', self::with_back(array('team_id' => $team->id, 'request_id' => $c['request_id']), $back)); ?><button type="submit" class="rsl-btn">Accept</button></form>
                             <?php else: ?>
                                 <span class="rsl-fa-why">Not enough room</span>
                             <?php endif; ?>
-                            <form method="post" class="rsl-inline-form" onsubmit="return confirm('<?php echo esc_js('Say not this time to ' . $c['first_name'] . '? That\'s final for this season.'); ?>');"><?php echo RSL_Portal::form_fields('cap_decline_request', array('team_id' => $team->id, 'request_id' => $c['request_id'])); ?><button type="submit" class="rsl-btn rsl-btn-secondary">Not this time</button></form>
+                            <form method="post" class="rsl-inline-form" onsubmit="return confirm('<?php echo esc_js('Say not this time to ' . $c['first_name'] . '? That\'s final for this season.'); ?>');"><?php echo RSL_Portal::form_fields('cap_decline_request', self::with_back(array('team_id' => $team->id, 'request_id' => $c['request_id']), $back)); ?><button type="submit" class="rsl-btn rsl-btn-secondary">Not this time</button></form>
                         </div>
                     </li>
                 <?php endforeach; ?>
@@ -936,12 +938,12 @@ class RSL_Portal_FA {
     }
 
     /** Browse the list (filters by GET rsl_pos / rsl_lvl) and invite. */
-    private static function browse_section($team, $user_id, $open, $room) {
+    private static function browse_section($team, $user_id, $open, $room, $back = '') {
         $s = RSL_Free_Agents::settings();
         $filters = self::filters($_GET);
         $cap = intval($team->spots_open) + $s['pool_invites_extra'];
         $waiting = self::waiting_pool_invites($team->id);
-        $action = RSL_Portal::url();
+        $action = $back !== '' ? $back : RSL_Portal::url();
         ob_start();
         ?>
         <h4 id="rsl-fa-browse">Find free agents</h4>
@@ -987,7 +989,7 @@ class RSL_Portal_FA {
                                 <?php elseif (!$fits): ?>
                                     <span class="rsl-fa-why">Not enough room</span>
                                 <?php else: ?>
-                                    <form method="post" class="rsl-inline-form"><?php echo RSL_Portal::form_fields('cap_pool_invite', array('team_id' => $team->id, 'fa_id' => $c['fa_id'], 'rsl_pos' => $filters['rsl_pos'], 'rsl_lvl' => $filters['rsl_lvl'])); ?><button type="submit" class="rsl-btn">Invite</button></form>
+                                    <form method="post" class="rsl-inline-form"><?php echo RSL_Portal::form_fields('cap_pool_invite', self::with_back(array('team_id' => $team->id, 'fa_id' => $c['fa_id'], 'rsl_pos' => $filters['rsl_pos'], 'rsl_lvl' => $filters['rsl_lvl']), $back)); ?><button type="submit" class="rsl-btn">Invite</button></form>
                                 <?php endif; ?>
                             </div>
                         </li>
@@ -997,6 +999,14 @@ class RSL_Portal_FA {
         <?php endif; ?>
         <?php
         return ob_get_clean();
+    }
+
+    /** A form's hidden fields plus the page to come back to, when there is one (0.20.0). */
+    private static function with_back($fields, $back) {
+        if ($back !== '') {
+            $fields['back'] = $back;
+        }
+        return $fields;
     }
 
     /** Pool invites still waiting on the team (needs source/expires_at from pending_invites_for_team()). */

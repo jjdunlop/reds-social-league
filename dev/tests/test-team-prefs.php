@@ -65,7 +65,8 @@ $portal = new RSL_Portal();
 wp_set_current_user($cap);
 $_GET = array();
 $cap_view = $portal->render();
-$check('not shown to the captain after applying either', strpos($cap_view, $strong) === false);
+$cap_tools = RSL_Portal::team_tools(RSL_Teams::get($team->id), $cap) . RSL_Portal::team_prefs(RSL_Teams::get($team->id), $cap);
+$check('not shown to the captain after applying either (league page or team page tools)', strpos($cap_view, $strong) === false && $cap_tools !== '' && strpos($cap_tools, $strong) === false);
 
 // Admin sees and corrects it.
 wp_set_current_user($admin);
@@ -88,12 +89,12 @@ RSL_Portal::process(array('rsl_nonce' => wp_create_nonce('rsl_front'), 'do' => '
 $t = RSL_Teams::get($team->id);
 $check('captain saves preferences', $t->pref_time === 'late' && (int) $t->pref_double === 1 && $t->pref_double_shape === 'break' && (int) $t->pref_standby === 1);
 $check('summary reads well', RSL_Teams::preferences_summary($t) === 'Later games · Happy to double-header (with a break between) · On standby for late games', RSL_Teams::preferences_summary($t));
-$cap_view = $portal->render();
-$check('captain sees the preferences form with their choices', strpos($cap_view, 'value="save_prefs"') !== false && preg_match('/value="late"\s+selected/', $cap_view) === 1);
+$cap_view = RSL_Portal::team_prefs($t, $cap);
+$check('captain sees the preferences form with their choices (on the team page, 0.20.0)', strpos($cap_view, 'value="save_prefs"') !== false && preg_match('/value="late"\s+selected/', $cap_view) === 1);
 wp_set_current_user($mate);
 RSL_Portal::process(array('rsl_nonce' => wp_create_nonce('rsl_front'), 'do' => 'save_prefs', 'team_id' => $team->id, 'pref_time' => 'early'));
 $check('a teammate (not captain) can\'t change them', RSL_Teams::get($team->id)->pref_time === 'late');
-$check('teammates don\'t see the preferences form', strpos($portal->render(), 'value="save_prefs"') === false);
+$check('teammates don\'t see the preferences form', RSL_Portal::team_prefs(RSL_Teams::get($team->id), $mate) === '' && strpos($portal->render(), 'value="save_prefs"') === false);
 $check('bad values fall back to safe defaults', RSL_Teams::set_preferences($team->id, $cap, array('time' => 'midnight', 'double' => 0, 'shape' => 'sideways'))->pref_time === 'any');
 
 } catch (Throwable $thrown) {

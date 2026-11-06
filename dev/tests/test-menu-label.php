@@ -2,8 +2,9 @@
 /**
  * The league page's menu item follows the person (0.17.0): RSL_Portal::menu_labels() on
  * wp_nav_menu_objects reads "Register for <the sign-up season's year>" until they've
- * registered, "My team" on an active team or with a team application waiting (in a season
- * the league page shows), and "My league" otherwise. Logged-out viewers, other items, an item
+ * registered, then "My league" (0.20.0; before it, "My team" on a team or with an application
+ * waiting), and the My team link (0.20.0, a custom link ending #rsl-my-team) goes to the
+ * person's team page, or is left out of the menu. Logged-out viewers, other items, an item
  * kept for logged-out visitors (Nav Menu Roles' "out") and a dropdown heading are left alone,
  * and the state costs one query at most; and (0.18.0) a sign-up pin left on a finished season
  * names the first open season's year, or with nothing open the next season's. Made-up menu
@@ -90,8 +91,8 @@ $label = function () use ($items, $titles) {
 
 // 1-2: the wiring and the words.
 $check('1 wired to wp_nav_menu_objects at priority 10', has_filter('wp_nav_menu_objects', array('RSL_Portal', 'menu_labels')) === 10);
-$check('2 the words: Register for <the sign-up season\'s year>, My team, My league', RSL_Portal::menu_label('register', '2092-mid1') === 'Register for 2092'
-    && RSL_Portal::menu_label('team', '2092-mid1') === 'My team' && RSL_Portal::menu_label('league', '2092-mid1') === 'My league');
+$check('2 the words: Register for <the sign-up season\'s year>, then My league (on a team too, 0.20.0)', RSL_Portal::menu_label('register', '2092-mid1') === 'Register for 2092'
+    && RSL_Portal::menu_label('team', '2092-mid1') === 'My league' && RSL_Portal::menu_label('league', '2092-mid1') === 'My league');
 
 // 3: logged out: nothing touched, nothing read.
 wp_set_current_user(0);
@@ -138,20 +139,40 @@ $t = $label();
 $check('7 registered, on no team: My league', $t[0] === 'My league', wp_json_encode($t));
 $app = RSL_Teams::apply('2092-mid1', $u, array('name' => "Menu Team $suffix", 'level' => 'social'));
 $t = $label();
-$check('8 a team application waiting: My team', !is_wp_error($app) && $app && $t[0] === 'My team', is_wp_error($app) ? $app->get_error_message() : wp_json_encode($t));
+$check('8 a team application waiting: My league', !is_wp_error($app) && $app && $t[0] === 'My league', is_wp_error($app) ? $app->get_error_message() : wp_json_encode($t));
 $gone = (!is_wp_error($app) && $app) ? RSL_Teams::withdraw($app->id, $u) : null;
 $t = $label();
 $check('9 withdrawn: back to My league', $gone === true && $t[0] === 'My league', wp_json_encode($t));
 $active = RSL_Teams::create('2092-pre', array('name' => "Menu Active $suffix"));
 $added = (!is_wp_error($active) && $active) ? RSL_Teams::add_member($active->id, $u) : null;
 $t = $label();
-$check('10 on an active team: My team', $added === true && $t[0] === 'My team', wp_json_encode($t));
+$check('10 on an active team: My league (My team is its own link)', $added === true && $t[0] === 'My league', wp_json_encode($t));
+// 10b-10d (0.20.0): the My team link.
+$my_link = function () use ($item) { $i = $item(0, 'custom', 'custom', 0, 'My team'); $i->url = '#rsl-my-team'; return $i; };
+$urls = function ($list) { return array_values(array_map(function ($i) { return $i->url; }, (array) $list)); };
+RSL_Portal::flush_menu_state();
+$list = RSL_Portal::menu_labels(array($my_link(), $item(0, 'post_type', 'page', $teams_page, 'Teams')), (object) array());
+$want = (!is_wp_error($active) && $active) ? RSL_Public::team_url($active) : '';
+$check('10b My team: on a team, the link goes to their team page', $want !== '' && array_values($titles($list)) === array('My team', 'Teams') && $urls($list)[0] === $want, wp_json_encode($urls($list)));
+RSL_Portal::flush_menu_state();
+$n = $wpdb->num_queries;
+RSL_Portal::menu_labels(array($my_link(), $my_link()), (object) array());
+$qm = $wpdb->num_queries - $n;
+$check('...one query for two such links', $qm === 1, (string) $qm);
+wp_set_current_user(0);
+$n = $wpdb->num_queries;
+$list = RSL_Portal::menu_labels(array($my_link(), $item(0, 'post_type', 'page', $teams_page, 'Teams')), (object) array());
+$check('10c logged out: My team is left out of the menu, with no query', array_values($titles($list)) === array('Teams') && $wpdb->num_queries - $n === 0, wp_json_encode($titles($list)));
+wp_set_current_user($u);
 $off = (!is_wp_error($active) && $active) ? RSL_Teams::remove_member($active->id, $u) : null;
 $old = RSL_Teams::create('1992-pre', array('name' => "Menu Old $suffix"));
 $old_added = (!is_wp_error($old) && $old) ? RSL_Teams::add_member($old->id, $u) : null;
 $t = $label();
 $check('11 only the seasons the league page shows count: a long-finished season\'s team is My league', $off === true && $old_added === true && $t[0] === 'My league'
     && !in_array('1992-pre', array(RSL_Seasons::current(), RSL_Seasons::signup()), true), wp_json_encode($t));
+RSL_Portal::flush_menu_state();
+$list = RSL_Portal::menu_labels(array($my_link()), (object) array());
+$check('10d ...and on no team the league page shows: My team is left out', $list === array(), wp_json_encode($titles($list)));
 
 // 12: through the hook, as a theme's menu runs it (other plugins' filters too). The item is a real
 // (throwaway) nav_menu_item post in no menu, so a filter that reads an item's own meta keeps it.

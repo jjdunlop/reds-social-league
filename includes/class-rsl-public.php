@@ -147,7 +147,6 @@ class RSL_Public {
         }
         $members = RSL_Teams::members($team->id);
         $user_id = get_current_user_id();
-        $can_see_roster = $user_id && (RSL_Teams::is_member($team->id, $user_id) || current_user_can('manage_options'));
         ob_start();
         ?>
         <?php echo RSL_Portal::flash_html(); ?>
@@ -161,15 +160,10 @@ class RSL_Public {
         </div>
         <?php echo RSL_Public_Fixtures::team_profile($team); ?>
         <?php echo RSL_Payments::team_card($team); ?>
-        <?php if ($can_see_roster): ?>
-            <h3 class="rsl-division">Roster</h3>
-            <ul class="rsl-roster">
-                <?php foreach ($members as $m): ?>
-                    <li><?php echo esc_html($m->display_name); ?><?php if ($m->role === 'captain'): ?> <span class="rsl-chip">Captain</span><?php endif; ?></li>
-                <?php endforeach; ?>
-            </ul>
-        <?php endif; ?>
+        <?php // 0.20.0: the team's home for the people on it: the roster, and the captain's tools around the schedule. ?>
+        <?php echo RSL_Portal::team_tools($team, $user_id); ?>
         <?php echo RSL_Public_Fixtures::team_section($team); ?>
+        <?php echo RSL_Portal::team_prefs($team, $user_id); ?>
         <?php
         return ob_get_clean();
     }

@@ -6,6 +6,31 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## One page for the team, one for you (0.20.0)
+
+Everything about a team now lives on its team page (`/league-teams/{slug}/`):
+fixtures and results, the balance and paying, the season schedule and
+requests, and for the people on the team the roster
+(`RSL_Portal::team_tools()`). The captain also sees there who's cleared
+(never why), Remove, invites waiting, Add players with the invite
+message, the free agent tools (Looking for players?, requests to join,
+Find free agents) and, after the schedule, Team preferences
+(`RSL_Portal::team_prefs()`). Their forms post back to the team page
+(`back`), refusals included.
+
+The league page (`/social-league/`) is about the person: registering,
+their own rego, invites and codes, the free agent list, ref jobs and
+later seasons. A team they're on shows as a short card: who they are on
+it, a warning while it owes, Open team page, the placed notice and Leave
+this team.
+
+The menu: the league page's item reads Register for YEAR until they've
+registered, then My league. A custom menu link whose address ends in
+`#rsl-my-team` is My team: `RSL_Portal::menu_labels()` points it at the
+person's team page (this season's team, else the earliest later season
+the league page shows; `my_team_url()`, one query) and leaves it out of
+the menu for anyone on no team, logged out included.
+
 ## A ready-to-send invite message (0.19.1)
 
 The captain's Add players box shows a message with the invite link,
