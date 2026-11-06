@@ -592,6 +592,26 @@ class RSL_Portal {
                 ));
                 self::flash(is_wp_error($result) ? 'error' : 'success', is_wp_error($result) ? $result->get_error_message() : 'Team preferences saved — fixtures use them from the next run.');
                 return $back_to;
+            case 'roll_over':
+                // Entering the team again for the season after its own (0.21.0), from the league page's card.
+                $result = RSL_Teams::roll_over($team->id, $user_id, sanitize_key((string) self::post_value($post, 'team_level')));
+                if (is_wp_error($result) && in_array($result->get_error_code(), array('rsl_rolled', 'rsl_pending'), true)) {
+                    // The same form sent twice (a double click): the first one went in, so this is its success.
+                    $next = RSL_Teams::next_season_for($team);
+                    $mine = $next !== '' ? RSL_Teams::rolled_into($team->id, $next) : null;
+                    if ($mine && $mine->status === 'pending' && intval($mine->applied_by) === intval($user_id)) {
+                        $result = RSL_Teams::with_waiting_list($mine);
+                    }
+                }
+                if (is_wp_error($result)) {
+                    self::flash('error', $result->get_error_message());
+                    return $back;
+                }
+                // A full division never refuses it (0.19.0): the waiting list words, without the season just named.
+                $waiting = !empty($result->waiting_list) ? RSL_Capacity::waiting_note($result, false) : '';
+                self::flash('success', $result->name . ' is entered again for ' . RSL_Seasons::short_label($result->season) . '. '
+                    . ($waiting !== '' ? $waiting : 'We\'ll email you once the league approves it, and your players get their invites then.'));
+                return $back;
         }
 
         self::flash('error', 'Unknown action.');
@@ -1137,12 +1157,43 @@ class RSL_Portal {
             <div class="rsl-card"><p><strong>Ref jobs</strong> — <?php echo intval($e['booked']); ?> booked ahead, <?php echo esc_html(RSL_Officials::money($e['earned'])); ?> earned this season. <a href="<?php echo esc_url(RSL_Ref_Page::url()); ?>">See your night and open jobs &rarr;</a></p></div>
         <?php endif; ?>
 
+        <?php
+        // Entering a team again for the season after its own (0.21.0): a card under a team they're
+        // on in the season being played or the sign-up season (RSL_Teams::roll_state()). When that
+        // season is the sign-up season, its own part (the free agent list, a code, applying) goes in
+        // the card's Not carrying on? box, so it shows once; otherwise the box holds that season's
+        // part alone. #rsl-apply stays on one card: a later one gets the season after its id.
+        $roll_now = $two ? RSL_Teams::roll_state($now_team, $user_id, $invites) : null;
+        $roll_next = $next_team ? RSL_Teams::roll_state($next_team, $user_id, $invites) : null;
+        $wrap_signup = $roll_now && $roll_now['season'] === $signup;
+        $apply_taken = !$wrap_signup && !$next_team && !$pending_signup && $apply_choices;
+        // A failed application for a roll card's season opens that card's box with what was typed.
+        $draft_for = function ($roll) use ($draft) {
+            return $roll && $draft && isset($draft['season']) && $draft['season'] === $roll['season'];
+        };
+        $main_draft = ($draft_for($roll_now) && !$wrap_signup) || $draft_for($roll_next) ? array() : $draft;
+        ?>
         <?php if ($two): ?>
             <h3 class="rsl-season-head">This season <span class="rsl-season"><?php echo esc_html(RSL_Seasons::label($current)); ?></span></h3>
             <?php $this->render_my_team($now_team, $user_id); ?>
+            <?php if ($roll_now && !$wrap_signup): ?>
+                <?php echo self::roll_card($roll_now, $this->roll_other($user_id, $roll_now, $player, $open, $draft_for($roll_now) ? $draft : array(), $apply_taken ? 'rsl-apply-' . $roll_now['season'] : 'rsl-apply'), $draft_for($roll_now)); ?>
+                <?php $apply_taken = true; ?>
+            <?php endif; ?>
             <h3 class="rsl-season-head">Next season <span class="rsl-season"><?php echo esc_html(RSL_Seasons::label($signup)); ?></span></h3>
         <?php endif; ?>
-        <?php $this->render_season($user_id, $signup, $next_team, $player, $pending_signup, $fa_choices, $apply_choices, $draft); ?>
+        <?php if ($wrap_signup): ?>
+            <?php
+            ob_start();
+            $this->render_season($user_id, $signup, $next_team, $player, $pending_signup, $fa_choices, $apply_choices, $draft);
+            echo self::roll_card($roll_now, ob_get_clean(), (bool) $draft);
+            ?>
+        <?php else: ?>
+            <?php $this->render_season($user_id, $signup, $next_team, $player, $pending_signup, $fa_choices, $apply_choices, $main_draft); ?>
+            <?php if ($roll_next): ?>
+                <?php echo self::roll_card($roll_next, $this->roll_other($user_id, $roll_next, $player, $open, $draft_for($roll_next) ? $draft : array(), $apply_taken ? 'rsl-apply-' . $roll_next['season'] : 'rsl-apply'), $draft_for($roll_next)); ?>
+            <?php endif; ?>
+        <?php endif; ?>
 
         <?php foreach ($others as $key => $o): ?>
             <h3 class="rsl-season-head">Later season <span class="rsl-season"><?php echo esc_html(RSL_Seasons::label($key)); ?></span></h3>
@@ -1209,8 +1260,10 @@ class RSL_Portal {
      * team card and the application card offer (0.17.0: the seasons open for
      * sign-up they aren't in yet; a card with nothing to offer isn't shown);
      * $draft: what they typed into an application that failed (it opens the card).
+     * $apply_id: the application card's id (0.21.0: a second season's part on the page,
+     * inside a roll card, takes another so #rsl-apply appears once).
      */
-    private function render_season($user_id, $season, $team, $player, $pending, $fa_choices, $apply_choices, $draft) {
+    private function render_season($user_id, $season, $team, $player, $pending, $fa_choices, $apply_choices, $draft, $apply_id = 'rsl-apply') {
         ?>
         <?php if ($team): ?>
             <?php $this->render_my_team($team, $user_id); ?>
@@ -1236,7 +1289,7 @@ class RSL_Portal {
                 <?php endif; ?>
             </div>
             <?php if ($apply_choices): ?>
-                <details class="rsl-card" id="rsl-apply"<?php echo $draft ? ' open' : ''; ?>>
+                <details class="rsl-card" id="<?php echo esc_attr($apply_id); ?>"<?php echo $draft ? ' open' : ''; ?>>
                     <summary><strong>Captaining a team? Apply for it here</strong></summary>
                     <form method="post" class="rsl-form">
                         <?php echo self::fields('apply'); ?>
@@ -1244,7 +1297,7 @@ class RSL_Portal {
                         <button type="submit" class="rsl-btn">Send application</button>
                     </form>
                 </details>
-                <script>if (location.hash === '#rsl-apply') { document.getElementById('rsl-apply').open = true; }</script>
+                <script>(function () { var d = document.getElementById(<?php echo wp_json_encode($apply_id); ?>); if (d && location.hash === '#' + d.id) { d.open = true; var p = d.parentNode && d.parentNode.closest ? d.parentNode.closest('details') : null; if (p) { p.open = true; } } })();</script>
             <?php endif; ?>
         <?php endif; ?>
         <?php
@@ -1281,6 +1334,73 @@ class RSL_Portal {
             <?php endif; ?>
         </div>
         <?php
+    }
+
+    /**
+     * The card under a team the person is on for the season after its own (0.21.0), from
+     * RSL_Teams::roll_state() ($roll): headed with that season and its dates. The captain of a
+     * team not entered again yet gets the Enter the team again form (the level only when the team
+     * has none: est_level is never shown or filled in); a player is told to ask the captain, or
+     * that the captain has entered it and the invite comes once it's approved, or (approved, no
+     * invite waiting for them) to ask the captain for one. $other: what the page offers for that
+     * season with no team (render_season()), in a closed Not carrying on? box; $open opens it (a
+     * failed application from there).
+     */
+    private static function roll_card($roll, $other, $open = false) {
+        $team = $roll['team'];
+        $season = $roll['season'];
+        $short = RSL_Seasons::short_label($season);
+        $levels = RSL_Teams::levels();
+        ob_start();
+        ?>
+        <div class="rsl-card rsl-card-accent rsl-roll" id="rsl-roll-<?php echo intval($team->id); ?>">
+            <h3 class="rsl-roll-head"><?php echo esc_html(RSL_Seasons::label_with_dates($season, RSL_Seasons::span($season))); ?></h3>
+            <?php if ($roll['state'] === 'captain'): ?>
+                <p>Keep <?php echo esc_html($team->name); ?> going: enter it again with the same name, colour and division.</p>
+                <p class="rsl-hint">Once the league approves it, your players get an invite to accept, so anyone not carrying on can say no.</p>
+                <form method="post" class="rsl-form">
+                    <?php echo self::fields('roll_over', array('team_id' => $team->id)); ?>
+                    <?php if (!isset($levels[$team->est_level])): ?>
+                        <label class="rsl-field">Roughly what level does your team play at?
+                            <select name="team_level" required>
+                                <option value="">Choose…</option>
+                                <?php foreach ($levels as $key => $label): ?><option value="<?php echo esc_attr($key); ?>"><?php echo esc_html($label); ?></option><?php endforeach; ?>
+                            </select>
+                        </label>
+                        <p class="rsl-hint">Just a starting guess so your first games are even — it isn't shown anywhere, and your results take over after a couple of weeks.</p>
+                    <?php endif; ?>
+                    <button type="submit" class="rsl-btn">Enter the team again</button>
+                </form>
+            <?php elseif ($roll['state'] === 'pending'): ?>
+                <p>Your captain has entered <?php echo esc_html($team->name); ?> again for <?php echo esc_html($short); ?>. You'll get an invite to accept once the league approves it.</p>
+            <?php elseif ($roll['state'] === 'rolled'): ?>
+                <p><?php echo esc_html($team->name); ?> is playing <?php echo esc_html($short); ?>. To keep playing with them, ask your captain to invite you.</p>
+            <?php else: ?>
+                <p><strong>Want to keep playing with <?php echo esc_html($team->name); ?>?</strong> Ask your captain to enter the team again. You'll get an invite to accept once the league approves it.</p>
+            <?php endif; ?>
+            <?php if ($other !== ''): ?>
+                <details class="rsl-roll-other"<?php echo $open ? ' open' : ''; ?>>
+                    <summary>Not carrying on? Find another team for <?php echo esc_html($short); ?></summary>
+                    <?php echo $other; ?>
+                </details>
+            <?php endif; ?>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
+    /**
+     * A roll card's Not carrying on? box (0.21.0): render_season() for the roll's season alone, as
+     * the page shows a season with no team (the free agent list, a code, applying), with no team or
+     * application there (roll_state() says so). $open: RSL_Seasons::signup_choices(); $apply_id:
+     * the application card's id, so it never clashes with the main season's.
+     */
+    private function roll_other($user_id, $roll, $player, $open, $draft, $apply_id) {
+        $season = $roll['season'];
+        $only = isset($open[$season]) ? array($season => $open[$season]) : array();
+        ob_start();
+        $this->render_season($user_id, $season, null, $player, null, $only, $only, $draft, $apply_id);
+        return ob_get_clean();
     }
 
     /**
@@ -1447,6 +1567,11 @@ class RSL_Portal {
             .rsl-portal h4 { margin: 16px 0 6px; }
             .rsl-portal .rsl-season-head { margin: 22px 0 4px; }
             .rsl-portal .rsl-leave { margin: 8px 0 0; text-align: right; }
+            .rsl-portal .rsl-roll .rsl-roll-head { margin: 0 0 6px; font-size: 1.05em; }
+            .rsl-portal .rsl-roll > .rsl-form { margin: 8px 0 0; }
+            .rsl-portal .rsl-roll-other { margin: 12px 0 0; }
+            .rsl-portal .rsl-roll-other > summary { cursor: pointer; font-weight: 600; color: var(--rsl-navy); }
+            .rsl-portal .rsl-roll-other .rsl-card { margin: 10px 0; padding: 10px 12px; }
             .rsl-rego-season { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 6px 6px 0; }
             .rsl-season-pick { font-weight: 600; }
             .rsl-season-pick select { margin-left: 4px; max-width: 100%; }
