@@ -1285,8 +1285,9 @@ class RSL_Portal {
 
     /**
      * The team page's part for the people on the team (0.20.0): the roster (the captain also sees
-     * ✓ cleared / ✗ needs rego, never why, and Remove), then the captain's tools for adding players
-     * (invites waiting, the invite message, the code, an email invite, the free agent tools). '' for
+     * ✓ cleared / ✗ needs rego, never why, and Remove), then the captain's Add players (invites
+     * waiting, the invite message, the code, an email invite; the free agent tools are
+     * team_free_agents(), after the schedule). '' for
      * anyone else; an admin who isn't on the team sees the roster only. Its forms post back to the
      * team page.
      */
@@ -1344,14 +1345,23 @@ class RSL_Portal {
                 <p class="rsl-hint">Or invite someone by their email — they'll join once they accept:</p>
                 <form method="post" class="rsl-row"><?php echo self::fields('invite', array('team_id' => $team->id, 'back' => $back)); ?><input type="email" name="email" placeholder="Their email" required><button type="submit" class="rsl-btn">Invite</button></form>
                 <p class="rsl-hint">Everyone needs to be cleared (social rego or full/life membership) before their first game.</p>
-
-                <?php if (class_exists('RSL_Portal_FA') && $team->status === 'active'): ?>
-                    <?php echo RSL_Portal_FA::captain_tools($team, $user_id, $back); ?>
-                <?php endif; ?>
             <?php endif; ?>
         </div>
         <?php
         return ob_get_clean() . self::styles();
+    }
+
+    /**
+     * The captain's free agent tools on the team page, after the schedule (0.20.0: they run long, so
+     * the standing and schedule stay near the top): short or full, requests to join, Looking for
+     * players?, Find free agents. '' for anyone else, or when the team isn't active.
+     */
+    public static function team_free_agents($team, $user_id) {
+        if (!$user_id || !class_exists('RSL_Portal_FA') || $team->status !== 'active' || !RSL_Teams::is_captain($team->id, $user_id)) {
+            return '';
+        }
+        $tools = RSL_Portal_FA::captain_tools($team, $user_id, RSL_Public::team_url($team));
+        return $tools === '' ? '' : '<div class="rsl-portal rsl-team-tools"><h3 class="rsl-division">Free agents</h3>' . $tools . '</div>' . self::styles();
     }
 
     /** The captain's team preferences on the team page, after the schedule (0.20.0); '' for anyone else. */

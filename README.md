@@ -14,8 +14,8 @@ requests, and for the people on the team the roster
 (`RSL_Portal::team_tools()`). The captain also sees there who's cleared
 (never why), Remove, invites waiting, Add players with the invite
 message, the free agent tools (Looking for players?, requests to join,
-Find free agents) and, after the schedule, Team preferences
-(`RSL_Portal::team_prefs()`). Their forms post back to the team page
+Find free agents, `RSL_Portal::team_free_agents()`, after the schedule
+as they run long) and Team preferences (`RSL_Portal::team_prefs()`). Their forms post back to the team page
 (`back`), refusals included.
 
 The league page (`/social-league/`) is about the person: registering,

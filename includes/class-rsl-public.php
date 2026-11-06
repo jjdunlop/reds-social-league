@@ -163,6 +163,7 @@ class RSL_Public {
         <?php // 0.20.0: the team's home for the people on it: the roster, and the captain's tools around the schedule. ?>
         <?php echo RSL_Portal::team_tools($team, $user_id); ?>
         <?php echo RSL_Public_Fixtures::team_section($team); ?>
+        <?php echo RSL_Portal::team_free_agents($team, $user_id); ?>
         <?php echo RSL_Portal::team_prefs($team, $user_id); ?>
         <?php
         return ob_get_clean();

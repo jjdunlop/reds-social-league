@@ -305,6 +305,11 @@ $check('the league page card: Open team page, no roster or tools', strpos($cap_c
 $cap_view = RSL_Portal::team_tools(RSL_Teams::get($team->id), $cap);
 $roster = substr($cap_view, strpos($cap_view, 'Players ('), strpos($cap_view, '>Add players</h3>') - strpos($cap_view, 'Players ('));
 $check('team page tools post back to the team page', strpos($cap_view, 'name="back" value="' . esc_attr(RSL_Public::team_url(RSL_Teams::get($team->id))) . '"') !== false);
+$fa_tools = RSL_Portal::team_free_agents(RSL_Teams::get($team->id), $cap);
+$check('the free agent tools are their own part after the schedule, posting back to the team page', strpos($cap_view, 'value="cap_spots"') === false
+    && strpos($fa_tools, '>Free agents</h3>') !== false && strpos($fa_tools, 'value="cap_spots"') !== false
+    && strpos($fa_tools, 'name="back" value="' . esc_attr(RSL_Public::team_url(RSL_Teams::get($team->id))) . '"') !== false
+    && RSL_Portal::team_free_agents(RSL_Teams::get($team->id), $p3) === '', RSL_Teams::get($team->id)->status);
 $check('captain: teammates show cleared / needs rego', strpos($roster, '&#10003; Cleared') !== false && strpos($roster, '&#10007; Needs rego') !== false);
 $check('captain never sees why (membership vs rego)', stripos($roster, 'Full/life') === false && stripos($roster, 'membership') === false && strpos($roster, 'Rego paid') === false && strpos($roster, 'until') === false);
 $check('captain tools: invite link and email invite', strpos($cap_view, 'join=' . $code) !== false && strpos($cap_view, 'name="do" value="invite"') !== false);
