@@ -9,18 +9,21 @@
  * too), the captain's application keeping the robot chosen (the card and Start a team at
  * registration), the schema 13 backfill, ensure() writing two files named by the team id, the
  * seed's hash and the stage, the check before saving (clean()) refusing each bad case with nothing
- * saved, a failed fetch saving nothing, RSL_Public::badge() with files (the picture, the
+ * saved (elements and namespaces off its lists, a script under a prefix that isn't ASCII, CSS
+ * escapes, processing instructions, CDATA), a failed fetch saving nothing, RSL_Public::badge() with files (the picture, the
  * reduced-motion source, the sizes, no external address, the stored stage) and without (today's
  * initials badge exactly, partial objects too), the fixtures' sides carrying the seed and stage, a
  * public page with missing files making no request and queueing, the chooser (two images, Level 1
  * and Fully built, 12 candidates with valid seeds, the hidden field, no innerHTML in the script,
  * nothing but api.dicebear.com in the previews, the team name in none, the script once a page), the
  * job's batch, its reschedule, a failure's wait and teams with nothing to draw (a gone team's files
- * listed to go), the results hook (record, forfeit, clear, publish, unpublish, delete), the stage
+ * listed to go), the results hook (record, forfeit, clear, publish, unpublish, delete), a run put
+ * off by a failed fetch brought forward by results and new teams (never while a test holds it), the
+ * stats fingerprint leaving the stage out, the stage
  * job (1 to 3 and 8 after Season Points change: fetched, written, the old files listed; levels
  * worked out once a run; a ladder render asking nothing; back to 1 with no fetch), Use this one by
- * the captain (the league page's process(), the flash, the closed details), by a league admin (and
- * the Teams screen's details), refused for a plain member and a stranger and a bad seed, a failed
+ * the captain (the league page's process(), the flash, the closed details under the header), by a
+ * league admin (regenerate(), the team page's process() and the Teams screen's details), refused for a plain member and a stranger and a bad seed, a failed
  * fetch keeping the old robot, the daily cap, the stage kept, the purge list (New avatar, a stage
  * change, a declined and a withdrawn team; purge() keeping a file in use), the schema upgrade still
  * to finish, roll_over() keeping the seed (the files copied at stage 1, fetched again otherwise),
@@ -72,6 +75,7 @@ $cands = null;
 $behind = null;
 $current = null;
 $counter = null;
+$capture = null;
 $script_flag = new ReflectionProperty('RSL_Avatars', 'script_done');
 $script_flag->setAccessible(true);
 // The stub's mode and its log: every request (url), and the ones to DiceBear.
@@ -215,6 +219,12 @@ $stub = function ($pre, $args, $url) use (&$http, $svg_for, $query_of, $stage_of
         case 'href':
             $svg = str_replace('<use href="#a"/>', '<use href="https://elsewhere.example.test/a.svg#a"/>', $svg);
             break;
+        case 'script-prefix': // a script under a prefix with a letter that isn't ASCII (an e with an acute accent), declared as the SVG namespace
+            $svg = str_replace('<use href="#a"/>', "<use href=\"#a\"/><\xC3\xA9:script xmlns:\xC3\xA9=\"http://www.w3.org/2000/svg\">alert(1)</\xC3\xA9:script>", $svg);
+            break;
+        case 'escape': // url() spelled with a CSS escape
+            $svg = str_replace('@media', 'svg { background: \\75 rl(https://elsewhere.example.test/x); } @media', $svg);
+            break;
         case 'big':
             $svg = str_replace('</svg>', '<!-- ' . str_repeat('x', RSL_Avatars::MAX_BYTES) . ' --></svg>', $svg);
             break;
@@ -249,9 +259,10 @@ for ($i = 0; $i < 200; $i++) {
 }
 $check('new_seed(): 16 lower-case hex characters, every one valid', count(array_filter($seeds, function ($s) { return preg_match('/^[a-f0-9]{16}$/', $s) === 1 && RSL_Avatars::valid_seed($s); })) === 200);
 $check('...and random: 200 in a row, all different', count(array_unique($seeds)) === 200);
-$check('valid_seed() refuses a name, an empty seed, capitals, the wrong length and a non-string',
+$check('valid_seed() refuses a name, an empty seed, capitals, the wrong length, a trailing newline and a non-string',
     !RSL_Avatars::valid_seed('Block Party') && !RSL_Avatars::valid_seed('') && !RSL_Avatars::valid_seed('ABCDEF0123456789')
-    && !RSL_Avatars::valid_seed('abcdef012345678') && !RSL_Avatars::valid_seed('abcdef01234567890') && !RSL_Avatars::valid_seed(1234567890123456));
+    && !RSL_Avatars::valid_seed('abcdef012345678') && !RSL_Avatars::valid_seed('abcdef01234567890') && !RSL_Avatars::valid_seed("abcdef0123456789\n")
+    && !RSL_Avatars::valid_seed(1234567890123456) && RSL_Avatars::valid_seed('abcdef0123456789'));
 
 // --- The pinned picks ---------------------------------------------------------------------------------------
 $X = '3f9c2a7be01d4c58'; // the example seed
@@ -379,7 +390,8 @@ $check('the team application\'s fields: name, division and level, no colour', st
 $check('...and Your team\'s robot: Level 1 and Fully built, Try another, the hidden avatar_seed field, and the line about Season Points',
     strpos($fields, '<p class="rsl-robot-title">Your team&#039;s robot</p>') !== false && strpos($fields, '<figcaption>Level 1</figcaption>') !== false
     && strpos($fields, '<figcaption>Fully built</figcaption>') !== false && strpos($fields, '>Try another</button>') !== false
-    && preg_match('/<input type="hidden" name="avatar_seed" value="[a-f0-9]{16}">/', $fields) === 1
+    && preg_match('/<input type="hidden" name="avatar_seed" value="[a-f0-9]{16}" autocomplete="off">/', $fields) === 1
+    && strpos($fields, 'data-rsl-last="' . RSL_Avatars::LAST_WORDS . '"') !== false && stripos(RSL_Avatars::LAST_WORDS, 'reload') === false
     && strpos($fields, esc_html(RSL_Avatars::START_WORDS)) !== false && strpos($fields, 'It starts at level 1 and builds up as your team earns Season Points.') !== false);
 $applicant = $mk('applicant', 'subscriber', true);
 $chosen = RSL_Avatars::new_seed();
@@ -407,7 +419,7 @@ $draft = get_transient(RSL_Portal::APPLY_DRAFT_PREFIX . $fixer);
 delete_transient(RSL_Portal::APPLY_DRAFT_PREFIX . $fixer);
 $again = RSL_Portal::team_fields(is_array($draft) ? $draft : array(), array($S => RSL_Seasons::label($S)), true);
 $check('...a failed application keeps the robot in its draft, and the card shows it first', is_wp_error($failed) && is_array($draft) && $draft['seed'] === $draft_seed
-    && strpos($again, '<input type="hidden" name="avatar_seed" value="' . $draft_seed . '">') !== false, wp_json_encode($draft));
+    && strpos($again, '<input type="hidden" name="avatar_seed" value="' . $draft_seed . '" autocomplete="off">') !== false, wp_json_encode($draft));
 $odd = RSL_Portal::apply_from_post($fixer, array('team_name' => "Tee Odd Seed $suffix", 'team_division' => 'ranked', 'team_level' => 'social', 'team_season' => $S, 'avatar_seed' => 'Tee Odd Seed'));
 if ($odd && !is_wp_error($odd)) {
     $team_ids[] = intval($odd->id);
@@ -468,6 +480,19 @@ $bad = array(
     'a url() elsewhere' => str_replace('url(#c)', 'url(https://elsewhere.example.test/x)', $good),
     '@import' => str_replace('@media', '@import "x.css"; @media', $good),
     'an animation setting an href' => str_replace('</svg>', '<set attributeName="href" to="#a"/></svg>', $good),
+    'a script under a prefix that isn\'t ASCII' => str_replace('</svg>', "<\xC3\xA9:script xmlns:\xC3\xA9=\"http://www.w3.org/2000/svg\">alert(1)</\xC3\xA9:script></svg>", $good),
+    'the same, declared on the svg' => str_replace(array('<svg ', '</svg>'), array("<svg xmlns:\xC3\xA9=\"http://www.w3.org/2000/svg\" ", "<\xC3\xA9:script>alert(1)</\xC3\xA9:script></svg>"), $good),
+    'a script under a prefix on the list' => str_replace(array('<svg ', '</svg>'), array('<svg xmlns:dc="http://www.w3.org/2000/svg" ', '<dc:script>alert(1)</dc:script></svg>'), $good),
+    'a CSS escape spelling url()' => str_replace('@media', 'svg { background: \\75 rl(https://elsewhere.example.test/x); } @media', $good),
+    'a CSS escape spelling @import' => str_replace('@media', '@\\69mport "x.css"; @media', $good),
+    'an element DiceBear never uses (image)' => str_replace('</svg>', '<image width="1" height="1"/></svg>', $good),
+    'an element DiceBear never uses (text)' => str_replace('</svg>', '<text>Hi</text></svg>', $good),
+    'a tag with a space after <' => str_replace('</svg>', '< script>alert(1)</script></svg>', $good),
+    'a namespace not on the list' => str_replace('<svg ', '<svg xmlns:x="http://elsewhere.example.test/x" ', $good),
+    'the default namespace changed inside' => str_replace('<g id="a">', '<g id="a" xmlns="http://elsewhere.example.test/x">', $good),
+    'a prefix on the list with another address' => str_replace('<svg ', '<svg xmlns:dc="http://elsewhere.example.test/dc" ', $good),
+    'a processing instruction' => str_replace('<defs>', '<?xml-stylesheet href="x.css"?><defs>', $good),
+    'a CDATA section' => str_replace('</svg>', '<![CDATA[x]]></svg>', $good),
     'not starting with <svg' => '<html>' . $good . '</html>',
     'cut off' => substr($good, 0, -6),
     'over 64 KB' => str_replace('</svg>', '<!-- ' . str_repeat('x', RSL_Avatars::MAX_BYTES) . ' --></svg>', $good),
@@ -481,7 +506,8 @@ foreach ($bad as $label => $svg) {
 }
 $check('clean() refuses each: ' . implode(', ', array_keys($bad)), !$let_through && RSL_Avatars::clean(null) === null, 'let through: ' . implode(', ', $let_through));
 $t2 = $mkteam($S, "Tee Two $suffix");
-foreach (array('script' => 'a script in the image', 'href' => 'a link elsewhere in the image', 'still-bad' => 'a good animated image but a bad still one',
+foreach (array('script' => 'a script in the image', 'script-prefix' => 'a script under a prefix that isn\'t ASCII', 'href' => 'a link elsewhere in the image',
+    'escape' => 'a CSS escape spelling url()', 'still-bad' => 'a good animated image but a bad still one',
     'big' => 'an image over 64 KB', '500' => 'a 500', 'type' => 'the wrong content type', 'error' => 'a timeout') as $mode => $words) {
     $http['mode'] = $mode;
     $reset();
@@ -589,10 +615,12 @@ $check('the chooser: ' . RSL_Avatars::CHOICES . ' candidates, each a valid new s
 $check('...two images side by side, 96 px, captioned Level 1 and Fully built, the first candidate\'s, with no referrer',
     strpos($ch, '<div class="rsl-robot-pair"><figure><img src="' . esc_url($data[0][1]) . '" data-rsl-robot="1" alt="Robot at level 1" width="96" height="96" loading="lazy" decoding="async" referrerpolicy="no-referrer"><figcaption>Level 1</figcaption></figure>') !== false
     && strpos($ch, '<figure><img src="' . esc_url($data[0][2]) . '" data-rsl-robot="8" alt="Robot fully built" width="96" height="96" loading="lazy" decoding="async" referrerpolicy="no-referrer"><figcaption>Fully built</figcaption></figure></div>') !== false, $ch);
-$check('...Try another (a button that never submits, hidden until the script runs), the note for after the last one, and the hidden field holding the first candidate (what a browser without JavaScript sends)',
+$check('...Try another (a button that never submits, hidden until the script runs), the live note (always rendered, so a screen reader hears it) with the words for after the last one (never to reload on a form), and the hidden field holding the first candidate (what a browser without JavaScript sends; never autocompleted, so a reload never restores another)',
     strpos($ch, '<button type="button" class="rsl-robot-next" hidden>Try another</button>') !== false
-    && strpos($ch, 'data-rsl-last="That was the last one. Reload the page for more."') !== false
-    && strpos($ch, '<input type="hidden" name="avatar_seed" value="' . $pick_first . '">') !== false
+    && strpos($ch, '<p class="rsl-robot-note" aria-live="polite" data-rsl-last="Try another goes back to the first."></p>') !== false
+    && strpos(RSL_Avatars::css(), ':empty') === false
+    && strpos(RSL_Avatars::chooser(array('last' => RSL_Avatars::MORE_WORDS)), 'data-rsl-last="Reload the page for more."') !== false
+    && strpos($ch, '<input type="hidden" name="avatar_seed" value="' . $pick_first . '" autocomplete="off">') !== false
     && strpos($ch, '<p class="rsl-robot-title">Your team&#039;s robot</p>') !== false && strpos($ch, '<p class="rsl-hint rsl-robot-hint">It starts at level 1') !== false);
 $all_urls = array();
 // Every address in the box (the script, checked below, holds only the prefix it compares with).
@@ -604,6 +632,9 @@ $js = RSL_Avatars::script();
 $check('...the script: attributes and textContent only, never innerHTML, outerHTML, insertAdjacentHTML or document.write, and it checks each address is DiceBear\'s',
     strpos($js, 'innerHTML') === false && strpos($js, 'outerHTML') === false && strpos($js, 'insertAdjacentHTML') === false && strpos($js, 'document.write') === false
     && strpos($js, 'textContent') !== false && strpos($js, "setAttribute('src'") !== false && strpos($js, "'https://api.dicebear.com/'") !== false && strpos($js, 'input.value = c[0]') !== false);
+$check('...it puts the hidden field back to the first robot as it starts (the one on screen), and each Try another says where it is (Robot N of M) in the note',
+    strpos($js, 'input.value = String(list[0][0]);') !== false && strpos($js, "note.textContent = 'Robot ' + (i + 1) + ' of ' + list.length + '.'") !== false
+    && strpos($js, 'innerHTML') === false);
 $check('...printed once a page: in the first chooser, not the second', substr_count($ch, '<script>') === 1 && strpos($ch, $js) !== false && strpos($ch2, '<script') === false
     && strpos($ch2, '<p class="rsl-robot-title">Your team&#039;s robot</p>') !== false && strpos($ch2, 'rsl-robot-hint') === false);
 
@@ -718,6 +749,48 @@ foreach (is_array($cron) ? $cron : array() as $hooks) {
 $check('...debounced: two changes make one run, ' . RSL_Avatars::STAGE_DELAY . ' seconds on, and nothing is asked now', $flagged($S) && $events === 1 && $when
     && $when >= time() + RSL_Avatars::STAGE_DELAY - 10 && $when <= time() + RSL_Avatars::STAGE_DELAY + 5 && $calls() === 0, wp_json_encode(array($when, time(), $events)));
 $hold_job();
+// A run put off while a team waits out a failed fetch (3 hours here) is brought forward by results and new teams.
+// The test's hold is lifted for this part only, as on the live site; a run moved to now is caught, never scheduled.
+delete_option(RSL_Avatars::HOLD_OPTION);
+$later = time() + 3 * HOUR_IN_SECONDS;
+update_option(RSL_Avatars::QUEUE_OPTION, array(intval($ga->id) => array('tries' => 5, 'next' => $later)), false);
+wp_clear_scheduled_hook(RSL_Avatars::CRON_HOOK);
+wp_schedule_single_event($later, RSL_Avatars::CRON_HOOK);
+RSL_Avatars::queue($ga->id);
+$when_waiting = wp_next_scheduled(RSL_Avatars::CRON_HOOK);
+RSL_Avatars::stage_check($S);
+$when_results = wp_next_scheduled(RSL_Avatars::CRON_HOOK);
+$events_results = 0;
+foreach ((array) _get_cron_array() as $hooks) {
+    $events_results += is_array($hooks) && isset($hooks[RSL_Avatars::CRON_HOOK]) ? count($hooks[RSL_Avatars::CRON_HOOK]) : 0;
+}
+wp_clear_scheduled_hook(RSL_Avatars::CRON_HOOK);
+wp_schedule_single_event($later, RSL_Avatars::CRON_HOOK);
+$caught = null;
+$capture = function ($pre, $event) use (&$caught) {
+    if (is_object($event) && isset($event->hook) && $event->hook === RSL_Avatars::CRON_HOOK) {
+        $caught = intval($event->timestamp);
+        return true; // caught: nothing is scheduled at now
+    }
+    return $pre;
+};
+add_filter('pre_schedule_event', $capture, 10, 2);
+RSL_Avatars::queue($gb->id);
+remove_filter('pre_schedule_event', $capture, 10);
+$capture = null;
+update_option(RSL_Avatars::HOLD_OPTION, time() + DAY_IN_SECONDS, false); // the test's hold again
+$hold_job();
+RSL_Avatars::stage_check($S);
+RSL_Avatars::queue($t3->id);
+$when_held = wp_next_scheduled(RSL_Avatars::CRON_HOOK);
+$check('a run put off while a team waits out a failed fetch: drawing that team\'s badge again leaves it where it is', intval($when_waiting) === $later, wp_json_encode(array($when_waiting, $later)));
+$check('...results changing bring it forward to ' . RSL_Avatars::STAGE_DELAY . ' seconds on (one run, not two)', $when_results && $when_results <= time() + RSL_Avatars::STAGE_DELAY + 5
+    && $when_results >= time() + RSL_Avatars::STAGE_DELAY - 10 && $events_results === 1, wp_json_encode(array($when_results, time(), $events_results)));
+$check('...a team newly queued brings it to now', $caught !== null && $caught <= time() + 5 && $in_queue($gb->id), wp_json_encode(array($caught, time())));
+$check('...and while a test holds the job (the mail stop\'s marker) nothing moves it', $when_held && $when_held > time() + DAY_IN_SECONDS - 120 && $in_queue($t3->id),
+    wp_json_encode(array($when_held, time())));
+$set_queue(array());
+delete_option(RSL_Avatars::STAGE_OPTION);
 $current = function () use ($S) { return $S; };
 add_filter('pre_option_' . RSL_Seasons::CURRENT_OPTION, $current);
 delete_option(RSL_Avatars::STAGE_OPTION);
@@ -773,6 +846,16 @@ $check('...the old stage\'s files stay for cached pages, listed to go two days o
     count(array_intersect($ts_s1, $files_of($ts->id))) === 2 && $listed($ts_s1[0]) >= time() + RSL_Avatars::KEEP_OLD - 120 && $listed($ts_s1[1]) >= time() + RSL_Avatars::KEEP_OLD - 120
     && $listed($ts_s3[1]) === 0 && !$flagged($S) && !$in_queue($ts->id) && !$in_queue($ts2->id));
 $check('...the badge is now stage 3', strpos(RSL_Public::badge($ts_b), $ts_s3[1]) !== false);
+$fp_before = $fp->invoke(null, $S);
+$set_stage($ts3->id, 2);
+$fp_stage = $fp->invoke(null, $S);
+$set_stage($ts3->id, 1);
+$ts3_seed = RSL_Teams::get($ts3->id)->avatar_seed;
+$wpdb->update(RSL_Database::table('teams'), array('avatar_seed' => RSL_Avatars::new_seed()), array('id' => $ts3->id));
+$fp_seed = $fp->invoke(null, $S);
+$wpdb->update(RSL_Database::table('teams'), array('avatar_seed' => $ts3_seed), array('id' => $ts3->id));
+$check('the saved stats\' fingerprint leaves the stage out (the job writes stages after every results night, and each write would throw the saved stats away) but has the seed',
+    is_string($fp_before) && $fp_before === $fp_stage && $fp_seed !== $fp_before && $fp->invoke(null, $S) === $fp_before);
 $reset();
 wp_clear_scheduled_hook(RSL_Avatars::CRON_HOOK);
 RSL_Avatars::work();
@@ -823,6 +906,10 @@ $check('the team page: New avatar by the header for the captain, a closed detail
     && strpos($page_cap, '<button type="submit" class="rsl-avatar-use">Use this one</button></form></details>') !== false
     && strpos($page_cap, '<details class="rsl-avatar-new" open') === false
     && strpos($page_cap, 'class="rsl-avatar-new"') < strpos($page_cap, 'class="rsl-portal rsl-team-tools"'));
+$check('...under the header, full width (inside the header\'s flex row the box made a 360 px phone scroll sideways), and after the last robot it says to reload for more (nothing typed to lose there)',
+    preg_match('#<p class="rsl-meta">[^<]*</p>\s*</div>\s*</div>\s*<details class="rsl-avatar-new">#', $page_cap) === 1
+    && strpos($page_cap, 'data-rsl-last="Reload the page for more."') !== false
+    && strpos((string) file_get_contents(RSL_PLUGIN_DIR . 'includes/class-rsl-public.php'), '.rsl-team-head > div { min-width: 0; }') !== false);
 $page_la = $render($la, $t1->slug);
 $check('...for a league admin too (The team\'s robot); not for a plain member', strpos($page_la, 'class="rsl-avatar-new"') !== false
     && strpos($page_la, '<p class="rsl-robot-title">The team&#039;s robot</p>') !== false && strpos($render($member, $t1->slug), 'class="rsl-avatar-new"') === false);
@@ -839,7 +926,7 @@ $fl = $flash();
 $t1b = RSL_Teams::get($t1->id);
 $new1 = RSL_Avatars::paths($t1b);
 clearstatcache();
-$check('the captain\'s Use this one: back to the team page with the flash', $to === $url1 && $fl['type'] === 'success' && $fl['message'] === 'New avatar saved.', wp_json_encode(array($to, $fl)));
+$check('the captain\'s Use this one: back to the team page with the flash', $to === $url1 && $fl['type'] === 'success' && $fl['message'] === 'New robot saved.', wp_json_encode(array($to, $fl)));
 $check('...the seed chosen, its two files fetched at the team\'s stage (two requests), the badge is the new one', $t1b->avatar_seed === $new_seed && intval($t1b->avatar_stage) === 1
     && $calls() === 2 && $http['dicebear'][0] === RSL_Avatars::api_url($new_seed, 1, true) && file_exists($new1['animated']) && file_exists($new1['still'])
     && strpos(RSL_Public::badge($t1b), basename($new1['animated'])) !== false);
@@ -867,11 +954,19 @@ $t1c = RSL_Teams::get($t1->id);
 $check('a league admin: regenerate() saves the robot they chose too', !is_wp_error($r) && $t1c->avatar_seed === $la_seed && RSL_Avatars::urls($t1c) !== null && $calls() === 2);
 wp_set_current_user($la);
 $reset();
+$la_page_seed = RSL_Avatars::new_seed();
+$to = RSL_Portal::process(array('rsl_nonce' => wp_create_nonce('rsl_front'), 'rsl_front' => '1', 'do' => 'new_avatar', 'team_id' => $t1->id, 'back' => $url1, 'avatar_seed' => $la_page_seed));
+$fl = $flash();
+$t1la = RSL_Teams::get($t1->id);
+$check('...a league admin\'s Use this one on the team page (not its captain): back to the team page with the flash, the seed saved',
+    $to === $url1 && $fl['type'] === 'success' && $fl['message'] === 'New robot saved.' && $t1la->avatar_seed === $la_page_seed && $calls() === 2
+    && RSL_Avatars::urls($t1la) !== null, wp_json_encode(array($to, $fl, $calls())));
+$reset();
 $adm_seed = RSL_Avatars::new_seed();
 $to = RSL_Admin::process(array('rsl_nonce' => wp_create_nonce('rsl_team_action'), 'season' => $S, 'do' => 'new_avatar', 'team_id' => $t1->id, 'avatar_seed' => $adm_seed));
 $nt = $notice();
 $t1d = RSL_Teams::get($t1->id);
-$check('...the Teams screen\'s Use this one: the notice, back to the team, the seed posted', $nt['type'] === 'success' && $nt['message'] === 'New avatar saved.'
+$check('...the Teams screen\'s Use this one: the notice, back to the team, the seed posted', $nt['type'] === 'success' && $nt['message'] === 'New robot saved.'
     && strpos($to, 'team=' . $t1->id) !== false && $t1d->avatar_seed === $adm_seed && $calls() === 2, wp_json_encode(array($to, $nt)));
 $edit = new ReflectionMethod('RSL_Admin', 'render_team');
 $edit->setAccessible(true);
@@ -888,7 +983,7 @@ $files_now = $files_of($t1->id);
 foreach (array($member => 'a plain member', $stranger => 'a stranger') as $who => $words) {
     $reset();
     $r = RSL_Avatars::regenerate($t1->id, $who, RSL_Avatars::new_seed());
-    $check("regenerate() by $words: refused, nothing asked, the robot kept", is_wp_error($r) && $r->get_error_message() === 'Only the captain can change the team\'s avatar.'
+    $check("regenerate() by $words: refused, nothing asked, the robot kept", is_wp_error($r) && $r->get_error_message() === 'Only the captain can change the team\'s robot.'
         && $calls() === 0 && RSL_Teams::get($t1->id)->avatar_seed === $seed_now && $files_of($t1->id) === $files_now);
 }
 wp_set_current_user($member);
@@ -902,14 +997,14 @@ $reset();
 $to = RSL_Portal::process(array('rsl_nonce' => wp_create_nonce('rsl_front'), 'rsl_front' => '1', 'do' => 'new_avatar', 'team_id' => $t1->id, 'back' => $url1, 'avatar_seed' => RSL_Avatars::new_seed()));
 $fl = $flash();
 $check('a failed fetch: refused with the sentence, the seed and files as they were', $to === $url1 && $fl['type'] === 'error'
-    && $fl['message'] === 'A new avatar couldn\'t be fetched just now, so the old one stays. Try again in a few minutes.'
+    && $fl['message'] === 'The new robot couldn\'t be fetched just now, so the old one stays. Try again in a few minutes.'
     && RSL_Teams::get($t1->id)->avatar_seed === $seed_now && $files_of($t1->id) === $files_now && RSL_Avatars::urls(RSL_Teams::get($t1->id)) !== null, wp_json_encode($fl));
 $http['mode'] = 'still-bad';
 $r = RSL_Avatars::regenerate($t1->id, $cap, RSL_Avatars::new_seed());
 $check('...a still image the check refuses: the same, nothing saved', is_wp_error($r) && $r->get_error_code() === 'rsl_avatar_fetch'
     && RSL_Teams::get($t1->id)->avatar_seed === $seed_now && $files_of($t1->id) === $files_now);
 $http['mode'] = 'good';
-$check('...every try that asked counts (5 so far today)', intval(get_transient(RSL_Avatars::tries_key($t1->id))) === 5);
+$check('...every try that asked counts (6 so far today)', intval(get_transient(RSL_Avatars::tries_key($t1->id))) === 6);
 set_transient(RSL_Avatars::tries_key($t1->id), RSL_Avatars::DAILY_LIMIT - 1, DAY_IN_SECONDS);
 $reset();
 $r = RSL_Avatars::regenerate($t1->id, $cap, RSL_Avatars::new_seed());
@@ -918,7 +1013,7 @@ $seed_now = RSL_Teams::get($t1->id)->avatar_seed;
 $reset();
 $r = RSL_Avatars::regenerate($t1->id, $cap, RSL_Avatars::new_seed());
 $r2 = RSL_Avatars::regenerate($t1->id, $la, RSL_Avatars::new_seed());
-$check('...the 21st is refused, for the captain and a league admin alike, nothing asked, the robot kept', is_wp_error($r) && $r->get_error_message() === 'You\'ve tried 20 avatars today; try again tomorrow.'
+$check('...the 21st is refused, for the captain and a league admin alike, nothing asked, the robot kept', is_wp_error($r) && $r->get_error_message() === 'You\'ve tried 20 robots today; try again tomorrow.'
     && is_wp_error($r2) && $r2->get_error_code() === 'rsl_avatar_limit' && $calls() === 0 && RSL_Teams::get($t1->id)->avatar_seed === $seed_now);
 $check('...counted per team: another team is free', !is_wp_error(RSL_Avatars::regenerate($t2->id, $la, RSL_Avatars::new_seed())));
 $check('regenerate(): a team that no longer exists', RSL_Avatars::regenerate(2147483000, $la, RSL_Avatars::new_seed())->get_error_message() === 'That team no longer exists.');
@@ -944,7 +1039,7 @@ $check('a declined application: its files stay for now and are listed to go two 
 $reset();
 $r = RSL_Avatars::regenerate($tdcl->id, $la, RSL_Avatars::new_seed());
 $check('...its robot can\'t be changed any more (nothing asked), and the Teams screen offers no New avatar for it', is_wp_error($r)
-    && $r->get_error_message() === 'That application was declined or withdrawn, so its avatar stays as it is.' && $calls() === 0
+    && $r->get_error_message() === 'That application was declined or withdrawn, so its robot stays as it is.' && $calls() === 0
     && (function () use ($edit, $tdcl) { ob_start(); $edit->invoke(new RSL_Admin(), RSL_Teams::get($tdcl->id)); $h = (string) ob_get_clean(); return strpos($h, '<details class="rsl-avatar-admin">') === false; })());
 $wd = $mk('withdrawer', 'subscriber', true);
 $twd = RSL_Teams::apply($S, $wd, array('name' => "Tee Pulled Out $suffix", 'division' => 'ranked', 'level' => 'social'));
@@ -1045,6 +1140,9 @@ if ($current) {
 if ($counter) {
     remove_filter('query', $counter);
 }
+if ($capture) {
+    remove_filter('pre_schedule_event', $capture, 10);
+}
 foreach (array($A, $S) as $s_key) {
     foreach ($wpdb->get_col($wpdb->prepare("SELECT id FROM " . RSL_Database::table('teams') . " WHERE season = %s", $s_key)) as $tid) {
         $team_ids[] = intval($tid);
@@ -1078,7 +1176,7 @@ foreach ($team_ids as $tid) {
     delete_transient(RSL_Avatars::tries_key($tid));
 }
 // The queue and the deletion list as they were, with anything another request added meanwhile (never the test's teams).
-$now_q = RSL_Avatars::queued();
+$now_q = RSL_Avatars::queued(true);
 $restored = $queue_before;
 foreach ($now_q as $tid => $item) {
     if (!in_array(intval($tid), $team_ids, true) && !isset($restored[$tid])) {

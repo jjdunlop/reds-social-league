@@ -53,28 +53,41 @@ captains no longer pick a team colour.
   10.x ignores the `radius` setting (the corners came back square), so the
   address uses `borderRadius=20`.
 - **Checked before saving.** A fetch must answer 200 with `image/svg+xml`
-  within 8 seconds, and the SVG must start with `<svg`, end with `</svg>` and
-  be at most 64 KB. Anything else is refused whole and nothing is saved:
-  scripts and foreignObject (with or without a namespace prefix), anything in
-  the XHTML namespace, a DOCTYPE or ENTITY, numeric character references,
-  `on...` attributes, `javascript:`, an `href`, `xlink:href` or CSS `url()`
-  pointing anywhere but a `#fragment` in the same file, `@import`,
-  `image-set()`, and an animation that sets an href (`RSL_Avatars::clean()`).
-  DiceBear's real output (5 to 8 KB at every stage, with `<use href="#...">`,
-  `url(#...)` and a keyframes `<style>` that only runs when the viewer hasn't
-  asked for less motion) passes.
+  within 8 seconds, with no redirects (`wp_safe_remote_get()`), and the SVG
+  must start with `<svg`, end with `</svg>` and be at most 64 KB
+  (`RSL_Avatars::clean()`). It is checked against what DiceBear really sends:
+  every element must be one the Voxel Bot uses (`svg`, `metadata` and its
+  `rdf:`/`dc:` credit lines, `defs`, `g`, `path`, `rect`, `use`, `clipPath`,
+  `linearGradient`, `radialGradient`, `stop`, `style`) and every namespace
+  one of its five, at its exact address, so a script or foreignObject under
+  any prefix, even one spelled with a letter that isn't ASCII, is refused.
+  A backslash (a CSS escape can spell `url(` or `@import`), a processing
+  instruction and any `<!` but a comment (DOCTYPE, ENTITY, CDATA) are
+  refused too, as are anything in the XHTML namespace, numeric character
+  references, `on...` attributes, `javascript:`, an `href`, `xlink:href` or
+  CSS `url()` pointing anywhere but a `#fragment` in the same file,
+  `@import`, `image-set()`, and an animation that sets an href. Anything
+  refused is refused whole and nothing is saved. DiceBear's real output (5 to
+  8 KB at every stage, with `<use href="#...">`, `url(#...)` and a keyframes
+  `<style>` that only runs when the viewer hasn't asked for less motion)
+  passes: all 24 images fetched while building, on PHP 7.4 and 8.2. If
+  DiceBear ever starts sending another element, new images are refused until
+  the list is updated; images already saved keep showing.
 - **Never fetched while a page is drawn.** A ladder of 30 teams would
   otherwise make 60 requests in one view. When a badge's files aren't there
   yet the page draws the initials badge, as before, and puts the team on the
   queue (`rsl_avatar_queue`). One WP-cron event (`rsl_avatar_fetch`) works
   through up to 10 teams a run and comes back 30 seconds later while any
   remain (WP-cron runs on site visits). A failed fetch stops the run; that
-  team waits 10 minutes, then 20, then 40, and never more than a day.
+  team waits 10 minutes, then 20, then 40, and never more than a day. A run
+  put off for a team waiting like that is brought forward when results change
+  or a new team is queued, so the other teams never wait behind it.
 - **Keeping the stage up to date.** Saving a result or a forfeit, clearing
   one, deleting a game, and publishing or pulling back a night fire
   `rsl_results_changed`, which flags the season (`rsl_avatar_stage_check`)
   and makes the job run five minutes later (one run for a night's worth of
-  results). The hourly job flags the current season too, as a catch-all.
+  results; a team whose last fetch failed waits out its retry first). The
+  hourly job flags the current season too, as a catch-all.
   The run works out the flagged season's levels once (`RSL_Stats`), queues
   each active team whose stage changed, fetches the new stage's two images,
   and only then writes the stage. A page view never does any of this.
@@ -101,32 +114,38 @@ captains no longer pick a team colour.
   earns Season Points." The team gets the robot showing when the
   application is sent. The server makes 12 robots for the box
   (`RSL_Avatars::chooser()`), so the picking stays in one place; Try another
-  moves to the next, and after the last says "That was the last one. Reload
-  the page for more." and starts again. Without JavaScript the first robot
-  shows and is the one sent. A failed application keeps its robot for the
-  card, like the other fields. The box fits a 360 px phone: two 96 px
-  pictures side by side, captions under them.
+  moves to the next and says where it is ("Robot 3 of 12.", read out by
+  screen readers), and on the last adds "Try another goes back to the
+  first." and starts again. It never says to reload there, as reloading a
+  form can lose what was typed. The hidden field never autocompletes and is
+  set to the first robot as the box starts, so a browser that restores fields
+  on reload (Firefox) never sends a robot that isn't on screen. Without
+  JavaScript the first robot shows and is the one sent. A failed application
+  keeps its robot for the card, like the other fields. The box fits a 360 px
+  phone: two 96 px pictures side by side, captions under them.
 - **The one place a browser asks DiceBear.** The previews in that box load
   straight from api.dicebear.com in the captain's browser (agreed by the
   club): only for that captain, only in that box, with no referrer, and the
   address holds the seed and the style's settings, never the team's name.
   Only logged-in captains and league admins reach the box.
 - **New avatar.** The captain, or a league admin, has New avatar under the
-  team's name on its team page; league admins also have it on the Teams
-  screen's team edit. It opens (closed until clicked) to the same box (Your
-  team's robot for the captain, The team's robot for a league admin, with
-  "The new robot keeps the team's level.") and Use this one. The server
-  checks the seed, fetches the two images for the team's current stage, and
-  only then saves the seed: "New avatar saved." The level never changes. A
-  failed fetch keeps the old robot: "A new avatar couldn't be fetched just
-  now, so the old one stays. Try again in a few minutes." A seed that isn't
-  one: "That robot can't be used. Please pick another." Each team gets 20
-  tries a day, counting failed fetches: "You've tried 20 avatars today; try
-  again tomorrow." Anyone else gets "Only the captain can change the team's
-  avatar." The same form sent twice is its success, with nothing asked. A
-  declined or withdrawn application keeps its robot ("That application was
-  declined or withdrawn, so its avatar stays as it is."), and the Teams
-  screen shows no New avatar for it.
+  team page's header (the badge and name), full width, so the open box never
+  makes a phone's page scroll sideways; league admins also have it on the
+  Teams screen's team edit. It opens (closed until clicked) to the same box
+  (Your team's robot for the captain, The team's robot for a league admin,
+  with "The new robot keeps the team's level.") and Use this one; after the
+  last robot it adds "Reload the page for more.", as nothing typed is lost
+  there. The server checks the seed, fetches the two images for the team's
+  current stage, and only then saves the seed: "New robot saved." The level
+  never changes. A failed fetch keeps the old robot: "The new robot couldn't
+  be fetched just now, so the old one stays. Try again in a few minutes." A
+  seed that isn't one: "That robot can't be used. Please pick another." Each
+  team gets 20 tries a day, counting failed fetches: "You've tried 20 robots
+  today; try again tomorrow." Anyone else gets "Only the captain can change
+  the team's robot." The same form sent twice is its success, with nothing
+  asked. A declined or withdrawn application keeps its robot ("That
+  application was declined or withdrawn, so its robot stays as it is."), and
+  the Teams screen shows no New avatar for it.
 - **No colour for captains.** The team application has no Team colour
   field, and a colour posted from a page opened before the update is
   ignored. A team made without one gets navy, which the initials use until

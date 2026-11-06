@@ -1510,11 +1510,13 @@ class RSL_Portal {
     }
 
     /**
-     * New avatar (0.23.0): by the team page's header for the team's captain or a league admin
+     * New avatar (0.23.0): under the team page's header, full width (inside the header's flex row
+     * the box made a 360 px phone scroll sideways), for the team's captain or a league admin
      * (RSL_Access::can()); '' for anyone else. A closed details (New avatar) holding the robot
      * chooser (RSL_Avatars::chooser(): Your team's robot for the captain, The team's robot for a
-     * league admin) and Use this one, which posts the chosen seed here (do=new_avatar) and comes
-     * back to the team page; RSL_Avatars::regenerate() checks again and says why it won't.
+     * league admin, MORE_WORDS after the last) and Use this one, which posts the chosen seed here
+     * (do=new_avatar) and comes back to the team page; RSL_Avatars::regenerate() checks again and
+     * says why it won't.
      */
     public static function avatar_button($team, $user_id) {
         $user_id = intval($user_id);
@@ -1527,7 +1529,7 @@ class RSL_Portal {
         }
         return '<details class="rsl-avatar-new"><summary>New avatar</summary><form method="post">'
             . self::fields('new_avatar', array('team_id' => $team->id, 'back' => RSL_Public::team_url($team)))
-            . RSL_Avatars::chooser(array('title' => $captain ? "Your team's robot" : "The team's robot", 'hint' => RSL_Avatars::KEEPS_LEVEL_WORDS))
+            . RSL_Avatars::chooser(array('title' => $captain ? "Your team's robot" : "The team's robot", 'hint' => RSL_Avatars::KEEPS_LEVEL_WORDS, 'last' => RSL_Avatars::MORE_WORDS))
             . '<button type="submit" class="rsl-avatar-use">Use this one</button></form></details>';
     }
 

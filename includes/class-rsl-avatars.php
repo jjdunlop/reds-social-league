@@ -84,7 +84,23 @@ class RSL_Avatars {
     const DIR = 'rsl-team-avatars';
 
     /** A file the league saves there: team-<id>-<12 hex of the seed's MD5>-s<stage>.svg and ...-still.svg. */
-    const FILE_PATTERN = '/^team-(\d+)-[a-f0-9]{12}(?:-s[1-8])?(?:-still)?\.svg$/';
+    const FILE_PATTERN = '/^team-(\d+)-[a-f0-9]{12}(?:-s[1-8])?(?:-still)?\.svg\z/';
+
+    /**
+     * The only elements an image may hold (clean()): every element in DiceBear's real Voxel Bot
+     * output, at every stage, animated and still. Anything else is refused whole.
+     */
+    const SVG_ELEMENTS = array('svg', 'metadata', 'rdf:RDF', 'rdf:Description', 'dc:title', 'dc:creator', 'dc:source', 'dc:rights', 'dcterms:license',
+        'defs', 'linearGradient', 'radialGradient', 'stop', 'clipPath', 'g', 'path', 'rect', 'use', 'style');
+
+    /** The only namespace declarations an image may make (clean()): prefix ('' the default) => its exact address, as DiceBear's output has them. */
+    const SVG_NAMESPACES = array(
+        '' => 'http://www.w3.org/2000/svg',
+        'rdf' => 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+        'xsi' => 'http://www.w3.org/2001/XMLSchema-instance',
+        'dc' => 'http://purl.org/dc/elements/1.1/',
+        'dcterms' => 'http://purl.org/dc/terms/',
+    );
 
     /** team id => array('tries' => failed fetches so far, 'next' => unix time it may be tried again). */
     const QUEUE_OPTION = 'rsl_avatar_queue';
@@ -131,11 +147,11 @@ class RSL_Avatars {
     /** The img's width and height for each badge size (the stylesheets set the drawn size, as for the initials). */
     const SIZES = array('' => 44, 'large' => 72, 'small' => 28);
 
-    /** Robots the chooser offers before it says to reload. */
+    /** Robots the chooser offers (Try another goes round them, saying which one it shows). */
     const CHOICES = 12;
 
-    /** What the captain (or league admin) reads after a new avatar is saved. */
-    const SAVED_WORDS = 'New avatar saved.';
+    /** What the captain (or league admin) reads after a new robot is saved. */
+    const SAVED_WORDS = 'New robot saved.';
 
     /** The chooser's line on the application. */
     const START_WORDS = 'It starts at level 1 and builds up as your team earns Season Points.';
@@ -143,8 +159,20 @@ class RSL_Avatars {
     /** The chooser's line under New avatar. */
     const KEEPS_LEVEL_WORDS = 'The new robot keeps the team\'s level.';
 
-    /** The chooser's line once Try another reaches the last robot. */
-    const LAST_WORDS = 'That was the last one. Reload the page for more.';
+    /**
+     * The chooser's words after "Robot 12 of 12." on a form with typed fields (the captain's
+     * application): never to reload, which can lose what was typed.
+     */
+    const LAST_WORDS = 'Try another goes back to the first.';
+
+    /** The same under New avatar (the team page, the Teams screen), where there is nothing typed to lose. */
+    const MORE_WORDS = 'Reload the page for more.';
+
+    /** Another site's run on the same database server (GET_LOCK names are server-wide) never holds this site's lock: lock_name(). */
+    const LOCK_PREFIX = 'rsl_avatar_';
+
+    /** A test's mail stop (dev/lib-mail-stop.php) sets this to a unix time: until then schedule() never moves a run it finds earlier. */
+    const HOLD_OPTION = 'rsl_avatar_hold_until';
 
     /** The uploads folder's path and URL, read once a request. */
     private static $dir = null;
@@ -179,7 +207,7 @@ class RSL_Avatars {
 
     /** True for a seed new_seed() could have made. */
     public static function valid_seed($seed) {
-        return is_string($seed) && preg_match('/^[a-f0-9]{16}$/', $seed) === 1;
+        return is_string($seed) && preg_match('/^[a-f0-9]{16}\z/', $seed) === 1; // \z: a trailing newline is no seed
     }
 
     /** A seed from a form's avatar_seed field, unslashed and trimmed ('' when there is none); valid_seed() judges it. */
@@ -372,11 +400,15 @@ class RSL_Avatars {
         return true;
     }
 
-    /** One image from the API, checked (clean()); null for anything but a 200 image/svg+xml that passes. */
+    /**
+     * One image from the API, checked (clean()); null for anything but a 200 image/svg+xml that
+     * passes. wp_safe_remote_get() with no redirects: an answer can't send the server anywhere
+     * else (a redirect is not a 200, so it saves nothing).
+     */
     private static function fetch($url) {
-        $r = wp_remote_get($url, array(
+        $r = wp_safe_remote_get($url, array(
             'timeout' => self::TIMEOUT,
-            'redirection' => 2,
+            'redirection' => 0,
             'limit_response_size' => self::MAX_BYTES + 1,
             'headers' => array('Accept' => 'image/svg+xml'),
         ));
@@ -393,20 +425,46 @@ class RSL_Avatars {
 
     /**
      * The check before an image is saved (pure). Returns the SVG (trimmed) or null to save
-     * nothing. It must start with <svg and end with </svg>, and be at most MAX_BYTES. Refused
-     * whole: a script or a foreignObject (with or without a namespace prefix), anything in the
-     * XHTML namespace, a DOCTYPE or ENTITY, a numeric character reference (it could spell any of
-     * these), an on* event attribute, a javascript: or vbscript: address, an href or xlink:href
-     * to anything but a #fragment in the file, a CSS url() to anything but a #fragment, @import,
-     * image-set() or expression(), and an animation that sets an href.
+     * nothing. It must start with <svg and end with </svg>, and be at most MAX_BYTES. An
+     * allowlist first, from DiceBear's real output: every element must be one of SVG_ELEMENTS
+     * (so a script or foreignObject under any prefix, an image, a link or an animation is
+     * refused) and every namespace declaration one of SVG_NAMESPACES with its exact address; no
+     * backslash (a CSS escape could spell url() or @import), no processing instruction and no
+     * <! but a comment (DOCTYPE, ENTITY, CDATA). Then, refused whole as well: anything in the
+     * XHTML namespace, a numeric character reference (it could spell any of these), an on* event
+     * attribute, a javascript: or vbscript: address, an href or xlink:href to anything but a
+     * #fragment in the file, a CSS url() to anything but a #fragment, @import, image-set() or
+     * expression(), and an animation that sets an href.
      */
     public static function clean($svg) {
         if (!is_string($svg) || $svg === '' || strlen($svg) > self::MAX_BYTES) {
             return null;
         }
         $s = trim($svg);
-        if (!preg_match('/^<svg[\s>]/i', $s) || !preg_match('/<\/svg>$/i', $s)) {
+        if (!preg_match('/^<svg[\s>]/', $s) || !preg_match('/<\/svg>\z/', $s)) {
             return null;
+        }
+        if (strpos($s, '\\') !== false || strpos($s, '<?') !== false || preg_match('/<!(?!--)/', $s)) {
+            return null;
+        }
+        // Every tag, opening or closing, but a comment: its name as written (a space after < is no name, so refused).
+        preg_match_all('/<(?!!--)\/?([^\s\/>]*)/', $s, $tags);
+        foreach ($tags[1] as $name) {
+            if (!in_array($name, self::SVG_ELEMENTS, true)) {
+                return null;
+            }
+        }
+        // Every xmlns must be a plain declaration (counted both ways), each of a prefix and address on the list.
+        $declared = preg_match_all('/\sxmlns(?::([^\s=\/>]+))?\s*=\s*(?:"([^"]*)"|\'([^\']*)\')/', $s, $ns, PREG_SET_ORDER);
+        if ($declared !== substr_count($s, 'xmlns')) {
+            return null;
+        }
+        foreach ($ns as $n) {
+            $prefix = isset($n[1]) ? $n[1] : '';
+            $uri = isset($n[3]) && $n[3] !== '' ? $n[3] : (isset($n[2]) ? $n[2] : '');
+            if (!array_key_exists($prefix, self::SVG_NAMESPACES) || self::SVG_NAMESPACES[$prefix] !== $uri) {
+                return null;
+            }
         }
         $never = '/<\s*(?:[\w.-]+:)?(?:script|foreignObject)\b|1999\/xhtml|<!\s*(?:DOCTYPE|ENTITY)|&#|(?:java|vb)script\s*:|@import|image-set\s*\(|expression\s*\(/i';
         if (preg_match($never, $s)) {
@@ -418,7 +476,7 @@ class RSL_Avatars {
         if (preg_match_all('/\bhref\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]*))/i', $s, $links, PREG_SET_ORDER)) {
             foreach ($links as $l) {
                 $to = isset($l[3]) && $l[3] !== '' ? $l[3] : (isset($l[2]) && $l[2] !== '' ? $l[2] : (isset($l[1]) ? $l[1] : ''));
-                if (!preg_match('/^#[A-Za-z0-9_.:-]+$/', $to)) {
+                if (!preg_match('/^#[A-Za-z0-9_.:-]+\z/', $to)) {
                     return null;
                 }
             }
@@ -497,7 +555,6 @@ class RSL_Avatars {
             .rsl-robot-box .rsl-robot-next[hidden] { display: none; }
             .rsl .rsl-robot-next { padding: 4px 12px; border: 1px solid #1d3d6e; border-radius: 4px; background: #fff; color: #1d3d6e; font-size: 14px; font-weight: 600; line-height: 1.5; text-transform: none; cursor: pointer; }
             .rsl-robot-note { margin: 6px 0 0; font-size: 13px; }
-            .rsl-robot-note:empty { display: none; }
         ';
     }
 
@@ -522,16 +579,20 @@ class RSL_Avatars {
      * another, and a hidden avatar_seed field for the form around it. The server makes CHOICES
      * candidates, each with its two preview addresses (api_url(), so the pinning stays in one
      * place), in data-rsl-robots; the script only moves to the next (attributes and textContent,
-     * never markup) and after the last says to reload for more, then starts again. Without
-     * JavaScript the first shows and is the one sent. The previews load straight from
+     * never markup), says where it is in a live note ("Robot 3 of 12.", so a screen reader hears
+     * each one) and after the last adds the last words ($args['last']), then starts again. The
+     * hidden field never autocompletes and the script sets it to the first robot when it starts,
+     * so a browser that restores fields on reload never sends a robot that isn't on screen.
+     * Without JavaScript the first shows and is the one sent. The previews load straight from
      * api.dicebear.com in the browser of the captain (or league admin) using it, with no referrer;
      * the addresses hold the seed and the style's options only. Only logged-in captains and league
      * admins reach it, so a page cache never shows it to anyone else. $args: title, hint (a line
      * under the robots, '' for none), first (a seed to show first), button_class (wp-admin's
-     * button class on the admin screen).
+     * button class on the admin screen), last (LAST_WORDS on the application, which never says to
+     * reload; MORE_WORDS under New avatar).
      */
     public static function chooser($args = array()) {
-        $args = array_merge(array('title' => 'Your team\'s robot', 'hint' => '', 'first' => '', 'button_class' => ''), is_array($args) ? $args : array());
+        $args = array_merge(array('title' => 'Your team\'s robot', 'hint' => '', 'first' => '', 'button_class' => '', 'last' => self::LAST_WORDS), is_array($args) ? $args : array());
         $list = array();
         foreach (self::candidates((string) $args['first']) as $seed) {
             $list[] = array($seed, self::api_url($seed, 1, true), self::api_url($seed, self::STAGES, true));
@@ -547,8 +608,8 @@ class RSL_Avatars {
             . '</div>'
             . ((string) $args['hint'] !== '' ? '<p class="rsl-hint rsl-robot-hint">' . esc_html($args['hint']) . '</p>' : '')
             . '<button type="button" class="rsl-robot-next' . ((string) $args['button_class'] !== '' ? ' ' . esc_attr($args['button_class']) : '') . '" hidden>Try another</button>'
-            . '<p class="rsl-robot-note" aria-live="polite" data-rsl-last="' . esc_attr(self::LAST_WORDS) . '"></p>'
-            . '<input type="hidden" name="avatar_seed" value="' . esc_attr($list[0][0]) . '">'
+            . '<p class="rsl-robot-note" aria-live="polite" data-rsl-last="' . esc_attr((string) $args['last']) . '"></p>'
+            . '<input type="hidden" name="avatar_seed" value="' . esc_attr($list[0][0]) . '" autocomplete="off">'
             . '</div>';
         if (!self::$script_done) {
             self::$script_done = true;
@@ -557,7 +618,11 @@ class RSL_Avatars {
         return $html;
     }
 
-    /** The chooser's script (printed once a page by chooser()): sets attributes and textContent only. */
+    /**
+     * The chooser's script (printed once a page by chooser()): sets attributes and textContent
+     * only. It puts the hidden field back to the first robot as it starts (the one on screen),
+     * and each Try another says "Robot N of M." in the live note, with the last words on the last.
+     */
     public static function script() {
         return <<<'JS'
 <script>
@@ -572,9 +637,11 @@ class RSL_Avatars {
         var note = box.querySelector('.rsl-robot-note');
         var one = box.querySelector('img[data-rsl-robot="1"]');
         var full = box.querySelector('img[data-rsl-robot="8"]');
-        if (!list || !list.length || !input || !next || !one || !full) { return; }
+        if (!list || !list.length || !list[0] || !input || !next || !one || !full) { return; }
         box.setAttribute('data-rsl-ready', '1');
+        var last = note ? (note.getAttribute('data-rsl-last') || '') : '';
         var i = 0;
+        input.value = String(list[0][0]);
         next.hidden = false;
         next.addEventListener('click', function () {
             i = (i + 1) % list.length;
@@ -583,7 +650,7 @@ class RSL_Avatars {
             input.value = c[0];
             one.setAttribute('src', c[1]);
             full.setAttribute('src', c[2]);
-            if (note) { note.textContent = i === list.length - 1 ? (note.getAttribute('data-rsl-last') || '') : ''; }
+            if (note) { note.textContent = 'Robot ' + (i + 1) + ' of ' + list.length + '.' + (i === list.length - 1 && last ? ' ' + last : ''); }
         });
     }
     function all() {
@@ -600,8 +667,30 @@ JS;
     // The queue and the job
     // ------------------------------------------------------------------
 
-    /** The queue: team id => array('tries', 'next'), oldest first. */
-    public static function queued() {
+    /**
+     * A list option (the queue, the deletion list) as stored now, never this request's copy of it,
+     * so the job (a long run) or a write path never saves back a list another request changed
+     * meanwhile (a team queued, files listed to go). One query.
+     */
+    private static function stored($option) {
+        wp_cache_delete($option, 'options');
+        $not = wp_cache_get('notoptions', 'options');
+        if (is_array($not) && isset($not[$option])) {
+            unset($not[$option]);
+            wp_cache_set('notoptions', $not, 'options');
+        }
+        $v = get_option($option, array());
+        return is_array($v) ? $v : array();
+    }
+
+    /**
+     * The queue: team id => array('tries', 'next'), oldest first. $fresh: as stored now
+     * (stored()), for anything that writes it back; a page view's look reads this request's copy.
+     */
+    public static function queued($fresh = false) {
+        if ($fresh) {
+            return self::stored(self::QUEUE_OPTION);
+        }
         $q = get_option(self::QUEUE_OPTION, array());
         return is_array($q) ? $q : array();
     }
@@ -619,46 +708,80 @@ JS;
         return self::queue_many(array($team_id));
     }
 
-    /** Several teams at once, in the order given (one write). $schedule false: the run doing it reschedules itself. */
+    /**
+     * Several teams at once, in the order given (one write; nothing read again when they are all
+     * there already, as on a page view drawing the same missing badge twice). A team added brings
+     * the run to now (schedule()); with none added it only makes sure one is scheduled, so badges
+     * drawn while queued teams wait out a failed fetch never bring the run back early.
+     * $schedule false: the run doing it reschedules itself.
+     */
     public static function queue_many($ids, $schedule = true) {
-        $q = self::queued();
-        $added = false;
+        $seen = self::queued();
+        $new = array();
         foreach ((array) $ids as $id) {
             $id = intval($id);
-            if ($id > 0 && !isset($q[$id])) {
-                $q[$id] = array('tries' => 0, 'next' => 0);
-                $added = true;
+            if ($id > 0 && !isset($seen[$id])) {
+                $new[] = $id;
             }
         }
-        if ($added) {
-            self::save_queue($q);
+        $q = $seen;
+        $added = false;
+        if ($new) {
+            $q = self::queued(true);
+            foreach ($new as $id) {
+                if (!isset($q[$id])) {
+                    $q[$id] = array('tries' => 0, 'next' => 0);
+                    $added = true;
+                }
+            }
+            if ($added) {
+                self::save_queue($q);
+            }
         }
         if ($q && $schedule) {
-            self::schedule(0);
+            self::schedule(0, $added);
         }
         return $added;
     }
 
     /** Take a team off the queue. */
     public static function dequeue($team_id) {
-        $q = self::queued();
+        $q = self::queued(true);
         if (isset($q[intval($team_id)])) {
             unset($q[intval($team_id)]);
             self::save_queue($q);
         }
     }
 
-    /** The job runs in $delay seconds, unless a run is already due (so a burst of changes makes one run). */
-    public static function schedule($delay) {
-        if (!wp_next_scheduled(self::CRON_HOOK)) {
-            wp_schedule_single_event(time() + max(0, intval($delay)), self::CRON_HOOK);
+    /**
+     * The job runs in $delay seconds. A run already due by then stands (so a burst of changes
+     * makes one run); a later one, such as a run put off while a team waits out a failed fetch,
+     * is brought forward, so results and new teams never wait behind that team ($sooner false:
+     * only when none is scheduled). While a test holds the job (HOLD_OPTION, dev/lib-mail-stop.php)
+     * a scheduled run is never moved.
+     */
+    public static function schedule($delay, $sooner = true) {
+        $at = time() + max(0, intval($delay));
+        $ts = wp_next_scheduled(self::CRON_HOOK);
+        if ($ts !== false) {
+            if (!$sooner || intval($ts) <= $at || intval(get_option(self::HOLD_OPTION, 0)) > time()) {
+                return;
+            }
+            wp_unschedule_event($ts, self::CRON_HOOK);
         }
+        wp_schedule_single_event($at, self::CRON_HOOK);
+    }
+
+    /** A database lock's name for this site (GET_LOCK names are server-wide, and another site on the server has its own job). */
+    private static function lock_name($what) {
+        global $wpdb;
+        return self::LOCK_PREFIX . $what . '_' . substr(md5((defined('DB_NAME') ? DB_NAME : '') . '|' . $wpdb->prefix), 0, 16);
     }
 
     /** After a run: the job again while teams remain (GAP seconds on, or when the first waiting one may be tried) or a season is flagged. */
     public static function reschedule() {
-        $q = self::queued();
-        $flags = get_option(self::STAGE_OPTION, array());
+        $q = self::queued(true);
+        $flags = self::stored(self::STAGE_OPTION);
         if (!$q) {
             if (is_array($flags) && $flags) {
                 self::schedule(self::GAP);
@@ -675,7 +798,7 @@ JS;
     /** Teams on the queue that no longer exist come off it (the tests' cleanup). */
     public static function forget_missing() {
         global $wpdb;
-        $q = self::queued();
+        $q = self::queued(true);
         if (!$q) {
             return;
         }
@@ -698,8 +821,7 @@ JS;
         if (!is_string($season) || !RSL_Seasons::is_valid($season)) {
             return;
         }
-        $flags = get_option(self::STAGE_OPTION, array());
-        $flags = is_array($flags) ? $flags : array();
+        $flags = self::stored(self::STAGE_OPTION);
         if (!isset($flags[$season])) {
             $flags[$season] = 1;
             update_option(self::STAGE_OPTION, $flags, false);
@@ -729,8 +851,10 @@ JS;
             self::schedule(300);
             return;
         }
-        if ((string) $wpdb->get_var("SELECT GET_LOCK('rsl_avatar_work', 0)") !== '1') {
-            return; // another run holds it, and reschedules when it ends
+        $lock = self::lock_name('work');
+        if ((string) $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 0)', $lock)) !== '1') {
+            self::schedule(self::GAP); // another run holds it; this one comes back rather than leave the queue to the next page view
+            return;
         }
         $started = microtime(true);
         self::$stages = array();
@@ -738,17 +862,16 @@ JS;
         try {
             self::sweep();
             $done = 0;
-            foreach (array_keys(self::queued()) as $team_id) {
+            foreach (self::queued(true) as $team_id => $item) {
                 if ($done >= self::BATCH || microtime(true) - $started > self::TIME_BUDGET) {
                     break;
                 }
-                $q = self::queued();
-                if (!isset($q[$team_id]) || (isset($q[$team_id]['next']) && intval($q[$team_id]['next']) > time())) {
-                    continue;
+                if (is_array($item) && isset($item['next']) && intval($item['next']) > time()) {
+                    continue; // waiting out a failed fetch (only this run changes a wait)
                 }
                 $done++;
                 $ok = self::work_one(intval($team_id));
-                $q = self::queued(); // afresh: a page may have queued a team meanwhile
+                $q = self::queued(true); // as stored now: a page may have queued a team meanwhile
                 if ($ok) {
                     unset($q[$team_id]);
                 } elseif (isset($q[$team_id])) {
@@ -762,7 +885,7 @@ JS;
             }
         } finally {
             self::$stages = array(); // the levels are this run's only
-            $wpdb->query("SELECT RELEASE_LOCK('rsl_avatar_work')");
+            $wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lock));
         }
         self::purge();
         self::reschedule();
@@ -775,8 +898,8 @@ JS;
      */
     private static function sweep() {
         global $wpdb;
-        $flags = get_option(self::STAGE_OPTION, array());
-        if (!is_array($flags) || !$flags) {
+        $flags = self::stored(self::STAGE_OPTION);
+        if (!$flags) {
             return 0;
         }
         delete_option(self::STAGE_OPTION);
@@ -943,10 +1066,9 @@ JS;
         return is_array($p) ? array($p['animated'], $p['still']) : array();
     }
 
-    /** The deletion list: file name => unix time it may go. */
+    /** The deletion list: file name => unix time it may go, as stored now (stored(): a run never writes back a list a web request added to meanwhile). */
     public static function purge_list() {
-        $list = get_option(self::PURGE_OPTION, array());
-        return is_array($list) ? $list : array();
+        return self::stored(self::PURGE_OPTION);
     }
 
     /**
@@ -1059,11 +1181,11 @@ JS;
             return new WP_Error('rsl_team', 'That team no longer exists.');
         }
         if (!RSL_Teams::is_captain($team->id, $user_id) && !RSL_Access::can($user_id)) {
-            return new WP_Error('rsl_not_captain', 'Only the captain can change the team\'s avatar.');
+            return new WP_Error('rsl_not_captain', 'Only the captain can change the team\'s robot.');
         }
         if (!in_array($team->status, array('active', 'pending'), true)) {
             // A declined or withdrawn application is never drawn (its files go, retire()).
-            return new WP_Error('rsl_team', 'That application was declined or withdrawn, so its avatar stays as it is.');
+            return new WP_Error('rsl_team', 'That application was declined or withdrawn, so its robot stays as it is.');
         }
         if (!RSL_Database::schema_current()) {
             return new WP_Error('rsl_busy', 'The league is being updated right now — please try again in a minute.');
@@ -1077,14 +1199,14 @@ JS;
         $key = self::tries_key($team->id);
         $tries = intval(get_transient($key));
         if ($tries >= self::DAILY_LIMIT) {
-            return new WP_Error('rsl_avatar_limit', 'You\'ve tried ' . self::DAILY_LIMIT . ' avatars today; try again tomorrow.');
+            return new WP_Error('rsl_avatar_limit', 'You\'ve tried ' . self::DAILY_LIMIT . ' robots today; try again tomorrow.');
         }
         set_transient($key, $tries + 1, DAY_IN_SECONDS);
         $old = self::paths($team);
         $next = clone $team;
         $next->avatar_seed = $seed; // the same stage: a new robot never changes the level
         if (!self::ensure($next)) {
-            return new WP_Error('rsl_avatar_fetch', 'A new avatar couldn\'t be fetched just now, so the old one stays. Try again in a few minutes.');
+            return new WP_Error('rsl_avatar_fetch', 'The new robot couldn\'t be fetched just now, so the old one stays. Try again in a few minutes.');
         }
         $made = self::paths($next);
         $n = $wpdb->query($wpdb->prepare("UPDATE " . RSL_Database::table('teams') . " SET avatar_seed = %s WHERE id = %d AND avatar_seed = %s AND avatar_stage = %d",
@@ -1093,7 +1215,7 @@ JS;
             // A database error, or the job moved its stage meanwhile: the new files are listed to
             // go (kept if they turn out to be in use).
             self::purge_later(self::pair($made));
-            return new WP_Error('rsl_save', 'The new avatar couldn\'t be saved, so the old one stays. Please try again.');
+            return new WP_Error('rsl_save', 'The new robot couldn\'t be saved, so the old one stays. Please try again.');
         }
         self::dequeue($team->id);
         self::purge_later(self::pair($old));

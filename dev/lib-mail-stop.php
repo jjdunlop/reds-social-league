@@ -29,7 +29,8 @@
  * Tests run on a local copy or a staging copy where nothing else queues league mail meanwhile.
  *
  * The team avatar job (0.23.0, RSL_Avatars::CRON_HOOK) is put off a day too, so another request
- * never fetches images from DiceBear for a test's teams (every new team is queued); release takes
+ * never fetches images from DiceBear for a test's teams (every new team is queued), and the
+ * marker RSL_Avatars::HOLD_OPTION stops RSL_Avatars::schedule() bringing it sooner; release takes
  * the teams that are gone off its queue and puts the job back while any remain or a season is
  * flagged for a stage check (a test that records a result or publishes a night flags its season).
  */
@@ -57,6 +58,8 @@ function rsl_dev_hold_mail($suffix) {
     wp_clear_scheduled_hook('rsl_hourly');
     wp_schedule_event(time() + DAY_IN_SECONDS, 'hourly', 'rsl_hourly');
     if (class_exists('RSL_Avatars')) {
+        // The marker keeps the held run where it is: RSL_Avatars::schedule() never moves it sooner meanwhile.
+        update_option(RSL_Avatars::HOLD_OPTION, time() + DAY_IN_SECONDS, false);
         wp_clear_scheduled_hook(RSL_Avatars::CRON_HOOK);
         wp_schedule_single_event(time() + DAY_IN_SECONDS, RSL_Avatars::CRON_HOOK);
     }
@@ -114,6 +117,7 @@ function rsl_dev_release_mail($hold) {
     wp_clear_scheduled_hook('rsl_hourly');
     wp_schedule_event(time() + 300, 'hourly', 'rsl_hourly'); // as rsl_schedule_cron() does
     if (class_exists('RSL_Avatars')) {
+        delete_option(RSL_Avatars::HOLD_OPTION);
         wp_clear_scheduled_hook(RSL_Avatars::CRON_HOOK);
         RSL_Avatars::forget_missing(); // the test's teams, deleted by its cleanup
         RSL_Avatars::reschedule();

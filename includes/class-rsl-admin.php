@@ -569,7 +569,7 @@ class RSL_Admin {
             <summary class="button">New avatar</summary>
             <form method="post" action="<?php echo esc_url($post_url); ?>">
                 <?php echo self::fields('new_avatar', $team->season, $team->id); ?>
-                <?php echo RSL_Avatars::chooser(array('title' => "The team's robot", 'hint' => RSL_Avatars::KEEPS_LEVEL_WORDS, 'button_class' => 'button')); ?>
+                <?php echo RSL_Avatars::chooser(array('title' => "The team's robot", 'hint' => RSL_Avatars::KEEPS_LEVEL_WORDS, 'button_class' => 'button', 'last' => RSL_Avatars::MORE_WORDS)); ?>
                 <button type="submit" class="button button-primary">Use this one</button>
                 <p class="description">Pick another robot for the team's badge. The captain can do this on the team page too (<?php echo intval(RSL_Avatars::DAILY_LIMIT); ?> a day for each team). The colour shows only behind the initials, until the robot is ready.</p>
             </form>

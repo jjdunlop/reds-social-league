@@ -156,10 +156,10 @@ class RSL_Public {
             <div>
                 <h2 class="rsl-title"><?php echo esc_html($team->name); ?></h2>
                 <p class="rsl-meta"><?php echo esc_html(RSL_Teams::DIVISIONS[$team->division]); ?> &middot; <?php echo esc_html(RSL_Seasons::label($season)); ?> &middot; <?php echo count($members); ?> player<?php echo count($members) === 1 ? '' : 's'; ?></p>
-                <?php // 0.23.0: New avatar (the robot chooser and Use this one), for the captain and league admins only. ?>
-                <?php echo RSL_Portal::avatar_button($team, $user_id); ?>
             </div>
         </div>
+        <?php // 0.23.0: New avatar (the robot chooser and Use this one), for the captain and league admins only: under the header, full width, so the box never widens the header's row. ?>
+        <?php echo RSL_Portal::avatar_button($team, $user_id); ?>
         <?php echo RSL_Public_Fixtures::team_profile($team); ?>
         <?php echo RSL_Payments::team_card($team); ?>
         <?php // 0.20.0: the team's home for the people on it: the roster, and the captain's tools around the schedule. ?>
@@ -448,12 +448,13 @@ JS;
             .rsl-badge { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%; color: #fff; font-weight: 700; font-size: 15px; letter-spacing: 0.5px; }
             .rsl-badge-large { width: 72px; height: 72px; font-size: 26px; }
             ' . RSL_Avatars::css() . '
-            .rsl-avatar-new { margin: 6px 0 0; }
+            .rsl-avatar-new { margin: 10px 0 0; }
             .rsl .rsl-avatar-new > summary { display: inline-block; padding: 3px 10px; border: 1px solid var(--rsl-navy); border-radius: 4px; background: #fff; color: var(--rsl-navy); font-size: 13px; font-weight: 600; line-height: 1.5; list-style: none; cursor: pointer; }
             .rsl .rsl-avatar-new > summary::-webkit-details-marker { display: none; }
             .rsl .rsl-avatar-new > summary:hover { background: #eef2f8; }
             .rsl .rsl-avatar-new button.rsl-avatar-use { padding: 6px 14px; border: 1px solid var(--rsl-navy); border-radius: 4px; background: var(--rsl-navy); color: #fff; font-size: 14px; font-weight: 600; line-height: 1.5; text-transform: none; cursor: pointer; }
             .rsl-team-head { display: flex; align-items: center; gap: 16px; }
+            .rsl-team-head > div { min-width: 0; }
             .rsl-team-head .rsl-title { margin: 0; }
             .rsl-meta { margin: 4px 0 0; }
             .rsl-roster li { padding: 8px 0; border-bottom: 1px solid var(--rsl-border); }

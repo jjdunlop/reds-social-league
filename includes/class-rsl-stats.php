@@ -182,7 +182,11 @@ class RSL_Stats {
     /**
      * A cheap fingerprint of everything season() is built from: the season's
      * games (results, not live scores), nights, active teams (with their
-     * avatar seeds and stages, 0.23.0) and night requests, plus the finals rule (named, finals-games:5, so stats saved
+     * avatar seeds, 0.23.0, but not their stages: the avatar job writes
+     * those after every results night, and each write would throw the
+     * saved stats away; the leaders' badges may show the stage before for
+     * up to the hour the copy lasts, and those files stay two days) and
+     * night requests, plus the finals rule (named, finals-games:5, so stats saved
      * under 0.18.1's earlier count of rounds are never reused), the plugin
      * version and the ladder model's settings (RSL_Ratings::ladder_model(),
      * so a same-version build that changes the ladder gets a fresh key).
@@ -194,8 +198,8 @@ class RSL_Stats {
     private static function fingerprint($season) {
         global $wpdb;
         $nights = RSL_Database::table('nights');
-        // A team's avatar seed and stage (0.23.0): the cached stats hold the teams their leaders' badges are drawn from.
-        $seed = RSL_Database::schema_current() ? 'avatar_seed, avatar_stage' : "''";
+        // A team's avatar seed (0.23.0): the cached stats hold the teams their leaders' badges are drawn from. Never avatar_stage (see above).
+        $seed = RSL_Database::schema_current() ? 'avatar_seed' : "''";
         $row = $wpdb->get_row($wpdb->prepare("
             SELECT COUNT(*) AS n, BIT_XOR(CAST(CONV(SUBSTRING(MD5(x), 1, 16), 16, 10) AS UNSIGNED)) AS h FROM (
                 SELECT CONCAT_WS('|', 'g', id, night_id, division, start_time, home_team_id, away_team_id, status, sets, home_sets, away_sets, IFNULL(forfeit_team_id, 0)) AS x
