@@ -134,7 +134,9 @@ $check('...and the can\'t-make-it status on a fixtured week', strpos($html, 'tol
 wp_set_current_user($mate);
 $html = RSL_Public_Fixtures::team_section($team0);
 $check('teammates see the schedule but no buttons', strpos($html, 'TBA') !== false && strpos($html, 'value="request_off"') === false);
+$check('...and are told to ask their captain', strpos($html, 'Ask your captain before that week') !== false && strpos($html, 'Captain: ask for') === false);
 wp_set_current_user(0);
+$check('a visitor sees neither line', strpos(RSL_Public_Fixtures::team_section($team0), 'Ask your captain') === false);
 $html = RSL_Public_Fixtures::team_section($team0);
 $check('the public sees the schedule but no buttons or requests', strpos($html, 'value="request_') === false && strpos($html, 'told the league') === false);
 

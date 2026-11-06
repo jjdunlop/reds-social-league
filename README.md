@@ -17,7 +17,8 @@ the wording lives. The emails keep their own link wording.
 The card's link to the team page says what's there (a captain's reads
 Top up, see fixtures or request a week off; a player's Top up or see
 fixtures), and the season schedule's buttons read Request week off and
-Request two games.
+Request two games. Players on the team (not the captain) see a line
+telling them to ask their captain; visitors see neither.
 
 The team card's season pay buttons (Rest of the season, My share of the
 season) count the team's own requests: `RSL_Payments::games_to_come()`

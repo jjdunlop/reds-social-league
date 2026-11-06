@@ -663,7 +663,8 @@ class RSL_Public_Fixtures {
         };
         ob_start();
         ?>
-        <?php if ($captain): ?><p class="rsl-hint">Captain: ask for a week off or two games before that week's fixtures come out (Mondays).</p><?php endif; ?>
+        <?php if ($captain): ?><p class="rsl-hint">Captain: ask for a week off or two games before that week's fixtures come out (Mondays).</p>
+        <?php elseif ($insider): ?><p class="rsl-hint">Need a week off, or two games one night? Ask your captain before that week's fixtures come out (Mondays).</p><?php endif; ?>
         <div class="rsl-table-wrap"><table class="rsl-team-games rsl-schedule">
             <tbody>
             <?php foreach ($nights as $n): ?>
