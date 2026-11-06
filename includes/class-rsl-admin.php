@@ -130,13 +130,16 @@ class RSL_Admin {
                 $result = $do === 'approve' ? RSL_Teams::approve($team_id) : RSL_Teams::decline($team_id, isset($post['note']) ? wp_unslash($post['note']) : '');
                 $unsent = get_transient($mail_flag);
                 delete_transient($mail_flag);
+                // A team entered again from last season's (0.21.0): how many of its players were invited.
+                $invited = $do === 'approve' && !is_wp_error($result) && !empty($result->invited) ? intval($result->invited) : 0;
+                $invited_words = $invited > 0 ? ' ' . ($invited === 1 ? '1 player' : $invited . ' players') . ' from last season\'s team ' . ($invited === 1 ? 'was' : 'were') . ' invited.' : '';
                 if (is_wp_error($result)) {
                     self::notice('error', $result->get_error_message());
                 } elseif ($unsent !== false) {
-                    $words = $result->name . ($do === 'approve' ? ' approved' : ' declined') . ', but the email to the captain couldn\'t be sent — ' . ($do === 'approve' ? 'send them the invite link yourself.' : 'let them know yourself.');
+                    $words = $result->name . ($do === 'approve' ? ' approved' : ' declined') . ', but the email to the captain couldn\'t be sent — ' . ($do === 'approve' ? 'send them the invite link yourself.' : 'let them know yourself.') . $invited_words;
                     self::notice('error', $do === 'approve' ? self::places_words($words, $result, $before, true) : $words);
                 } else {
-                    $words = $result->name . ($do === 'approve' ? ' approved — the captain has been emailed their invite link.' : ' declined — the captain has been emailed.');
+                    $words = $result->name . ($do === 'approve' ? ' approved — the captain has been emailed their invite link.' : ' declined — the captain has been emailed.') . $invited_words;
                     // Approving over the places takes no extra step (0.19.0); the notice repeats the numbers.
                     self::notice('success', $do === 'approve' ? self::places_words($words, $result, $before, true) : $words);
                 }
@@ -407,10 +410,13 @@ class RSL_Admin {
                         $waiting = $info && in_array(intval($app->id), $info['waiting'], true);
                         // Approving puts the division over its places once its active teams fill them.
                         $over = $info && $info['places'] !== null && $info['active'] >= $info['places'];
+                        // Entered again from last season's team (0.21.0): approving invites its players.
+                        $from = !empty($app->rolled_from) ? RSL_Teams::get($app->rolled_from) : null;
                         ?>
                         <tr>
                             <td><?php echo RSL_Public::badge($app); ?></td>
-                            <td><strong><?php echo esc_html($app->name); ?></strong><?php if ($waiting): ?><br><span class="description">On the waiting list</span><?php endif; ?></td>
+                            <td><strong><?php echo esc_html($app->name); ?></strong><?php if ($waiting): ?><br><span class="description">On the waiting list</span><?php endif; ?>
+                                <?php if ($from): ?><br><span class="description"><?php echo esc_html('Entered again from ' . $from->name . ' (' . RSL_Seasons::short_label($from->season) . ')'); ?></span><?php endif; ?></td>
                             <td><?php echo esc_html(RSL_Seasons::label($app->season)); ?></td>
                             <td><?php echo esc_html(RSL_Teams::DIVISIONS[$app->division]); ?></td>
                             <td><?php echo esc_html(isset(RSL_Teams::levels()[$app->est_level]) ? RSL_Teams::levels()[$app->est_level] : '—'); ?></td>
