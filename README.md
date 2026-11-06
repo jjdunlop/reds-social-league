@@ -6,6 +6,69 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## Enter the team again for the next season (0.21.0)
+
+Seasons run back to back (2027: Pre-season 24 Jan to 21 Mar, Mid-season 1
+4 Apr to 6 Jun, and so on) and most social teams carry on, but not every
+player does, so each player says yes for themselves (club decision, 6 Nov
+2026).
+
+Once a team's season has started (its first game night has come; a season
+with no dates hasn't started, `RSL_Seasons::has_started()`) and the season
+straight after it is open for sign-up (`RSL_Teams::next_season_for()`), the
+league page shows a card under the team, headed with that season and its
+dates. It shows only to someone with nothing in that season yet: no team,
+no application waiting, no free agent entry and no invite waiting
+(`RSL_Teams::roll_state()`).
+
+- **The captain** gets Enter the team again. It sends a new application for
+  that season through `RSL_Teams::apply()`, so the places, the waiting list
+  and every rule of applying stay one path (`RSL_Teams::roll_over()`): the
+  same name, division and colour, the team's level when it has one (else
+  the form asks for one; the level is never shown to the captain), the
+  team's fixturing preferences, and `rolled_from`, the old team's id (schema
+  12). The flash says it's in, with the waiting list words when the
+  division is full. Refused, with a sentence, for anyone but the captain or
+  an admin (an admin's goes in with the captain as the applicant), a team
+  that isn't active, a next season not open, a season not started, a team
+  already entered for that season, or anything `apply()` refuses (the
+  captain on a team or with an application there, the name taken, three
+  withdrawn). A second click of the button is its own success. Once it's
+  sent the card goes; the application shows under Later season (or Next
+  season) as any application does.
+- **A player** sees "Want to keep playing with TEAM? Ask your captain to
+  enter the team again. You'll get an invite to accept once the league
+  approves it." Once the captain has: "Your captain has entered TEAM again
+  for 2027 Mid-season 1. You'll get an invite to accept once the league
+  approves it."
+- **Approving it** on the Teams screen (`approve()` calls
+  `invite_previous_players()`) invites each player still on the old team: an
+  invite from the captain with no expiry (source `rollover`) and one email
+  each through the queue ("Middles Only is playing 2027 Mid-season 1"), to
+  accept or decline on the league page like any invite. Left out: the new
+  team's captain, a player who left the old team, anyone already on a team
+  or with an application waiting in that season, and anyone with an invite
+  to the new team waiting. The captain's approval email adds "5 players
+  from last season's team have been invited and join once they accept.",
+  the Teams screen's notice says how many were invited, and the
+  application's row says "Entered again from Middles Only (2027
+  Pre-season)". Only one approval goes through (the update names the
+  pending status), so the players are never invited twice. On the team page
+  the captain sees them under Waiting to accept by name, with (last season)
+  after it.
+- **Not carrying on?** Inside the card a closed box, "Not carrying on? Find
+  another team for 2027 Mid-season 1", holds what the page offers for a
+  season with no team (the free agent list, an invite code, applying), for
+  that season only. While two seasons are on the page and the next one is
+  the sign-up season, that season's own part goes in the box, so it shows
+  once. The application card's id stays `rsl-apply` once on the page; a
+  failed application from the box opens it again with what was typed.
+- **A player who declined** (or joined after the approval) sees "Middles
+  Only is playing 2027 Mid-season 1. To keep playing with them, ask your
+  captain to invite you.", with the box.
+
+The team page is unchanged. Tests: `dev/tests/test-rollover.php`.
+
 ## One page for the team, one for you (0.20.0)
 
 Everything about a team now lives on its team page (`/league-teams/{slug}/`):
