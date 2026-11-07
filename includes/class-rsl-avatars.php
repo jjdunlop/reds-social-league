@@ -581,7 +581,12 @@ class RSL_Avatars {
      * takes nothing else), with a nonce for the viewer, so Try another never runs out.
      */
     public static function more_url() {
-        return add_query_arg(array('action' => self::MORE_ACTION, '_wpnonce' => wp_create_nonce(self::MORE_ACTION)), admin_url('admin-ajax.php', 'relative'));
+        // The path alone (a filter can make admin_url() whole even when asked for a relative one).
+        $path = (string) wp_parse_url(admin_url('admin-ajax.php'), PHP_URL_PATH);
+        if ($path === '' || $path[0] !== '/') {
+            $path = '/wp-admin/admin-ajax.php';
+        }
+        return add_query_arg(array('action' => self::MORE_ACTION, '_wpnonce' => wp_create_nonce(self::MORE_ACTION)), $path);
     }
 
     /**
