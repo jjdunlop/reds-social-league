@@ -30,11 +30,16 @@ class RSL_Portal {
     const APPLY_DRAFT_PREFIX = 'rsl_apply_draft_';
     const APPLY_DRAFT_TTL = 60;
 
-    // Remembering a captain's invite through sign-up: the code is kept in a
-    // cookie when the link is opened, copied onto the account when it's
-    // created (covers switching devices), and offered on the league page
-    // until they join. Only the invite code is stored.
-    const JOIN_COOKIE = 'rsl_join';
+    // Remembering a captain's invite through sign-up: opened while logged in,
+    // the code is kept on that account only; opened while logged out, in a
+    // browser cookie, which moves onto the account that logs in or is created
+    // next and is then forgotten by the browser (0.23.3: before, a logged-in
+    // account fell back to the browser's code, so anyone logging in on that
+    // browser within 30 days was offered the team). Offered on the league
+    // page until they join, choose another way in or say No thanks. Only the
+    // invite code is stored. The cookie was renamed in 0.23.3 (it was
+    // rsl_join), so codes the old rule left in browsers are ignored.
+    const JOIN_COOKIE = 'rsl_invite';
     const JOIN_META = 'rsl_pending_join';
     const SEND_META = 'rsl_send_to_portal';
     const JOIN_DAYS = 30;
@@ -279,24 +284,49 @@ class RSL_Portal {
         if ($code === '' || !RSL_Teams::get_by_code($code)) {
             return;
         }
-        self::set_cookie($code, self::JOIN_DAYS);
         if (is_user_logged_in()) {
-            update_user_meta(get_current_user_id(), self::JOIN_META, $code);
+            // The account only, never the browser: someone else logging in here later isn't offered it.
+            // Nothing for someone already on a team in its season (the captain opening their own link).
+            $user_id = get_current_user_id();
+            if (!self::team_for_code($user_id, $code)) {
+                update_user_meta($user_id, self::JOIN_META, $code);
+            }
+            return;
         }
+        self::set_cookie($code, self::JOIN_DAYS);
+    }
+
+    /**
+     * The browser's invite (opened while logged out) onto this account, and the browser forgets it,
+     * so only the next account to log in or be created here gets it. Not for someone already on a
+     * team in its season. True when the account took it.
+     */
+    private static function take_browser_invite($user_id) {
+        $code = isset($_COOKIE[self::JOIN_COOKIE]) ? self::clean_code(wp_unslash($_COOKIE[self::JOIN_COOKIE])) : '';
+        if (isset($_COOKIE[self::JOIN_COOKIE])) {
+            self::set_cookie('', 0);
+        }
+        if ($code === '' || !$user_id || !RSL_Teams::get_by_code($code) || self::team_for_code($user_id, $code)) {
+            return false;
+        }
+        update_user_meta($user_id, self::JOIN_META, $code);
+        return true;
     }
 
     /** A new account made in a browser holding an invite keeps the invite. */
     public static function carry_invite_to_new_account($user_id) {
-        $code = isset($_COOKIE[self::JOIN_COOKIE]) ? self::clean_code(wp_unslash($_COOKIE[self::JOIN_COOKIE])) : '';
-        if ($code !== '' && RSL_Teams::get_by_code($code)) {
-            update_user_meta($user_id, self::JOIN_META, $code);
+        if (self::take_browser_invite($user_id)) {
             update_user_meta($user_id, self::SEND_META, 1);
         }
     }
 
-    /** Logging in with an invite waiting (and no team yet): bring them to the league page. */
+    /** Logging in: the browser's invite moves onto the account; with one waiting (and no team yet), bring them to the league page. */
     public static function flag_after_login($login, $user) {
-        if ($user && self::remembered_code($user->ID) !== '' && !self::team_for_code($user->ID, self::remembered_code($user->ID))) {
+        if (!$user) {
+            return;
+        }
+        self::take_browser_invite($user->ID);
+        if (self::remembered_code($user->ID) !== '') {
             update_user_meta($user->ID, self::SEND_META, 1);
         }
     }
@@ -308,16 +338,19 @@ class RSL_Portal {
     }
 
     /**
-     * The invite this person is part-way through using: from their account,
-     * else this browser's cookie. '' when none, or when the team's link has
-     * changed since (then it's forgotten).
+     * The invite this person is part-way through using: an account's own
+     * (never the browser's, 0.23.3: the browser's moves onto the account at
+     * login or sign-up), or for a logged-out visitor this browser's cookie.
+     * '' when none, when the team's link has changed since, or when the
+     * account is already on a team in its season (each then forgotten).
      */
     public static function remembered_code($user_id = 0) {
-        $code = $user_id ? self::clean_code(get_user_meta($user_id, self::JOIN_META, true)) : '';
-        if ($code === '' && isset($_COOKIE[self::JOIN_COOKIE])) {
-            $code = self::clean_code(wp_unslash($_COOKIE[self::JOIN_COOKIE]));
+        if ($user_id) {
+            $code = self::clean_code(get_user_meta($user_id, self::JOIN_META, true));
+        } else {
+            $code = isset($_COOKIE[self::JOIN_COOKIE]) ? self::clean_code(wp_unslash($_COOKIE[self::JOIN_COOKIE])) : '';
         }
-        if ($code !== '' && !RSL_Teams::get_by_code($code)) {
+        if ($code !== '' && (!RSL_Teams::get_by_code($code) || ($user_id && self::team_for_code($user_id, $code)))) {
             self::forget_invite($user_id);
             return '';
         }
@@ -457,6 +490,11 @@ class RSL_Portal {
                         : 'You\'re registered and on ' . $team->name . '.');
                     return $back;
                 }
+                if ($code !== '') {
+                    // Invited, but they chose another way in (0.23.3): the invite isn't offered again
+                    // (the captain's link still works if they open it).
+                    self::forget_invite($user_id);
+                }
                 if (class_exists('RSL_Portal_FA') && $route !== '') {
                     $next = RSL_Portal_FA::after_register($user_id, $post);
                     if (is_array($next)) {
@@ -487,6 +525,13 @@ class RSL_Portal {
                     self::forget_invite($user_id);
                 }
                 self::flash(is_wp_error($team) ? 'error' : 'success', is_wp_error($team) ? $team->get_error_message() : 'You\'re on ' . $team->name . '.');
+                return $back;
+
+            case 'no_invite':
+                // No thanks to the invite they opened (0.23.3): it isn't offered again; the link still works.
+                $team = $code !== '' ? RSL_Teams::get_by_code($code) : null;
+                self::forget_invite($user_id);
+                self::flash('success', 'We won\'t offer ' . ($team ? $team->name : 'that team') . ' again. If you change your mind, open the captain\'s invite link.');
                 return $back;
 
             case 'looking':
@@ -886,7 +931,7 @@ class RSL_Portal {
         $edit = RSL_Players::profile_edit_url();
         ?>
         <?php if ($invited_to): ?>
-            <div class="rsl-card rsl-card-accent"><p><strong>You've been invited to join <?php echo esc_html($invited_to->name); ?>.</strong> Register below and you'll go straight onto the team.</p></div>
+            <div class="rsl-card rsl-card-accent"><p><strong>You've been invited to join <?php echo esc_html($invited_to->name); ?>.</strong> Register below to go straight onto the team, or choose another way to join.</p></div>
         <?php endif; ?>
         <h2>Register for the Reds Social League</h2>
         <p>Registering is free and takes a minute. To play you'll also need a current social rego (<?php echo esc_html(RSL_Rego::cost_words()); ?>) before your first game — unless you're a full or life club member.</p>
@@ -916,7 +961,7 @@ class RSL_Portal {
                 <label class="rsl-check"><input type="checkbox" name="looking" value="1"> I don't have a team yet — put me on the free agent list</label>
             <?php endif; ?>
             <?php echo self::ref_field(0); ?>
-            <button type="submit" class="rsl-btn"><?php echo $invited_to ? 'Register and join ' . esc_html($invited_to->name) : 'Register'; ?></button>
+            <button type="submit" class="rsl-btn"><?php echo $invited_to && !class_exists('RSL_Portal_FA') ? 'Register and join ' . esc_html($invited_to->name) : 'Register'; ?></button>
         </form>
         <?php
     }
@@ -1102,7 +1147,8 @@ class RSL_Portal {
         <?php if ($invited_to && !RSL_Teams::current_team_for_user($user_id, $invited_to->season)): ?>
             <div class="rsl-card rsl-card-accent">
                 <p><strong>Join <?php echo esc_html($invited_to->name); ?>?</strong> <span class="rsl-meta"><?php echo esc_html(RSL_Seasons::label($invited_to->season)); ?></span></p>
-                <form method="post"><?php echo self::fields('join', array('join_code' => $code)); ?><button type="submit" class="rsl-btn">Join <?php echo esc_html($invited_to->name); ?></button></form>
+                <form method="post" class="rsl-inline-form"><?php echo self::fields('join', array('join_code' => $code)); ?><button type="submit" class="rsl-btn">Join <?php echo esc_html($invited_to->name); ?></button></form>
+                <form method="post" class="rsl-inline-form"><?php echo self::fields('no_invite', array('join_code' => $code)); ?><button type="submit" class="rsl-btn rsl-btn-secondary">No thanks</button></form>
             </div>
         <?php elseif ($code !== '' && !$invited_to): ?>
             <div class="rsl-flash rsl-flash-error">That invite link isn't valid any more — ask your captain for the current one.</div>

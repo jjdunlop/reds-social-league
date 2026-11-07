@@ -265,8 +265,10 @@ class RSL_Portal_FA {
      * in with the registration) and Find me a team the season picker, both
      * over RSL_Seasons::signup_choices() (0.17.0). Nothing inside a panel is
      * required: a hidden required field would block the form. Arriving on an
-     * invite link, joining that team is the only route (the form already
-     * carries the code), for the team's own season. With nothing open for
+     * invite link, joining that team comes first and is chosen (the form
+     * already carries the code), and since 0.23.3 the other routes stay for
+     * someone who'd rather not (choosing one forgets the invite,
+     * RSL_Portal::process()). With nothing open for
      * sign-up (0.18.0) the routes are an invite code or Not yet, under
      * RSL_Seasons::closed_words(), and the legend names the league.
      */
@@ -287,31 +289,37 @@ class RSL_Portal_FA {
             // code (its team's own season) and Not yet stay, and the form says why.
             unset($routes['start'], $routes['find']);
         }
-        if ($invited_to) {
+        $invite_season = $invited_to ? (!empty($invited_to->season) ? $invited_to->season : $season) : '';
+        if ($invited_to && !$multi && ($pick === '' || $pick === $invite_season)) {
             // The invite's own season (a team in a later season open for sign-up can invite too).
-            $legend = 'How are you joining ' . RSL_Seasons::label(!empty($invited_to->season) ? $invited_to->season : $season) . '?';
+            $legend = 'How are you joining ' . RSL_Seasons::label($invite_season) . '?';
         } else {
             $legend = $multi || $pick === '' ? 'How are you joining the Reds Social League?' : 'How are you joining ' . RSL_Seasons::label($pick) . '?';
+        }
+        if ($invited_to) {
+            // Invited (0.23.3): joining that team comes first and is chosen, and the other ways in
+            // stay (start a team, the free agent list, not yet) for someone who'd rather not. No
+            // second code box: the form carries the invite's code, and another code can be used
+            // from the league page once registered.
+            $routes = array('join' => array('Join ' . $invited_to->name, 'Your captain\'s invite — you\'ll go straight onto the team when you register.')) + array_diff_key($routes, array('join' => true));
         }
         ob_start();
         ?>
         <fieldset class="rsl-fa-routes">
             <legend><?php echo esc_html($legend); ?></legend>
-            <?php if ($invited_to): ?>
-                <input type="radio" class="rsl-fa-radio rsl-fa-r-join" name="route" value="join" id="<?php echo esc_attr($id . '-join'); ?>" checked>
-                <label class="rsl-fa-route" for="<?php echo esc_attr($id . '-join'); ?>">Join <?php echo esc_html($invited_to->name); ?><small>Your captain's invite — you'll go straight onto the team when you register.</small></label>
-            <?php else: ?>
-                <?php if (!$choices): ?><p class="rsl-hint"><?php echo esc_html(RSL_Seasons::closed_words()); ?></p><?php endif; ?>
+                <?php if (!$choices && !$invited_to): ?><p class="rsl-hint"><?php echo esc_html(RSL_Seasons::closed_words()); ?></p><?php endif; ?>
                 <?php foreach ($routes as $key => $words): ?>
-                    <input type="radio" class="rsl-fa-radio rsl-fa-r-<?php echo esc_attr($key); ?>" name="route" value="<?php echo esc_attr($key); ?>" id="<?php echo esc_attr($id . '-' . $key); ?>"<?php echo $key === 'join' ? ' required' : ''; ?>>
+                    <input type="radio" class="rsl-fa-radio rsl-fa-r-<?php echo esc_attr($key); ?>" name="route" value="<?php echo esc_attr($key); ?>" id="<?php echo esc_attr($id . '-' . $key); ?>"<?php echo $key === 'join' ? ($invited_to ? ' checked' : ' required') : ''; ?>>
                     <label class="rsl-fa-route" for="<?php echo esc_attr($id . '-' . $key); ?>"><?php echo esc_html($words[0]); ?><small><?php echo esc_html($words[1]); ?></small></label>
                 <?php endforeach; ?>
+                <?php if (!$invited_to): ?>
                 <div class="rsl-fa-panel rsl-fa-p-join">
                     <label class="rsl-field">Invite code
                         <input type="text" name="join_code" maxlength="16" autocapitalize="characters" autocomplete="off" placeholder="e.g. ABCD2345">
                     </label>
                     <p class="rsl-hint">Your captain can find it on their league page — or just open the invite link they sent you.</p>
                 </div>
+                <?php endif; ?>
                 <?php if (isset($routes['start'])): ?>
                 <div class="rsl-fa-panel rsl-fa-p-start">
                     <p class="rsl-hint">Tell us about your team — your application goes in when you register.</p>
@@ -327,7 +335,6 @@ class RSL_Portal_FA {
                 <div class="rsl-fa-panel rsl-fa-p-later">
                     <p class="rsl-hint"><?php if ($choices): ?>No problem — you can join a team, start one or ask us to find you one from this page any time.<?php else: ?>No problem — you can join a team with an invite code from this page any time.<?php endif; ?></p>
                 </div>
-            <?php endif; ?>
         </fieldset>
         <?php
         return ob_get_clean() . self::styles();

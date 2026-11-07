@@ -643,14 +643,39 @@ class RSL_Avatars {
         var i = 0;
         input.value = String(list[0][0]);
         next.hidden = false;
+        function ok(c) { return c && String(c[1]).indexOf(API) === 0 && String(c[2]).indexOf(API) === 0; }
+        // Both pictures are fetched first and swapped in together (0.23.3), so the two never show different robots.
+        function fetchPair(c, done) {
+            var left = 2, fired = false;
+            function finish() { if (!fired) { fired = true; if (done) { done(); } } }
+            function settled() { left--; if (left === 0) { finish(); } }
+            setTimeout(finish, 8000); // a picture that never answers doesn't hold the button
+            for (var k = 1; k <= 2; k++) {
+                var im = new Image();
+                im.referrerPolicy = 'no-referrer';
+                im.onload = settled;
+                im.onerror = settled;
+                im.src = c[k];
+            }
+        }
         next.addEventListener('click', function () {
-            i = (i + 1) % list.length;
-            var c = list[i];
-            if (!c || String(c[1]).indexOf(API) !== 0 || String(c[2]).indexOf(API) !== 0) { return; }
-            input.value = c[0];
-            one.setAttribute('src', c[1]);
-            full.setAttribute('src', c[2]);
-            if (note) { note.textContent = 'Robot ' + (i + 1) + ' of ' + list.length + '.' + (i === list.length - 1 && last ? ' ' + last : ''); }
+            if (next.disabled) { return; }
+            var at = (i + 1) % list.length;
+            var c = list[at];
+            if (!ok(c)) { return; }
+            next.disabled = true;
+            box.setAttribute('aria-busy', 'true');
+            fetchPair(c, function () {
+                i = at;
+                input.value = c[0];
+                one.setAttribute('src', c[1]);
+                full.setAttribute('src', c[2]);
+                if (note) { note.textContent = 'Robot ' + (i + 1) + ' of ' + list.length + '.' + (i === list.length - 1 && last ? ' ' + last : ''); }
+                box.removeAttribute('aria-busy');
+                next.disabled = false;
+                var ahead = list[(i + 1) % list.length];
+                if (ok(ahead)) { fetchPair(ahead, null); } // the next pair ready before the next click
+            });
         });
     }
     function all() {

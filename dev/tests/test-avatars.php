@@ -640,6 +640,9 @@ $check('...the script: attributes and textContent only, never innerHTML, outerHT
 $check('...it puts the hidden field back to the first robot as it starts (the one on screen), and each Try another says where it is (Robot N of M) in the note',
     strpos($js, 'input.value = String(list[0][0]);') !== false && strpos($js, "note.textContent = 'Robot ' + (i + 1) + ' of ' + list.length + '.'") !== false
     && strpos($js, 'innerHTML') === false);
+$check('...Try another fetches both pictures first (no referrer) and swaps them in together, the button held meanwhile and freed if a picture never answers (0.23.3)',
+    strpos($js, "im.referrerPolicy = 'no-referrer';") !== false && strpos($js, 'fetchPair(c, function () {') !== false && strpos($js, 'next.disabled = true;') !== false
+    && strpos($js, 'setTimeout(finish, 8000);') !== false && strpos($js, 'one.setAttribute(\'src\', c[1]);') > strpos($js, 'fetchPair(c, function () {'));
 $check('...printed once a page: in the first chooser, not the second', substr_count($ch, '<script>') === 1 && strpos($ch, $js) !== false && strpos($ch2, '<script') === false
     && strpos($ch2, '<p class="rsl-robot-title">Your team&#039;s robot</p>') !== false && strpos($ch2, 'rsl-robot-hint') === false);
 

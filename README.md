@@ -6,6 +6,26 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## Invites stay with the person who opened them, and can be turned down (0.23.3)
+
+- **Invites follow the account, not the browser.** A captain's invite link
+  opened while logged in is kept on that account only. Opened while logged
+  out, it's kept in the browser until someone logs in or makes an account
+  there; it then moves onto that account and the browser forgets it. Before,
+  anyone logging in on a browser where the link had been opened in the last
+  30 days was offered the team (a family laptop, or a captain checking their
+  own link). Someone already on a team in the invite's season keeps nothing.
+  The browser's cookie has a new name, so codes the old rule left behind are
+  ignored.
+- **The other ways in stay.** Registering with an invite, Join TEAM comes
+  first and is chosen, and Start a team, Find me a team and Not yet are still
+  there; the button says Register. Choosing another way forgets the invite.
+  A registered player offered an invite on the league page has No thanks next
+  to Join. The captain's link still works if they open it again.
+- **Try another loads both robots first.** The chooser fetches the new
+  robot's Level 1 and Fully built pictures, then shows them together (the
+  button waits meanwhile, at most 8 seconds), and gets the next pair ready.
+
 ## A level every 30 Season Points (0.23.2)
 
 Club decision, 7 Nov 2026: a level is now 30 Season Points, not 40

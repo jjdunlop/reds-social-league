@@ -282,7 +282,8 @@ $html = $page(0, $code);
 $check('logged out with an invite: team named, log in offered', strpos($html, "invited to join Spikes Again $suffix") !== false && strpos($html, 'Log in') !== false);
 $new = $mk('new');
 $html = $page($new, $code);
-$check('logged in, not registered: registration form that joins the team', strpos($html, 'name="do" value="register"') !== false && strpos($html, 'Register and join') !== false && strpos($html, 'value="' . $code . '"') !== false);
+$check('logged in, not registered: registration form that joins the team (its route chosen, the other ways in kept since 0.23.3)', strpos($html, 'name="do" value="register"') !== false && strpos($html, "Join Spikes Again $suffix") !== false && strpos($html, 'value="' . $code . '"') !== false
+    && preg_match('/name="route" value="join" id="[^"]+" checked/', $html) === 1 && strpos($html, 'name="route" value="later"') !== false);
 wp_set_current_user($new);
 RSL_Portal::process(array('rsl_nonce' => wp_create_nonce('rsl_front'), 'do' => 'register', 'level' => 'never', 'years' => 'lt1', 'join_code' => $code));
 $check('registering through the invite joins the team', RSL_Players::is_registered($new) && RSL_Teams::is_member($team->id, $new));
