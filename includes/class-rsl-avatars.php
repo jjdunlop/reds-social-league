@@ -559,7 +559,7 @@ class RSL_Avatars {
             .rsl-robot-hint { margin: 0 0 8px; }
             .rsl-robot-box .rsl-robot-next[hidden] { display: none; }
             .rsl .rsl-robot-next { padding: 4px 12px; border: 1px solid #1d3d6e; border-radius: 4px; background: #fff; color: #1d3d6e; font-size: 14px; font-weight: 600; line-height: 1.5; text-transform: none; cursor: pointer; }
-            .rsl-robot-note { margin: 6px 0 0; font-size: 13px; }
+            .rsl-robot-note { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
         ';
     }
 

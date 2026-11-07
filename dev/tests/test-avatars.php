@@ -624,6 +624,7 @@ $check('...Try another (a button that never submits, hidden until the script run
     strpos($ch, '<button type="button" class="rsl-robot-next" hidden>Try another</button>') !== false
     && strpos($ch, '<p class="rsl-robot-note" aria-live="polite" data-rsl-last="Try another goes back to the first."></p>') !== false
     && strpos(RSL_Avatars::css(), ':empty') === false
+    && strpos(RSL_Avatars::css(), '.rsl-robot-note { position: absolute; width: 1px; height: 1px;') !== false && strpos(RSL_Avatars::css(), 'clip-path: inset(50%)') !== false
     && strpos(RSL_Avatars::chooser(array('last' => RSL_Avatars::MORE_WORDS)), 'data-rsl-last="Reload the page for more."') !== false
     && strpos($ch, '<input type="hidden" name="avatar_seed" value="' . $pick_first . '" autocomplete="off">') !== false
     && strpos($ch, '<p class="rsl-robot-title">Your team&#039;s robot</p>') !== false && strpos($ch, '<p class="rsl-hint rsl-robot-hint">It starts at level 1') !== false);

@@ -6,6 +6,12 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## The robot count is for screen readers only (0.23.5)
+
+The chooser's "Robot 31." line is hidden on screen (sighted captains can
+see the robot change) and still read out by screen readers, which can't.
+It's clipped to nothing rather than removed, so it stays a live region.
+
 ## Try another never runs out (0.23.4)
 
 The robot chooser starts with 12 robots as before, and three before the end
