@@ -6,6 +6,17 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## A level every 30 Season Points (0.23.2)
+
+Club decision, 7 Nov 2026: a level is now 30 Season Points, not 40
+(`RSL_Stats::LEVEL_POINTS`). A team that turns up every week and wins about
+half its games earns roughly 14 points a night, so at 40 most teams ended a
+season around level 4 and few robots were ever fully built (level 8, now
+210 points). The points themselves are unchanged. The version is part of
+the saved stats' key, so every level on the ladder and team pages follows
+at once, and the avatar job moves robots to their new stage at its next
+check (the hourly one, or the next results).
+
 ## Team avatars (0.23.0)
 
 Club decisions, 7 Nov 2026: a team's badge is a robot instead of its
@@ -23,7 +34,7 @@ captains no longer pick a team colour.
   approval. A team entered again for the next season (`roll_over()`) keeps
   the old team's seed.
 - **The robot builds up with the team's level.** Season Points make a level
-  every 40 points (`RSL_Stats::level()`), and they start again each season,
+  every 30 points (`RSL_Stats::level()`; 40 before 0.23.2), and they start again each season,
   so every team's robot starts at level 1 each season. The stage is the
   level, up to 8:
   - Level 1: the body and the eyes (they glow), on one background colour.
@@ -1739,7 +1750,7 @@ fair, the way ranked modes in games work:
 - **Season Points and levels (both divisions — Unranked teams get
   progression too):** +10 per game played, +5 win, +3 draw, +3 close game
   (third set, 1–1, or within 6 points overall) win or lose, +5 upset win,
-  +10 per achievement. Only ever go up; every 40 points is a level. Level
+  +10 per achievement. Only ever go up; every 40 points is a level (30 since 0.23.2). Level
   on the ladder, level + progress bar on the team page.
 - **Close one** tag on close results; **Promoted** achievement.
 - **Season leaders** on the ladder: Most improved, Giant killers, top

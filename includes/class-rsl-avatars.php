@@ -5,8 +5,8 @@
  * name and a renamed team keeps its look. teams.avatar_seed (schema 13; '' = none yet) is the
  * seed: a random string, never an account id, so RSL_Merge lists nothing for it.
  *
- * The robot builds up with the team's Season Points level (RSL_Stats::level(), 40 points a
- * level). Season Points start again every season, so every team's robot starts at level 1.
+ * The robot builds up with the team's Season Points level (RSL_Stats::level(), 30 points a
+ * level since 0.23.2, so fully built at 210). Season Points start again every season, so every team's robot starts at level 1.
  * Stage = min(8, level): stage 1 is the body and eyes on one background colour, 2 adds the
  * mouth, 3 the chest, 4 the top; from 5 the background is a 45 degree gradient of 2 colours, then
  * 3, then 4, and from 8 all 5 (fully built). Every part, colour and the animation speed is

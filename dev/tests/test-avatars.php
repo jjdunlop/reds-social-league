@@ -302,9 +302,9 @@ $check('...and they differ across seeds: every variant and speed turns up, and n
     && count($tuples) >= 195, count($tuples) . ' different');
 
 // --- Stages and the address ------------------------------------------------------------------------------------
-$check('stage_for_points(): 40 points a level, stage = level, at most 8', RSL_Avatars::stage_for_points(0) === 1 && RSL_Avatars::stage_for_points(39) === 1
-    && RSL_Avatars::stage_for_points(40) === 2 && RSL_Avatars::stage_for_points(85) === 3 && RSL_Avatars::stage_for_points(279) === 7
-    && RSL_Avatars::stage_for_points(280) === 8 && RSL_Avatars::stage_for_points(5000) === 8 && RSL_Avatars::stage_for_level(0) === 1 && RSL_Avatars::stage_for_level(12) === 8);
+$check('stage_for_points(): 30 points a level (0.23.2), stage = level, at most 8 (fully built at 210)', RSL_Stats::LEVEL_POINTS === 30 && RSL_Avatars::stage_for_points(0) === 1 && RSL_Avatars::stage_for_points(29) === 1
+    && RSL_Avatars::stage_for_points(30) === 2 && RSL_Avatars::stage_for_points(85) === 3 && RSL_Avatars::stage_for_points(209) === 7
+    && RSL_Avatars::stage_for_points(210) === 8 && RSL_Avatars::stage_for_points(5000) === 8 && RSL_Avatars::stage_for_level(0) === 1 && RSL_Avatars::stage_for_level(12) === 8);
 $want_url1 = 'https://api.dicebear.com/10.x/voxel-bot/svg?seed=3f9c2a7be01d4c58&flip=horizontal&borderRadius=20&eyesVariant=square&eyesProbability=100'
     . '&mouthVariant=speaker&mouthProbability=0&chestVariant=heart&chestProbability=0&topVariant=fin&topProbability=0'
     . '&bodyColor=b6a6f5&accentColor=495057&screenColor=1a1430&glowColor=3bc9db&backgroundColor=f0c8ea&backgroundColorFill=solid'

@@ -61,7 +61,7 @@ class RSL_Stats {
     // 'played' is once per night (a double-header doesn't double it; a bye
     // the fixtures gave a team still counts); the rest are per game.
     const POINTS = array('played' => 10, 'win' => 5, 'draw' => 3, 'close' => 3, 'upset' => 5, 'achievement' => 10);
-    const LEVEL_POINTS = 40;
+    const LEVEL_POINTS = 30; // 40 before 0.23.2 (club decision 7 Nov 2026: at 40 most teams ended a season around level 4, so few robots were ever fully built)
     const FINALS_MIN_GAMES = 5;     // default; option rsl_finals_min_games / filter rsl_finals_min_games
     const CACHE_PREFIX = 'rsl_stats_'; // transient per season: array(key => fingerprint, data => season())
 
