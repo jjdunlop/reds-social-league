@@ -6,6 +6,17 @@ nights, automatic fixtures, results, ratings and ladders, referees and a
 live scoreboard, and team balances. Still to come: the sub list and
 finals (see `CLAUDE.md`).
 
+## Try another never runs out (0.23.4)
+
+The robot chooser starts with 12 robots as before, and three before the end
+it asks the site for 12 more, so Try another keeps going (up to 240 in one
+box). The note says Robot 13., Robot 14. and so on. The site's answer is
+only random seeds and their preview addresses: it reads nothing about
+anyone, saves nothing and never contacts DiceBear itself, and it answers
+logged-in people only. If asking fails (a page left open for a day, whose
+security token has run out), the chooser goes round the robots it has, with
+the old words on the last one.
+
 ## Invites stay with the person who opened them, and can be turned down (0.23.3)
 
 - **Invites follow the account, not the browser.** A captain's invite link

@@ -147,8 +147,11 @@ class RSL_Avatars {
     /** The img's width and height for each badge size (the stylesheets set the drawn size, as for the initials). */
     const SIZES = array('' => 44, 'large' => 72, 'medium' => 36, 'small' => 28);
 
-    /** Robots the chooser offers (Try another goes round them, saying which one it shows). */
+    /** Robots the chooser starts with, and each batch it asks for when it runs low (0.23.4: ajax_more(), so Try another never runs out). */
     const CHOICES = 12;
+
+    /** The admin-ajax action (and nonce action) for more robots. */
+    const MORE_ACTION = 'rsl_robots';
 
     /** What the captain (or league admin) reads after a new robot is saved. */
     const SAVED_WORDS = 'New robot saved.';
@@ -160,7 +163,8 @@ class RSL_Avatars {
     const KEEPS_LEVEL_WORDS = 'The new robot keeps the team\'s level.';
 
     /**
-     * The chooser's words after "Robot 12 of 12." on a form with typed fields (the captain's
+     * The chooser's words on its last robot, once no more can be had (since 0.23.4 only when asking
+     * the site for more failed, or after 240), on a form with typed fields (the captain's
      * application): never to reload, which can lose what was typed.
      */
     const LAST_WORDS = 'Try another goes back to the first.';
@@ -190,6 +194,7 @@ class RSL_Avatars {
         add_action(self::CRON_HOOK, array(__CLASS__, 'work'));
         add_action(self::RESULTS_HOOK, array(__CLASS__, 'stage_check'));
         add_action('rsl_hourly', array(__CLASS__, 'hourly'));
+        add_action('wp_ajax_' . self::MORE_ACTION, array(__CLASS__, 'ajax_more')); // logged in only: no nopriv
     }
 
     // ------------------------------------------------------------------
@@ -562,6 +567,37 @@ class RSL_Avatars {
     // The chooser
     // ------------------------------------------------------------------
 
+    /** The chooser's robots: CHOICES of array(seed, Level 1 preview address, Fully built preview address), $first first. */
+    public static function robot_list($first = '') {
+        $list = array();
+        foreach (self::candidates($first) as $seed) {
+            $list[] = array($seed, self::api_url($seed, 1, true), self::api_url($seed, self::STAGES, true));
+        }
+        return $list;
+    }
+
+    /**
+     * Where the chooser asks for more robots (0.23.4): admin-ajax on this site as a path (the script
+     * takes nothing else), with a nonce for the viewer, so Try another never runs out.
+     */
+    public static function more_url() {
+        return add_query_arg(array('action' => self::MORE_ACTION, '_wpnonce' => wp_create_nonce(self::MORE_ACTION)), admin_url('admin-ajax.php', 'relative'));
+    }
+
+    /**
+     * admin-ajax rsl_robots (logged in only, 0.23.4): CHOICES more robots for a chooser, as
+     * {success, data: {robots: robot_list()}}. Random seeds and their preview addresses only: it
+     * reads nothing about anyone, writes nothing and asks DiceBear nothing. A stale or missing
+     * nonce is refused (403), and the script then goes round the robots it has.
+     */
+    public static function ajax_more() {
+        if (!is_user_logged_in() || !check_ajax_referer(self::MORE_ACTION, '_wpnonce', false)) {
+            wp_send_json_error(null, 403);
+        }
+        nocache_headers();
+        wp_send_json_success(array('robots' => self::robot_list()));
+    }
+
     /** CHOICES different new seeds; $first (a valid seed, as from an application draft) first. */
     public static function candidates($first = '') {
         $seeds = self::valid_seed($first) ? array($first) : array();
@@ -579,8 +615,10 @@ class RSL_Avatars {
      * another, and a hidden avatar_seed field for the form around it. The server makes CHOICES
      * candidates, each with its two preview addresses (api_url(), so the pinning stays in one
      * place), in data-rsl-robots; the script only moves to the next (attributes and textContent,
-     * never markup), says where it is in a live note ("Robot 3 of 12.", so a screen reader hears
-     * each one) and after the last adds the last words ($args['last']), then starts again. The
+     * never markup) and says where it is in a live note ("Robot 3.", so a screen reader hears each
+     * one). Since 0.23.4 it never runs out: as the list runs low it asks this site for CHOICES more
+     * (data-rsl-more, more_url(), ajax_more()); only when that fails (or after 240) does the last
+     * robot add the last words ($args['last']), and Try another starts again. The
      * hidden field never autocompletes and the script sets it to the first robot when it starts,
      * so a browser that restores fields on reload never sends a robot that isn't on screen.
      * Without JavaScript the first shows and is the one sent. The previews load straight from
@@ -593,14 +631,11 @@ class RSL_Avatars {
      */
     public static function chooser($args = array()) {
         $args = array_merge(array('title' => 'Your team\'s robot', 'hint' => '', 'first' => '', 'button_class' => '', 'last' => self::LAST_WORDS), is_array($args) ? $args : array());
-        $list = array();
-        foreach (self::candidates((string) $args['first']) as $seed) {
-            $list[] = array($seed, self::api_url($seed, 1, true), self::api_url($seed, self::STAGES, true));
-        }
+        $list = self::robot_list((string) $args['first']);
         $img = function ($url, $stage, $alt) {
             return '<img src="' . esc_url($url) . '" data-rsl-robot="' . intval($stage) . '" alt="' . esc_attr($alt) . '" width="96" height="96" loading="lazy" decoding="async" referrerpolicy="no-referrer">';
         };
-        $html = '<div class="rsl-robot-box" data-rsl-robots="' . esc_attr(wp_json_encode($list)) . '">'
+        $html = '<div class="rsl-robot-box" data-rsl-robots="' . esc_attr(wp_json_encode($list)) . '" data-rsl-more="' . esc_attr(self::more_url()) . '">'
             . '<p class="rsl-robot-title">' . esc_html($args['title']) . '</p>'
             . '<div class="rsl-robot-pair">'
             . '<figure>' . $img($list[0][1], 1, 'Robot at level 1') . '<figcaption>Level 1</figcaption></figure>'
@@ -621,13 +656,16 @@ class RSL_Avatars {
     /**
      * The chooser's script (printed once a page by chooser()): sets attributes and textContent
      * only. It puts the hidden field back to the first robot as it starts (the one on screen),
-     * and each Try another says "Robot N of M." in the live note, with the last words on the last.
+     * and each Try another says "Robot N." in the live note. It asks data-rsl-more (a path on this
+     * site only) for more robots three before the end, keeping only rows with a valid seed and two
+     * api.dicebear.com addresses; when that fails, the last robot adds the last words and it goes round.
      */
     public static function script() {
         return <<<'JS'
 <script>
 (function () {
     var API = 'https://api.dicebear.com/';
+    var MAX = 240; // robots a box goes through before going round again
     function start(box) {
         if (box.getAttribute('data-rsl-ready') === '1') { return; }
         var list;
@@ -640,10 +678,42 @@ class RSL_Avatars {
         if (!list || !list.length || !list[0] || !input || !next || !one || !full) { return; }
         box.setAttribute('data-rsl-ready', '1');
         var last = note ? (note.getAttribute('data-rsl-last') || '') : '';
+        // More robots from this site when the list runs low (0.23.4): a path on this site only.
+        var more = box.getAttribute('data-rsl-more') || '';
+        if (more.charAt(0) !== '/' || more.charAt(1) === '/') { more = ''; }
+        var noMore = !more, loading = null;
         var i = 0;
         input.value = String(list[0][0]);
         next.hidden = false;
         function ok(c) { return c && String(c[1]).indexOf(API) === 0 && String(c[2]).indexOf(API) === 0; }
+        function getMore(then) {
+            if (noMore || list.length >= MAX) { noMore = true; if (then) { then(); } return; }
+            if (loading) { if (then) { loading.push(then); } return; }
+            loading = then ? [then] : [];
+            var xhr = new XMLHttpRequest();
+            function end(added) {
+                if (!added) { noMore = true; } // a failure (an old page's nonce, the site down): go round what there is
+                var waiting = loading;
+                loading = null;
+                for (var w = 0; w < waiting.length; w++) { waiting[w](); }
+            }
+            xhr.onload = function () {
+                var added = 0;
+                try {
+                    var d = JSON.parse(xhr.responseText);
+                    var rows = d && d.success && d.data ? d.data.robots : null;
+                    for (var r = 0; rows && r < rows.length && list.length < MAX; r++) {
+                        if (/^[a-f0-9]{16}$/.test(String(rows[r][0])) && ok(rows[r])) { list.push([String(rows[r][0]), String(rows[r][1]), String(rows[r][2])]); added++; }
+                    }
+                } catch (e) { added = 0; }
+                end(added > 0 && xhr.status === 200);
+            };
+            xhr.onerror = function () { end(false); };
+            xhr.ontimeout = function () { end(false); };
+            xhr.open('GET', more, true);
+            xhr.timeout = 8000;
+            xhr.send();
+        }
         // Both pictures are fetched first and swapped in together (0.23.3), so the two never show different robots.
         function fetchPair(c, done) {
             var left = 2, fired = false;
@@ -658,24 +728,31 @@ class RSL_Avatars {
                 im.src = c[k];
             }
         }
-        next.addEventListener('click', function () {
-            if (next.disabled) { return; }
-            var at = (i + 1) % list.length;
+        function free() {
+            box.removeAttribute('aria-busy');
+            next.disabled = false;
+        }
+        function show() {
+            var at = i + 1 < list.length ? i + 1 : 0;
             var c = list[at];
-            if (!ok(c)) { return; }
-            next.disabled = true;
-            box.setAttribute('aria-busy', 'true');
+            if (!ok(c)) { free(); return; }
             fetchPair(c, function () {
                 i = at;
                 input.value = c[0];
                 one.setAttribute('src', c[1]);
                 full.setAttribute('src', c[2]);
-                if (note) { note.textContent = 'Robot ' + (i + 1) + ' of ' + list.length + '.' + (i === list.length - 1 && last ? ' ' + last : ''); }
-                box.removeAttribute('aria-busy');
-                next.disabled = false;
-                var ahead = list[(i + 1) % list.length];
-                if (ok(ahead)) { fetchPair(ahead, null); } // the next pair ready before the next click
+                if (list.length - i <= 3) { getMore(null); } // the next robots asked for before they're needed
+                if (note) { note.textContent = 'Robot ' + (i + 1) + '.' + (i === list.length - 1 && noMore && !loading && last ? ' ' + last : ''); }
+                free();
+                var ahead = list[i + 1 < list.length ? i + 1 : 0];
+                if (ok(ahead) && (i + 1 < list.length || noMore)) { fetchPair(ahead, null); } // the next pair ready before the next click
             });
+        }
+        next.addEventListener('click', function () {
+            if (next.disabled) { return; }
+            next.disabled = true;
+            box.setAttribute('aria-busy', 'true');
+            if (i + 1 >= list.length && !noMore) { getMore(show); } else { show(); }
         });
     }
     function all() {

@@ -637,9 +637,56 @@ $js = RSL_Avatars::script();
 $check('...the script: attributes and textContent only, never innerHTML, outerHTML, insertAdjacentHTML or document.write, and it checks each address is DiceBear\'s',
     strpos($js, 'innerHTML') === false && strpos($js, 'outerHTML') === false && strpos($js, 'insertAdjacentHTML') === false && strpos($js, 'document.write') === false
     && strpos($js, 'textContent') !== false && strpos($js, "setAttribute('src'") !== false && strpos($js, "'https://api.dicebear.com/'") !== false && strpos($js, 'input.value = c[0]') !== false);
-$check('...it puts the hidden field back to the first robot as it starts (the one on screen), and each Try another says where it is (Robot N of M) in the note',
-    strpos($js, 'input.value = String(list[0][0]);') !== false && strpos($js, "note.textContent = 'Robot ' + (i + 1) + ' of ' + list.length + '.'") !== false
-    && strpos($js, 'innerHTML') === false);
+$check('...it puts the hidden field back to the first robot as it starts (the one on screen), and each Try another says where it is (Robot N, 0.23.4) in the note',
+    strpos($js, 'input.value = String(list[0][0]);') !== false && strpos($js, "note.textContent = 'Robot ' + (i + 1) + '.'") !== false
+    && strpos($js, ' of \' + list.length') === false && strpos($js, 'innerHTML') === false);
+// --- More robots (0.23.4): Try another never runs out ---------------------------------------------------------------------
+$more = preg_match('/data-rsl-more="([^"]*)"/', $ch, $mm) ? html_entity_decode($mm[1], ENT_QUOTES, 'UTF-8') : '';
+parse_str((string) parse_url($more, PHP_URL_QUERY), $more_q);
+$check('the chooser says where to ask for more: admin-ajax on this site as a path, the action and a nonce',
+    $more !== '' && $more[0] === '/' && substr($more, 0, 2) !== '//' && strpos($more, 'admin-ajax.php') !== false
+    && isset($more_q['action'], $more_q['_wpnonce']) && $more_q['action'] === RSL_Avatars::MORE_ACTION, $more);
+$check('...the script asks only a path on this site, three before the end, keeps only valid seeds with two DiceBear addresses, and stops at 240',
+    strpos($js, "box.getAttribute('data-rsl-more')") !== false && strpos($js, "more.charAt(0) !== '/' || more.charAt(1) === '/'") !== false
+    && strpos($js, 'list.length - i <= 3') !== false && strpos($js, '/^[a-f0-9]{16}$/.test(String(rows[r][0])) && ok(rows[r])') !== false && strpos($js, 'var MAX = 240;') !== false);
+$check('...the endpoint is for logged-in people only (no nopriv hook)', has_action('wp_ajax_' . RSL_Avatars::MORE_ACTION) !== false && has_action('wp_ajax_nopriv_' . RSL_Avatars::MORE_ACTION) === false);
+$ajax_more = function ($user, $nonce) {
+    wp_set_current_user($user);
+    $_REQUEST['_wpnonce'] = $nonce;
+    $_GET['_wpnonce'] = $nonce;
+    $died = function () { return function () { throw new RuntimeException('rsl-test-ajax-done'); }; };
+    add_filter('wp_doing_ajax', '__return_true');
+    add_filter('wp_die_ajax_handler', $died);
+    ob_start();
+    try {
+        RSL_Avatars::ajax_more();
+    } catch (RuntimeException $e) {
+        // wp_send_json_*() ends the request through wp_die()
+    }
+    $out = ob_get_clean();
+    remove_filter('wp_die_ajax_handler', $died);
+    remove_filter('wp_doing_ajax', '__return_true');
+    unset($_REQUEST['_wpnonce'], $_GET['_wpnonce']);
+    return json_decode((string) $out, true);
+};
+$asker = $mk('asker');
+wp_set_current_user($asker);
+$good_nonce = wp_create_nonce(RSL_Avatars::MORE_ACTION);
+$calls_before = $calls();
+$got = $ajax_more($asker, $good_nonce);
+$rows = is_array($got) && !empty($got['success']) && isset($got['data']['robots']) ? $got['data']['robots'] : array();
+$rows_ok = count($rows) === RSL_Avatars::CHOICES && count(array_unique(array_column($rows, 0))) === RSL_Avatars::CHOICES;
+foreach ($rows as $row) {
+    $rows_ok = $rows_ok && RSL_Avatars::valid_seed($row[0]) && $row[1] === RSL_Avatars::api_url($row[0], 1, true) && $row[2] === RSL_Avatars::api_url($row[0], RSL_Avatars::STAGES, true);
+}
+$check('a logged-in person with the nonce gets ' . RSL_Avatars::CHOICES . ' new robots, each a valid seed with its two preview addresses, and the site asks DiceBear nothing',
+    $rows_ok && $calls() === $calls_before, wp_json_encode($got));
+$check('...each answer is new robots', ($again = $ajax_more($asker, $good_nonce)) && !array_intersect(array_column($again['data']['robots'], 0), array_column($rows, 0)));
+$stale = $ajax_more($asker, 'notanonce');
+$check('...a stale or made-up nonce is refused, with no robots', is_array($stale) && empty($stale['success']) && !isset($stale['data']['robots']), wp_json_encode($stale));
+$nobody = $ajax_more(0, $good_nonce);
+$check('...and nobody logged out gets any', is_array($nobody) && empty($nobody['success']) && !isset($nobody['data']['robots']), wp_json_encode($nobody));
+wp_set_current_user(0);
 $check('...Try another fetches both pictures first (no referrer) and swaps them in together, the button held meanwhile and freed if a picture never answers (0.23.3)',
     strpos($js, "im.referrerPolicy = 'no-referrer';") !== false && strpos($js, 'fetchPair(c, function () {') !== false && strpos($js, 'next.disabled = true;') !== false
     && strpos($js, 'setTimeout(finish, 8000);') !== false && strpos($js, 'one.setAttribute(\'src\', c[1]);') > strpos($js, 'fetchPair(c, function () {'));
